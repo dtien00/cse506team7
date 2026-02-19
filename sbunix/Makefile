@@ -7,6 +7,11 @@ AR      := $(CROSS)ar
 OBJCOPY := $(CROSS)objcopy
 CFLAGS  := -Wall -Werror -ffreestanding -nostdlib -nostdinc -mcmodel=medany -march=rv64imac_zicsr_zifencei -mabi=lp64
 
+DEBUG ?= 1
+ifeq ($(DEBUG),1)
+  CFLAGS += -g -Og
+endif
+
 KERN_ASM := $(patsubst %,build/%.o,$(wildcard kernel/*.S))
 LIBC_OBJ := $(patsubst %,build/%.o,$(filter-out libc/crt.S,$(wildcard libc/*.c libc/*.S)))
 USER_BIN := $(patsubst bin/%,build/rootfs/bin/%,$(wildcard bin/*))
@@ -87,8 +92,23 @@ qemu: build/kernel.elf $(DISK_IMG)
 		-netdev user,id=net0 \
 		-nographic
 
+qemu-gdb: build/kernel.elf $(DISK_IMG)
+	qemu-system-riscv64 -machine virt -bios default -kernel $< \
+		-drive file=$(DISK_IMG),format=raw,if=none,id=hd0 \
+		-device virtio-blk-pci-non-transitional,drive=hd0 \
+		-device virtio-gpu-pci \
+		-device virtio-net-pci-non-transitional,netdev=net0 \
+		-netdev user,id=net0 \
+		-nographic \
+		-S -s
+
 clean:
 	rm -rf build zig-out .zig-cache
+
+.PHONY: rebuild
+rebuild:
+	$(MAKE) clean
+	$(MAKE) all
 
 .PRECIOUS: build/%.S.o build/%.c.o
 .PHONY: all qemu clean thirdparty
