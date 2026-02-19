@@ -1,0 +1,43 @@
+# SBUNix
+
+This repo builds a RISC‑V kernel, embeds a tar-based root filesystem into the kernel, and can boot under QEMU with an optional GDB stub for debugging.
+
+
+## SBUnix Makefile usage
+
+To help build a RISC‑V kernel (`build/kernel.elf`) and run it in QEMU.  
+The kernel embeds `rootfs/` into the ELF as a `.tarfs` section.
+
+### Build
+```sh
+# Default build (C kernel)
+make KLANG=c all
+
+# Full clean rebuild
+make KLANG=c rebuild
+
+# Build with debug symbols for debugging with gdb
+make DEBUG=1 KLANG=c all
+```
+### Run in QEMU
+
+Booting the kernel in QEMU.
+```sh
+make KLANG=c qemu
+```
+This will also create a disk image at build/disk.img (default size 16) using tools/mkfs.c, and attach it as a virtio block device.
+
+Debugging with gdb on the VM. This needs the build/kernel.elf to be built with debug symbols as detailed in the build section
+1. Start QEMU with GDB stub
+    ```sh
+    make KLANG=c qemu-gdb
+    ```
+2. Attach GDB : below are commands to do it from another VM terminal. Your IDE of choice may also do this for you.
+    ```sh
+    riscv64-unknown-elf-gdb build/kernel.elf
+    (gdb) target remote :1234
+    (gdb) break boot
+    (gdb) continue
+    ```
+
+
