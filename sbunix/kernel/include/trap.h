@@ -1,11 +1,10 @@
 #pragma once
 #include <defs.h>
+
+// trap entry point code written in trap.S
 extern void trap_entry(void);
 
-#define IRQ_SOFTWARE  1
-#define IRQ_TIMER     5
-#define IRQ_EXTERNAL  9
-
+// struct to store trap-related data
 struct trap_frame {
     // General-purpose registers — offsets match trap.S sd instructions
     uint64_t ra; //   0
@@ -46,9 +45,19 @@ struct trap_frame {
     uint64_t stval; // 272
 };
 
-void trap_handler(struct trap_frame*);
+// called to handle all traps
+void trap_handler(struct trap_frame *);
 
+// helpers to turn on/off interrupts globally
 void interrupts_on(void);
 void interrupts_off(void);
-void interrupt_enable(uint64_t bit);
-void interrupt_disable(uint64_t bit);
+
+// the bit positions in SIE to enable/disable certain interrupt types
+#define IRQ_SOFTWARE 1  // from syscalls
+#define IRQ_TIMER 5     // from timer events
+#define IRQ_EXTERNAL 9  // from external sources - PLIC
+
+// helpers to enable certain interrupt types using the SIE.
+// Pass in one of the constants defined above to turn on corresponding interrupts
+void interrupts_enable(uint64_t bit);
+void interrupts_disable(uint64_t bit);

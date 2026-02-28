@@ -20,23 +20,14 @@ void trap_handler(struct trap_frame *frame) {
     if (scause >> 63) {
         uint64_t code = scause & ~(1ULL << 63); // calculate exception code
         write_csr(sie, read_csr(sie) & ~(1ULL << code)); // clear the sip bit corresponding to the exception code
-    }
+    } else
+        frame->sepc += 4; // skip the faulting instruction (all RV64 instructions are 4 bytes)
 }
 
-// Enable/disable global supervisor interrupts (sstatus.SIE bit)
-void interrupts_on(void) {
-    write_csr(sstatus, read_csr(sstatus) | (1ULL << 1));
-}
+void interrupts_on(void) { write_csr(sstatus, read_csr(sstatus) | (1ULL << 1)); }
 
-void interrupts_off(void) {
-    write_csr(sstatus, read_csr(sstatus) & ~(1ULL << 1));
-}
+void interrupts_off(void) { write_csr(sstatus, read_csr(sstatus) & ~(1ULL << 1)); }
 
-// Enable individual interrupt sources in sie
-void interrupt_enable(uint64_t bit) {
-    write_csr(sie, read_csr(sie) | (1ULL << bit));
-}
+void interrupts_enable(uint64_t bit) { write_csr(sie, read_csr(sie) | (1ULL << bit)); }
 
-void interrupt_disable(uint64_t bit) {
-    write_csr(sie, read_csr(sie) & ~(1ULL << bit));
-}
+void interrupts_disable(uint64_t bit) { write_csr(sie, read_csr(sie) & ~(1ULL << bit)); }
