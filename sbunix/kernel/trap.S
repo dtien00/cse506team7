@@ -3,7 +3,7 @@
 .align 2
 trap_entry:
     /* allocate stack space */
-    addi sp, sp, -248
+    addi sp, sp, -280
 
     // saving 31 registers (don't need to save the zero register as it never changes)
     // each register is 64 bits or 8 bytes in the RV64
@@ -43,6 +43,18 @@ trap_entry:
     sd t5, 232(sp)
     sd t6, 240(sp)
 
+    // save CSRs after general purpose registers
+    csrr t0, sepc
+    sd   t0, 248(sp)
+    csrr t0, sstatus
+    sd   t0, 256(sp)
+    csrr t0, scause
+    sd   t0, 264(sp)
+    csrr t0, stval
+    sd   t0, 272(sp)
+
+    // pass in sp which has the trap_frame struct as first argument to trap_handler
+    mv   a0, sp
     call trap_handler
 
     //restore registers except sp
@@ -82,7 +94,7 @@ trap_entry:
     ld t6, 240(sp)
 
     // reclaim stack space
-    addi sp, sp, 248
+    addi sp, sp, 280
 
     // return from trap (this hands it over to the CPU to switch back)
     sret

@@ -1,9 +1,12 @@
+#include "trap.h"
+
+
 #include <defs.h>
 #include <printk.h>
 #include <riscv.h>
 
-void trap_handler() {
-    uint64_t scause = read_csr(scause); // cause of the interrupt
+void trap_handler(struct trap_frame *frame) {
+    uint64_t scause = frame->scause; // cause of the interrupt
     uint64_t sip = read_csr(sip); // info on pending interrupts
     uint64_t sie = read_csr(sie); // info on enabled interrupts
     char *type;
@@ -18,4 +21,22 @@ void trap_handler() {
         uint64_t code = scause & ~(1ULL << 63); // calculate exception code
         write_csr(sie, read_csr(sie) & ~(1ULL << code)); // clear the sip bit corresponding to the exception code
     }
+}
+
+// Enable/disable global supervisor interrupts (sstatus.SIE bit)
+void interrupts_on(void) {
+    write_csr(sstatus, read_csr(sstatus) | (1ULL << 1));
+}
+
+void interrupts_off(void) {
+    write_csr(sstatus, read_csr(sstatus) & ~(1ULL << 1));
+}
+
+// Enable individual interrupt sources in sie
+void interrupt_enable(uint64_t bit) {
+    write_csr(sie, read_csr(sie) | (1ULL << bit));
+}
+
+void interrupt_disable(uint64_t bit) {
+    write_csr(sie, read_csr(sie) & ~(1ULL << bit));
 }
