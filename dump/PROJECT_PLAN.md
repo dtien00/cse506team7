@@ -144,36 +144,43 @@ PMM → VMM → kmalloc
                    File System → I/O
 ```
 
-## Key Files to Create
+## Key Files Status
 
-### Memory Management
-- `kernel/include/pmm.h` - Physical memory manager interface
-- `kernel/pmm.c` - Physical memory manager implementation
-- `kernel/include/vmm.h` - Virtual memory manager interface
-- `kernel/vmm.c` - Virtual memory manager implementation
-- `kernel/kmalloc.c` - Kernel heap implementation
+### Memory Management ✅ COMPLETE
+- ✅ `kernel/include/mm/pmm.h` - Physical memory manager interface
+- ✅ `kernel/mm/pmm.c` - Physical memory manager implementation
+- ✅ `kernel/include/mm/vmm.h` - Virtual memory manager interface
+- ✅ `kernel/mm/vmm.c` - Virtual memory manager implementation
+- ✅ `kernel/include/mm/kmalloc.h` - Kernel heap interface
+- ✅ `kernel/mm/kmalloc.c` - Kernel heap implementation
 
-### Interrupts & Traps
-- `kernel/include/trap.h` - Trap handling interface
-- `kernel/trap.c` - Trap handler implementation
-- `kernel/trap_entry.S` - Assembly trap entry/exit
-- `kernel/include/riscv.h` - RISC-V CSR definitions
+### Interrupts & Traps ✅ COMPLETE
+- ✅ `kernel/include/trap/trap.h` - Trap handling interface
+- ✅ `kernel/trap/trap.c` - Trap handler implementation
+- ✅ `kernel/arch/riscv/trap_entry.S` - Assembly trap entry/exit
+- ✅ `kernel/include/arch/riscv.h` - RISC-V CSR definitions
 
-### Process Management
-- `kernel/include/process.h` - Process structures
-- `kernel/process.c` - Process management
-- `kernel/scheduler.c` - Scheduler implementation
-- `kernel/context_switch.S` - Context switching assembly
+### Process Management 🚧 PARTIAL
+- ✅ `kernel/include/process/process.h` - Process structures
+- ✅ `kernel/process/process.c` - Process management
+- ⏳ `kernel/process/scheduler.c` - Scheduler implementation (TODO)
+- ⏳ `kernel/arch/riscv/context_switch.S` - Context switching assembly (TODO)
 
-### System Calls
-- `kernel/include/syscall.h` - System call numbers
-- `kernel/syscall.c` - System call dispatcher
-- `kernel/syscall_*.c` - Individual syscall implementations
+### System Calls 🚧 PARTIAL
+- ✅ `kernel/include/trap/syscall.h` - System call numbers
+- ✅ `kernel/trap/syscall.c` - System call dispatcher (with stubs)
+- ⏳ `kernel/trap/syscall_proc.c` - Process syscalls (TODO)
+- ⏳ `kernel/trap/syscall_mem.c` - Memory syscalls (TODO)
+- ⏳ `kernel/trap/syscall_io.c` - I/O syscalls (TODO)
+- ⏳ `kernel/core/elf.c` - ELF loader (TODO)
+- ⏳ `kernel/include/kernel/elf.h` - ELF structures (TODO)
 
-### File System
-- `kernel/include/vfs.h` - VFS interface
-- `kernel/vfs.c` - VFS implementation
-- `kernel/tarfs.c` - TARFS driver
+### File System ⏳ TODO
+- ⏳ `kernel/include/fs/vfs.h` - VFS interface (TODO)
+- ⏳ `kernel/fs/vfs.c` - VFS implementation (TODO)
+- ⏳ `kernel/fs/tarfs.c` - TARFS driver (TODO)
+- ⏳ `kernel/include/drivers/uart.h` - UART interface (TODO)
+- ⏳ `kernel/drivers/uart.c` - UART driver (TODO)
 
 ## Testing Strategy
 1. Unit test each component in isolation

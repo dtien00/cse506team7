@@ -2,107 +2,148 @@
 
 ## Team Structure (4 People)
 
-This document breaks down the OS project into 4 parallel work streams that can be developed relatively independently, with clear interfaces between components.
+This document breaks down the OS project into 4 **PARALLEL** work streams. All team members can start working immediately without waiting for others.
+
+## 🎯 Current Status Overview
+
+### ✅ FOUNDATION COMPLETE
+- **Memory Management:** PMM, VMM, kmalloc (6 files, ~600 lines)
+- **Trap Infrastructure:** Trap handling, trap_entry.S (3 files, ~270 lines)
+- **Process Structures:** PCB, process table (2 files, ~170 lines)
+- **Syscall Framework:** Dispatcher and stubs (2 files, ~180 lines)
+- **Core Types:** types.h, riscv.h, printk.h (3 files, ~250 lines)
+
+### 🚀 PARALLEL WORK DISTRIBUTION
+
+All foundation code is complete. **All 4 team members can now work in parallel** on their respective components without blocking each other.
+
+| Person | Component | Estimated Work | Can Start Now? |
+|--------|-----------|----------------|----------------|
+| **Person 1** | Scheduler & Context Switching | ~400 lines | ✅ YES - No dependencies |
+| **Person 2** | Fork/Exec/Wait & ELF Loader | ~500 lines | ✅ YES - No dependencies |
+| **Person 3** | TARFS & VFS & File Descriptors | ~600 lines | ✅ YES - No dependencies |
+| **Person 4** | UART & I/O Syscalls & sbrk | ~400 lines | ✅ YES - No dependencies |
+
+**Key Point:** Everyone has independent work that doesn't block on others. Integration happens at the end of Week 1-2.
 
 ---
 
-## Person 1: Memory Management Lead
+## Person 1: Scheduler & Context Switching Lead
 
 ### Primary Responsibilities
-- Physical Memory Manager (PMM)
-- Virtual Memory Manager (VMM)  
-- Kernel Heap Allocator (kmalloc)
+- Round-robin scheduler implementation
+- Context switching (assembly)
+- Process lifecycle management
+- Timer-based preemption
 
-### Files to Work On
-- ✅ `kernel/include/physical_memory_mapper.h` (already created)
-- ✅ `kernel/pmm.c` (already created)
-- ✅ `kernel/include/vmm.h` (already created)
-- ✅ `kernel/vmm.c` (already created)
-- ✅ `kernel/include/kmalloc.h` (already created)
-- ✅ `kernel/kmalloc.c` (already created)
-
-### Tasks
-1. **Week 1-2: Physical Memory Manager**
-   - ✅ Implement bitmap-based page allocator
-   - ✅ Test single page allocation/free
-   - ✅ Test multi-page allocation
-   - Test edge cases (out of memory, double free, etc.)
-
-2. **Week 2-3: Virtual Memory Manager**
-   - ✅ Implement Sv39 page table walking
-   - ✅ Implement page mapping/unmapping
-   - ✅ Set up kernel identity mapping
-   - Test page table operations
-   - Handle page faults properly
-
-3. **Week 3-4: Kernel Heap**
-   - ✅ Implement first-fit allocator
-   - ✅ Implement coalescing for freed blocks
-   - Test various allocation patterns
-   - Add debugging/statistics features
-
-### Testing Checklist
-- [ ] Can allocate and free single pages
-- [ ] Can allocate contiguous pages
-- [ ] Detects double-free errors
-- [ ] Page tables correctly translate addresses
-- [ ] kmalloc/kfree work for various sizes
-- [ ] Memory doesn't leak over time
-
-### Dependencies
-- None initially (foundational component)
-- Other teams will depend on your work
-
----
-
-## Person 2: Interrupt & Process Management Lead
-
-### Primary Responsibilities
-- Trap/Interrupt handling
-- Process structures and management
-- Context switching
-- Basic scheduler
-
-### Files to Work On
-- ✅ `kernel/include/trap.h` (already created)
-- ✅ `kernel/trap.c` (already created)
-- ✅ `kernel/trap_entry.S` (already created)
-- ✅ `kernel/include/process.h` (already created)
-- ✅ `kernel/process.c` (already created)
-- `kernel/scheduler.c` (TODO)
-- `kernel/context_switch.S` (TODO)
+### Files to Create
+- [ ] `kernel/include/process/scheduler.h` - Scheduler interface
+- [ ] `kernel/process/scheduler.c` - Round-robin scheduler
+- [ ] `kernel/arch/riscv/context_switch.S` - Context switching assembly
+- [ ] `kernel/process/proc_lifecycle.c` - Process creation/termination helpers
 
 ### Tasks
-1. **Week 1-2: Trap Handling**
-   - ✅ Set up trap vector (stvec)
-   - ✅ Implement trap entry/exit in assembly
-   - ✅ Handle exceptions (page faults, illegal instructions)
-   - Test exception handling
-   - Handle timer interrupts
+1. **Context Switching (Priority: HIGH)**
+   - [ ] Implement context_switch() in assembly
+   - [ ] Save callee-saved registers (s0-s11, sp, ra)
+   - [ ] Switch stack pointers between processes
+   - [ ] Test switching between 2 kernel threads
+   - [ ] Verify register preservation
 
-2. **Week 2-3: Process Management**
-   - ✅ Define process control block (PCB)
-   - ✅ Implement process allocation/deallocation
-   - Implement context switching in assembly
-   - Test switching between kernel contexts
+2. **Scheduler (Priority: HIGH)**
+   - [ ] Implement round-robin scheduler
+   - [ ] Maintain ready queue of RUNNABLE processes
+   - [ ] Implement yield() for voluntary CPU release
+   - [ ] Implement sleep() for blocking processes
+   - [ ] Handle timer interrupts for preemption
+   - [ ] Test with multiple processes
 
-3. **Week 3-4: Scheduler**
-   - Implement round-robin scheduler
-   - Implement yield() and sleep()
-   - Test multiple processes running
-   - Handle process termination
+3. **Process Lifecycle (Priority: MEDIUM)**
+   - [ ] Enhance proc_alloc() with proper initialization
+   - [ ] Implement process cleanup on exit
+   - [ ] Handle orphaned processes
+   - [ ] Implement process state transitions
 
 ### Testing Checklist
-- [ ] Traps save/restore all registers correctly
-- [ ] Can handle page faults without crashing
-- [ ] Timer interrupts fire regularly
-- [ ] Can create multiple processes
-- [ ] Context switching preserves state
+- [ ] Can create 2+ processes and switch between them
+- [ ] Context switching preserves all registers
 - [ ] Scheduler fairly distributes CPU time
+- [ ] Timer interrupts trigger rescheduling
+- [ ] yield() works correctly
+- [ ] Process termination cleans up resources
 
 ### Dependencies
-- Depends on Person 1 for memory allocation
-- Person 3 will depend on your process structures
+- ✅ Memory management (COMPLETE - ready to use)
+- ✅ Process structures (COMPLETE - ready to use)
+- ✅ Trap handling (COMPLETE - ready to use)
+- 🔄 Will integrate with Person 2 for system calls
+
+---
+
+## Person 2: Process System Calls Lead (fork/exec/wait)
+
+### Primary Responsibilities
+- Fork system call (process duplication)
+- Exec system call (program loading)
+- Exit/Wait system calls (process lifecycle)
+- ELF file loader
+
+### Files to Create
+- [ ] `kernel/trap/syscall_proc.c` - Process syscalls (fork, exec, exit, wait)
+- [ ] `kernel/include/kernel/elf.h` - ELF structures and definitions
+- [ ] `kernel/core/elf.c` - ELF file parser and loader
+- [ ] `kernel/process/proc_copy.c` - Helper for copying process state (for fork)
+
+### Tasks
+1. **Fork System Call (Priority: HIGH)**
+   - [ ] Implement sys_fork() in syscall_proc.c
+   - [ ] Allocate new process with proc_alloc()
+   - [ ] Copy parent's page table (use vmm_copy_pagetable)
+   - [ ] Copy parent's trapframe
+   - [ ] Set up parent-child relationship
+   - [ ] Return 0 to child, child PID to parent
+   - [ ] Test fork creates exact copy
+
+2. **Exec System Call (Priority: HIGH)**
+   - [ ] Implement sys_exec() in syscall_proc.c
+   - [ ] Parse ELF file format (elf.c)
+   - [ ] Create new page table for process
+   - [ ] Load program segments into memory
+   - [ ] Set up user stack with arguments
+   - [ ] Set instruction pointer to entry point
+   - [ ] Test loading and running user programs
+
+3. **Exit/Wait System Calls (Priority: MEDIUM)**
+   - [ ] Enhance sys_exit() to clean up resources
+   - [ ] Mark process as ZOMBIE
+   - [ ] Wake up parent process
+   - [ ] Implement sys_wait() to collect child status
+   - [ ] Clean up zombie processes
+   - [ ] Handle orphaned processes
+
+4. **ELF Loader (Priority: HIGH)**
+   - [ ] Parse ELF header and program headers
+   - [ ] Validate ELF file format
+   - [ ] Load segments at correct virtual addresses
+   - [ ] Handle BSS section (zero-initialized data)
+   - [ ] Support different segment permissions
+
+### Testing Checklist
+- [ ] fork() creates exact copy of process
+- [ ] Child and parent have separate memory
+- [ ] exec() loads ELF file correctly
+- [ ] exec() sets up stack with arguments
+- [ ] Can run simple user programs (echo)
+- [ ] exit() cleans up process resources
+- [ ] wait() returns child exit status
+- [ ] Orphaned processes handled correctly
+
+### Dependencies
+- ✅ Memory management (COMPLETE - ready to use)
+- ✅ Process structures (COMPLETE - ready to use)
+- ✅ Syscall infrastructure (COMPLETE - ready to use)
+- ⚠️ Depends on Person 4 for TARFS (to load ELF files)
+- 🔄 Will integrate with Person 1 for scheduler
 
 ### Code to Create
 
@@ -134,53 +175,69 @@ context_switch:
 
 ---
 
-## Person 3: System Calls & User Space Lead
+## Person 3: File System & TARFS Lead
 
 ### Primary Responsibilities
-- System call infrastructure
-- User/kernel mode transitions
-- Core system calls (fork, exec, exit, wait)
-- User memory management (sbrk)
+- TARFS driver (read-only tar filesystem)
+- Virtual File System (VFS) layer
+- File descriptor management
+- File-related system calls (open, close)
 
-### Files to Work On
-- ✅ `kernel/include/syscall.h` (already created)
-- ✅ `kernel/syscall.c` (already created - stubs)
-- `kernel/syscall_proc.c` (TODO - fork, exec, exit, wait)
-- `kernel/syscall_mem.c` (TODO - sbrk)
-- `kernel/elf.c` (TODO - ELF loader)
-- `kernel/include/elf.h` (TODO)
+### Files to Create
+- [ ] `kernel/include/fs/vfs.h` - VFS interface and file_t structure
+- [ ] `kernel/fs/vfs.c` - VFS implementation
+- [ ] `kernel/include/fs/tarfs.h` - TARFS interface
+- [ ] `kernel/fs/tarfs.c` - TARFS driver implementation
+- [ ] `kernel/fs/file_descriptor.c` - File descriptor table management
+- [ ] `kernel/trap/syscall_fs.c` - File syscalls (open, close, lseek)
 
 ### Tasks
-1. **Week 1-2: System Call Infrastructure**
-   - ✅ Define system call numbers
-   - ✅ Implement syscall dispatcher
-   - Test basic syscalls (getpid, exit)
-   - Handle invalid syscall numbers
+1. **TARFS Driver (Priority: HIGH)**
+   - [ ] Parse tar archive format (tar_header_t)
+   - [ ] Implement tarfs_init() - scan and index tar archive
+   - [ ] Implement tarfs_lookup() - find file by path
+   - [ ] Implement tarfs_read() - read file contents
+   - [ ] Implement tarfs_stat() - get file metadata
+   - [ ] Use external symbols (_tarfs_start, _tarfs_end)
+   - [ ] Test reading known files from tar
 
-2. **Week 2-3: Process System Calls**
-   - Implement fork() - duplicate process
-   - Implement exec() - load new program
-   - Implement exit() - terminate process
-   - Implement wait() - wait for child
-   - Test process lifecycle
+2. **VFS Layer (Priority: HIGH)**
+   - [ ] Design file_t structure (type, offset, inode)
+   - [ ] Implement vfs_open() - open file by path
+   - [ ] Implement vfs_close() - close file
+   - [ ] Implement vfs_read() - read from file
+   - [ ] Implement vfs_write() - write to file (stub for now)
+   - [ ] Connect VFS to TARFS backend
 
-3. **Week 3-4: Memory & ELF Loading**
-   - Implement sbrk() for user heap
-   - Implement ELF file parser
-   - Load user programs from TARFS
-   - Test running user programs
+3. **File Descriptor Management (Priority: MEDIUM)**
+   - [ ] Add fd_table to process_t structure
+   - [ ] Implement fd_alloc() - allocate new fd
+   - [ ] Implement fd_get() - get file from fd
+   - [ ] Implement fd_close() - close fd
+   - [ ] Set up stdin/stdout/stderr (fd 0, 1, 2)
+
+4. **File System Calls (Priority: MEDIUM)**
+   - [ ] Implement sys_open() - open file, return fd
+   - [ ] Implement sys_close() - close fd
+   - [ ] Implement sys_lseek() - seek in file (optional)
+   - [ ] Test opening and closing files
 
 ### Testing Checklist
-- [ ] System calls transition to kernel correctly
-- [ ] fork() creates exact copy of process
-- [ ] exec() loads and runs new program
-- [ ] Parent can wait() for child
-- [ ] User programs can allocate memory with sbrk()
-- [ ] Can run echo and other binaries
+- [ ] TARFS can parse tar archive
+- [ ] Can list all files in TARFS
+- [ ] Can read file contents from TARFS
+- [ ] File descriptors allocated correctly
+- [ ] open() returns valid fd
+- [ ] close() frees fd
+- [ ] Multiple processes have separate fd tables
+- [ ] Can open same file multiple times
 
 ### Dependencies
-- Depends on Person 2 for process management
-- Depends on Person 4 for file system access
+- ✅ Memory management (COMPLETE - ready to use)
+- ✅ Process structures (COMPLETE - ready to use)
+- ✅ Syscall infrastructure (COMPLETE - ready to use)
+- 🔄 Person 2 will depend on your TARFS for exec()
+- 🔄 Person 4 will depend on your VFS for I/O operations
 
 ### Code to Create
 
@@ -222,53 +279,70 @@ int elf_load(const char *path, pagetable_t pt, uint64_t *entry);
 
 ---
 
-## Person 4: File System & I/O Lead
+## Person 4: I/O & Device Drivers Lead
 
 ### Primary Responsibilities
-- Virtual File System (VFS) layer
-- TARFS integration
-- File descriptor management
-- I/O system calls (read, write, open, close)
-- Basic UART driver
+- UART driver (console I/O)
+- I/O system calls (read, write)
+- User memory management (sbrk)
+- Additional device drivers (optional)
 
-### Files to Work On
-- `kernel/include/vfs.h` (TODO)
-- `kernel/vfs.c` (TODO)
-- `kernel/tarfs.c` (TODO)
-- `kernel/include/uart.h` (TODO)
-- `kernel/uart.c` (TODO)
-- `kernel/syscall_io.c` (TODO)
+### Files to Create
+- [ ] `kernel/include/drivers/uart.h` - UART driver interface
+- [ ] `kernel/drivers/uart.c` - UART driver implementation
+- [ ] `kernel/trap/syscall_io.c` - I/O syscalls (read, write)
+- [ ] `kernel/trap/syscall_mem.c` - Memory syscalls (sbrk)
+- [ ] `kernel/drivers/console.c` - Console abstraction (optional)
 
 ### Tasks
-1. **Week 1-2: UART Driver**
-   - Implement UART initialization
-   - Implement character read/write
-   - Test console I/O
-   - Make printk use UART
+1. **UART Driver (Priority: HIGH)**
+   - [ ] Create uart.h and uart.c in kernel/drivers/
+   - [ ] Implement uart_init() - Initialize UART hardware (16550 compatible)
+   - [ ] Implement uart_putc() - Send character
+   - [ ] Implement uart_getc() - Receive character  
+   - [ ] Implement uart_can_read() - Check if data available
+   - [ ] Handle UART interrupts (optional, can start with polling)
+   - [ ] Test console I/O
+   - [ ] Integrate with printk if needed
 
-2. **Week 2-3: File System**
-   - Design VFS interface
-   - Implement TARFS driver
-   - Parse tar archive format
-   - Test reading files from TARFS
+2. **I/O System Calls (Priority: HIGH)**
+   - [ ] Implement sys_read() in syscall_io.c
+   - [ ] Implement sys_write() in syscall_io.c
+   - [ ] Handle fd 0 (stdin) - read from UART
+   - [ ] Handle fd 1/2 (stdout/stderr) - write to UART
+   - [ ] Handle regular file fds - delegate to VFS (Person 3)
+   - [ ] Validate user pointers (copy_from_user, copy_to_user)
+   - [ ] Test reading from stdin and writing to stdout
 
-3. **Week 3-4: I/O System Calls**
-   - Implement file descriptor table
-   - Implement open/close/read/write
-   - Connect to TARFS
-   - Test file operations from user space
+3. **User Memory Management (Priority: MEDIUM)**
+   - [ ] Implement sys_sbrk() in syscall_mem.c
+   - [ ] Track process heap pointer (brk)
+   - [ ] Allocate pages for heap growth
+   - [ ] Map new pages into user address space
+   - [ ] Handle heap shrinking (optional)
+   - [ ] Test user programs allocating memory
+
+4. **Additional Features (Priority: LOW)**
+   - [ ] Implement console buffering
+   - [ ] Add line editing support (backspace, etc.)
+   - [ ] Implement sys_ioctl() for device control (optional)
+   - [ ] Add VirtIO block device driver (optional)
 
 ### Testing Checklist
 - [ ] UART driver sends/receives characters
-- [ ] Can list files in TARFS
-- [ ] Can read file contents from TARFS
-- [ ] File descriptors work correctly
-- [ ] User programs can open and read files
-- [ ] stdin/stdout/stderr work
+- [ ] Can read from stdin (keyboard input)
+- [ ] Can write to stdout/stderr (console output)
+- [ ] User programs can read() and write()
+- [ ] sbrk() grows user heap correctly
+- [ ] User programs can allocate memory
+- [ ] Console I/O works from user space
 
 ### Dependencies
-- Depends on Person 2 for process structures (file descriptor table)
-- Person 3 will depend on your file system for exec()
+- ✅ Memory management (COMPLETE - ready to use)
+- ✅ Process structures (COMPLETE - ready to use)
+- ✅ Syscall infrastructure (COMPLETE - ready to use)
+- 🔄 Will integrate with Person 3 for file-based I/O
+- 🔄 Will integrate with Person 1 for process scheduling
 
 ### Code to Create
 
@@ -334,25 +408,55 @@ int uart_can_read(void);
 
 ## Integration Milestones
 
-### Milestone 1: Basic Kernel (Week 2)
-- **Who:** Person 1 + Person 2
-- **Goal:** Kernel boots, memory works, can handle interrupts
-- **Test:** Kernel allocates memory and handles timer interrupts
+### Milestone 1: Foundation ✅ COMPLETE
+- **Status:** ✅ DONE
+- **What's Ready:**
+  - ✅ Memory management (PMM, VMM, kmalloc)
+  - ✅ Trap handling infrastructure
+  - ✅ Process structures and management
+  - ✅ System call dispatcher framework
+- **Result:** All 4 people can now work in parallel
 
-### Milestone 2: Process Support (Week 4)
-- **Who:** Person 2 + Person 3
-- **Goal:** Can create processes and switch between them
-- **Test:** Multiple kernel threads running concurrently
+### Milestone 2: Core Components (Week 1-2) 🚀 ALL PARALLEL
+**Everyone works independently on their component:**
 
-### Milestone 3: User Programs (Week 6)
-- **Who:** Person 3 + Person 4
-- **Goal:** Can load and run user programs
+- **Person 1:** Scheduler + context switching
+- **Person 2:** Fork/exec/wait + ELF loader
+- **Person 3:** TARFS + VFS + file descriptors
+- **Person 4:** UART driver + read/write syscalls + sbrk
+
+**Integration Point:** End of Week 2
+- Merge all branches
+- Test that components compile together
+- Resolve any interface conflicts
+
+### Milestone 3: Process Execution (Week 3) 🔄 INTEGRATION
+- **Who:** Person 1 + Person 2 + Person 3
+- **Goal:** Can create, schedule, and run user programs
+- **Requirements:**
+  - ✅ Scheduler working (Person 1)
+  - ✅ Fork/exec working (Person 2)
+  - ✅ TARFS working (Person 3)
 - **Test:** Echo program runs successfully
+- **Integration Tasks:**
+  - Person 2's exec() uses Person 3's TARFS to load programs
+  - Person 1's scheduler switches between user processes
+  - Test full process lifecycle: fork → exec → run → exit
 
-### Milestone 4: Full System (Week 8)
+### Milestone 4: I/O & Shell (Week 4) 🔄 FINAL INTEGRATION
 - **Who:** All 4 people
 - **Goal:** Shell runs, can execute commands, file I/O works
+- **Requirements:**
+  - ✅ All previous milestones
+  - ✅ UART driver (Person 4)
+  - ✅ read/write syscalls (Person 4)
+  - ✅ File descriptors (Person 3)
 - **Test:** Interactive shell with multiple programs
+- **Integration Tasks:**
+  - Person 4's read/write use Person 3's VFS
+  - stdin/stdout/stderr work through UART
+  - Shell can execute multiple commands
+  - File I/O works for user programs
 
 ---
 
@@ -520,34 +624,46 @@ riscv64-unknown-elf-gdb build/kernel.elf
 
 ---
 
-## Current Status
+## Current Status Summary
 
-### ✅ Completed
-- Project structure and build system
-- Core header files (types.h, riscv.h)
-- Physical memory manager (PMM)
-- Virtual memory manager (VMM)
-- Kernel heap allocator (kmalloc)
-- Trap/interrupt infrastructure
-- Process structures
-- System call infrastructure (stubs)
-- Project planning and documentation
+### ✅ Completed (Ready to Use)
+- ✅ Project structure and build system
+- ✅ Core header files (types.h, riscv.h, printk.h)
+- ✅ Physical memory manager (PMM) - bitmap allocator
+- ✅ Virtual memory manager (VMM) - Sv39 page tables
+- ✅ Kernel heap allocator (kmalloc) - first-fit with coalescing
+- ✅ Trap/interrupt infrastructure - trap_entry.S, trap.c
+- ✅ Process structures - process.h, process.c
+- ✅ System call infrastructure - syscall.h, syscall.c (dispatcher + stubs)
+- ✅ Project planning and documentation
 
-### 🚧 In Progress
-- Testing memory management components
-- Implementing scheduler
-- Implementing system calls
-- File system integration
+### 🚀 Ready for Parallel Development (All Can Start NOW)
 
-### ⏳ TODO
-- Context switching
-- Fork/exec implementation
-- ELF loader
-- TARFS driver
-- UART driver
-- File descriptor management
-- User program testing
-- Shell integration
+**Person 1:** Scheduler & Context Switching
+- ⏳ scheduler.c, context_switch.S
+- ⏳ ~400 lines to write
+- ✅ No blockers - can start immediately
+
+**Person 2:** Fork/Exec/Wait & ELF Loader
+- ⏳ syscall_proc.c, elf.c
+- ⏳ ~500 lines to write
+- ✅ No blockers - can start immediately (will integrate with Person 3's TARFS later)
+
+**Person 3:** TARFS & VFS & File Descriptors
+- ⏳ tarfs.c, vfs.c, file_descriptor.c, syscall_fs.c
+- ⏳ ~600 lines to write
+- ✅ No blockers - can start immediately
+
+**Person 4:** UART & I/O Syscalls & sbrk
+- ⏳ uart.c, syscall_io.c, syscall_mem.c
+- ⏳ ~400 lines to write
+- ✅ No blockers - can start immediately
+
+### Integration Strategy
+**Week 1-2:** Everyone works independently on their components
+**Week 2:** Integration meeting - merge branches, resolve conflicts
+**Week 3:** Test integrated system - processes running, programs loading
+**Week 4:** Polish and testing - shell, multiple programs, stress tests
 
 ---
 
