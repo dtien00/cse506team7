@@ -7,9 +7,9 @@
 // Read a CSR into a uint64_t
 #define read_csr(csr)                                                                                                  \
     ({                                                                                                                 \
-        uint64_t __r;                                                                                                \
-        asm volatile("csrr %0, " #csr : "=r"(__r));                                                                  \
-        __r;                                                                                                         \
+        uint64_t _r;                                                                                                \
+        asm volatile("csrr %0, " #csr : "=r"(_r));                                                                  \
+        _r;                                                                                                         \
     })
 
 // Write a value to a CSR
@@ -52,7 +52,7 @@
 // Do NOT use this for sp; use r_sp() instead.
 #define read_reg(reg)                                                                                                  \
     ({                                                                                                                 \
-        uint64_t __r;                                                                                                \
-        asm volatile("mv %0, " #reg : "=r"(__r));                                                                    \
-        __r;                                                                                                         \
+        uint64_t _r;                                                                                                \
+        asm volatile("mv %0, " #reg : "=r"(_r));                                                                    \
+        _r;                                                                                                         \
     })

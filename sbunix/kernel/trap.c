@@ -20,8 +20,13 @@ void trap_handler(struct trap_frame *frame) {
     if (scause >> 63) {
         uint64_t code = scause & ~(1ULL << 63); // calculate exception code
         write_csr(sie, read_csr(sie) & ~(1ULL << code)); // clear the sip bit corresponding to the exception code
-    } else
-        frame->sepc += 4; // skip the faulting instruction (all RV64 instructions are 4 bytes)
+    } else {
+        // advance past faulting instruction (2 bytes if compressed, 4 if normal)
+        uint64_t inst_len = (*(uint16_t *) frame->sepc & 0x3) == 0x3 ? 4 : 2;
+        frame->sepc += inst_len;
+        // write updated sepc back so sret returns to correct place
+        write_csr(sepc, frame->sepc);
+    }
 }
 
 void interrupts_on(void) { write_csr(sstatus, read_csr(sstatus) | (1ULL << 1)); }
