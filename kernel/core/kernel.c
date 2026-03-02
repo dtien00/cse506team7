@@ -7,6 +7,8 @@
 #include "trap/syscall.h"
 #include "arch/riscv.h"
 
+// make KLANG=c all & make qemu
+
 // External symbols from linker script
 extern char _kernel_end[];
 
