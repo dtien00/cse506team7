@@ -32,10 +32,6 @@ Start here in this order:
 
 ### 3. **TEAM_TASKS.md** (Know Your Role)
 - Detailed breakdown for 4 team members
-- Person 1: Memory Management
-- Person 2: Process & Interrupts
-- Person 3: System Calls & User Space
-- Person 4: File System & I/O
 - Weekly milestones and integration plan
 
 ### 4. **QUICK_REFERENCE.md** (Keep While Coding)
@@ -135,35 +131,6 @@ sbunix-skeleton/
 ├── build/                  # Build output
 └── Makefile               # Build system
 ```
-
-## 👥 Team Distribution
-
-### Person 1: Memory Management Lead
-**Status:** ✅ Code complete, needs testing
-- Physical Memory Manager (PMM)
-- Virtual Memory Manager (VMM)
-- Kernel Heap (kmalloc)
-
-### Person 2: Interrupt & Process Lead
-**Status:** 🚧 Foundation done, need scheduler
-- Trap handling ✅
-- Process structures ✅
-- Scheduler ⏳
-- Context switching ⏳
-
-### Person 3: System Calls & User Space Lead
-**Status:** 🚧 Infrastructure done, need implementations
-- System call dispatcher ✅
-- fork/exec/exit/wait ⏳
-- ELF loader ⏳
-- User memory (sbrk) ⏳
-
-### Person 4: File System & I/O Lead
-**Status:** ⏳ Need to create
-- VFS layer ⏳
-- TARFS driver ⏳
-- UART driver ⏳
-- File descriptors ⏳
 
 ## 🎯 Next Steps
 
