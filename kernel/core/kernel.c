@@ -73,6 +73,6 @@ void boot(void) {
   
   // Idle loop
   while (1) {
-    asm volatile("wfi");  // Wait for interrupt
+    __asm__("wfi");  // Wait for interrupt
   }
 }

@@ -4,7 +4,7 @@
 
 ### Physical Memory Manager (PMM)
 ```c
-#include "physical_memory_mapper.h"
+#include "pmm.h"
 
 // Initialize PMM
 void pmm_init(uintptr_t mem_start, size_t mem_size);

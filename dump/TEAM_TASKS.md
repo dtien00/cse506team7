@@ -482,7 +482,7 @@ int uart_can_read(void);
 6. Merge to main
 
 ### Shared Interfaces (DO NOT CHANGE WITHOUT DISCUSSION)
-- `physical_memory_mapper.h` - PMM interface
+- `pmm.h` - PMM interface
 - `vmm.h` - VMM interface
 - `process.h` - Process structures
 - `syscall.h` - System call numbers

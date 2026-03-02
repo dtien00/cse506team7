@@ -98,7 +98,7 @@ sbunix-skeleton/
 │   ├── include/            # Headers (9 files)
 │   │   ├── types.h         # Basic types
 │   │   ├── riscv.h         # RISC-V definitions
-│   │   ├── physical_memory_mapper.h  # PMM
+│   │   ├── pmm.h  # PMM
 │   │   ├── vmm.h           # VMM
 │   │   ├── kmalloc.h       # Heap
 │   │   ├── trap.h          # Interrupts

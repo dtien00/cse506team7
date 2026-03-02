@@ -42,7 +42,7 @@ kernel/
 │   │   ├── types.h              # Basic type definitions
 │   │   └── printk.h             # Kernel printing interface
 │   ├── mm/
-│   │   ├── physical_memory_mapper.h
+│   │   ├── pmm.h
 │   │   ├── vmm.h
 │   │   └── kmalloc.h
 │   ├── process/

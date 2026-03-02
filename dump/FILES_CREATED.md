@@ -28,7 +28,7 @@ This document lists all files created to establish the OS kernel foundation.
   - SATP register manipulation
   - Interrupt enable/disable functions
 
-### 3. physical_memory_mapper.h
+### 3. pmm.h
 - **Lines:** ~15
 - **Purpose:** Physical memory manager interface
 - **Contents:**
@@ -372,7 +372,7 @@ This document lists all files created to establish the OS kernel foundation.
 ```
 types.h
   └─► riscv.h
-      └─► physical_memory_mapper.h
+      └─► pmm.h
           └─► vmm.h
               └─► kmalloc.h
                   └─► trap.h
@@ -383,10 +383,10 @@ types.h
 
 ### Include Relationships
 
-- **kernel.c** includes: printk.h, physical_memory_mapper.h, vmm.h, kmalloc.h, trap.h, process.h, syscall.h, riscv.h
-- **pmm.c** includes: physical_memory_mapper.h, riscv.h, printk.h
-- **vmm.c** includes: vmm.h, physical_memory_mapper.h, riscv.h, printk.h
-- **kmalloc.c** includes: kmalloc.h, physical_memory_mapper.h, riscv.h, printk.h
+- **kernel.c** includes: printk.h, pmm.h, vmm.h, kmalloc.h, trap.h, process.h, syscall.h, riscv.h
+- **pmm.c** includes: pmm.h, riscv.h, printk.h
+- **vmm.c** includes: vmm.h, pmm.h, riscv.h, printk.h
+- **kmalloc.c** includes: kmalloc.h, pmm.h, riscv.h, printk.h
 - **trap.c** includes: trap.h, riscv.h, printk.h, syscall.h
 - **process.c** includes: process.h, kmalloc.h, printk.h
 - **syscall.c** includes: syscall.h, process.h, printk.h

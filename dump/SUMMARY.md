@@ -26,7 +26,7 @@ We've created a foundational RISC-V 64-bit operating system kernel with all the 
    - Interrupt enable/disable functions
    - ~200 lines of essential RISC-V definitions
 
-3. **physical_memory_mapper.h** - Physical memory manager interface
+3. **pmm.h** - Physical memory manager interface
    - Page allocation/deallocation functions
    - Multi-page allocation support
    - Memory statistics functions
