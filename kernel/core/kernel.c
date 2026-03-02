@@ -1,5 +1,5 @@
 #include "kernel/printk.h"
-#include "mm/physical_memory_mapper.h"
+#include "mm/pmm.h"
 #include "mm/vmm.h"
 #include "mm/kmalloc.h"
 #include "trap/trap.h"

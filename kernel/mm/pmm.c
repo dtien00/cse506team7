@@ -1,4 +1,4 @@
-#include "mm/physical_memory_mapper.h"
+#include "mm/pmm.h"
 #include "arch/riscv.h"
 #include "kernel/printk.h"
 
