@@ -69,7 +69,7 @@ build/tarfs.o: $(USER_BIN)
 		rootfs.tar tarfs.o
 
 build/kernel.elf: $(KERN_ALL) build/tarfs.o
-	$(LD) -T kernel/kernel.ld $(KERN_ALL) build/tarfs.o -o $@
+	$(LD) -T kernel/kernel.ld -Map=build/kernel.map $(KERN_ALL) build/tarfs.o -o $@
 
 thirdparty: build/libc/crt.S.o build/libc.a
 	$(MAKE) -C thirdparty busybox-install
@@ -109,6 +109,12 @@ clean:
 rebuild:
 	$(MAKE) clean
 	$(MAKE) all
+
+OBJDUMP := $(CROSS)objdump
+
+.PHONY: disasm
+disasm: build/kernel.elf
+	$(OBJDUMP) -d -S build/kernel.elf > build/kernel.disasm
 
 .PRECIOUS: build/%.S.o build/%.c.o
 .PHONY: all qemu clean thirdparty

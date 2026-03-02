@@ -3,4 +3,4 @@
 _start:
   la sp, _stack_top
   call boot
-  j .
+  // j .
