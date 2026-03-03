@@ -1,4 +1,6 @@
 #include "process.h"
+#include <string.h>
+#include <stddef.h>
 
 #define MAX_PROCS 256
 struct proc proctab[MAX_PROCS]; // Array of processes of fixed length
@@ -8,7 +10,7 @@ struct proc *current = NULL; // Current executing process
 
 struct proc* proc_alloc(void) {
     for (int i = 0; i < MAX_PROCS; i++) {
-        if (proctab[i].state == ZOMBIE || proctab[i].pid == 0) {
+        if (proctab[i].state == PROC_ZOMBIE || proctab[i].pid == 0) {
             return &proctab[i];
         }
     }
@@ -137,8 +139,8 @@ void proc_init(void) {
     init->pid = 1;
     strncpy(init->name, "init", MAX_NAME-1);
     init->state = PROC_READY;
-    init->sp = /* kernel stack top */;
-    init->pc = (uint64_t)init_process;
+    init->sp = /* kernel stack top */ 0;
+    init->pc = (uint64_t)init;
 
     proc_ready(init);
     current = NULL;
@@ -169,7 +171,7 @@ struct proc* proc_find(uint32_t pid) {
     for (int i = 0; i<MAX_PROCS; i++) {
         if (proctab[i]->pid == pid) return proctab[i];
     }
-    return NULL
+    return NULL;
 }
 
 /** REDUNDANT; But cited may be useful later with added complexity with syscall integration
