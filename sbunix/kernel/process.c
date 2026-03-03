@@ -101,12 +101,6 @@ void proc_unblock(struct proc *p){
 }
 
 /**
- * 
- */
-struct proc* proc_create(const char *name);
-void proc_free(struct proc *p);
-
-/**
  * @brief Context switch
  * This function will save the current process, then load next
  */
@@ -157,3 +151,89 @@ void schedule(void) {
     }
     // Idle or halt if no runnable process
 }
+
+/**
+ * @brief Returns global current process
+ */
+struct proc* proc_current(void){
+    return current;
+}
+
+/**
+ * @brief Obtain process from process table by PID
+ * This function searches through our process table for a matching PID, then returns the process associated with it.
+ * Else return NULL to indicate no match was found.
+ * @param pid PID of the process we want to obtain
+ */
+struct proc* proc_find(uint32_t pid) {
+    for (int i = 0; i<MAX_PROCS; i++) {
+        if (proctab[i]->pid == pid) return proctab[i];
+    }
+    return NULL
+}
+
+/** REDUNDANT; But cited may be useful later with added complexity with syscall integration
+ * @brief Voluntarily schedules a call.
+ */
+void proc_yield(void){
+    schedule();
+}
+
+/** CONCERN: THIS ONLY SETS PID TO 2; 
+ * @brief Initializes process, allocates space for it, and queues it.
+ */
+struct proc* proc_create(const char *name){
+    struct proc *p = proc_alloc();
+    if (!p) return NULL;
+
+    static uint32_t next_pid = 2; // PID 1 is the init process
+    p->pid = next_pid++;
+    strncpy(p->name, name, MAX_NAME-1);
+    p->state = PROC_CREATED;
+
+    // TODO: Allocate stack, set up sp and pc
+
+    proc_ready(p);
+    return p;
+}
+
+/**
+ * @brief Cleans up process memory usage
+ */
+void proc_free(struct proc *p) {
+    if (!p) return;
+
+    // TODO: Free allocated memory (stack, page table, etc.)
+    p->pid = 0;
+    p->state = PROC_UNUSED;
+    p->next = NULL;
+}
+
+/**
+ * @brief Assigns exit code to current process and marks it as a zombie.
+ * @param code Exit code of varying values which we can use to determine outcome of process/error.
+ */
+void proc_exit(int code) {
+    if (current) {
+        current->exit_code = code;
+        current->state = PROC_ZOMBIE;
+        // TODO: Wake up awaiting parents, if any
+        schedule(); // Switches to next process
+    }
+}
+
+/**
+ * @brief Kills a specific process and makes it a zombie.
+ */
+void proc_kill(struct proc *p) {
+    if (p) p->state = PROC_ZOMBIE;
+}
+
+/**
+ * @brief Block a specific process until it exits
+ */
+void proc_wait(struct proc *p) {
+    // TODO: Block until process exits
+    if (p) p->state = PROC_BLOCKED;
+}
+
