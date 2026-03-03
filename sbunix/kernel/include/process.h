@@ -1,5 +1,5 @@
 #pragma once
-#include <stdint.h>
+#include "stdint.h"
 
 #define MAX_PROCS 256
 #define MAX_NAME 16
