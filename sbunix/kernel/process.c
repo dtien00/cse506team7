@@ -1,6 +1,6 @@
 #include "process.h"
-#include <string.h>
-#include <stddef.h>
+#include "string.h"
+#include "stddef.h"
 
 #define MAX_PROCS 256
 struct proc proctab[MAX_PROCS]; // Array of processes of fixed length
