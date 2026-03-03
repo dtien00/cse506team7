@@ -2,8 +2,8 @@
 #include <process.h>
 
 void boot(void) {
-  proc_init(); // Initialization of process table and creation of kernel/init process
   printk("Booting SBUnix\n");
+  proc_init(); // Initialization of process table and creation of kernel/init process
   
   // Start scheduler
   struct proc *p = proc_create("init");
