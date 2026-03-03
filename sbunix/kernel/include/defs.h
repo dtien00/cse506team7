@@ -2,6 +2,7 @@
 #define SBUNIX_DEFS_H
 
 #define NULL ((void*)0)
+#define UINT64_MAX  (~0ULL)
 
 typedef unsigned long  uint64_t;
 typedef          long   int64_t;
