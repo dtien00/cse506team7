@@ -3,7 +3,7 @@
 #include "stddef.h"
 
 #define MAX_PROCS 256
-struct proc proctab[MAX_PROCS]; // Array of processes of fixed length
+struct proc *proctab[MAX_PROCS]; // Array of processes of fixed length
 struct proc *ready_queue = NULL; // Head of ready processes
 struct proc *blocked_queue = NULL; // Head of blocked processes
 struct proc *current = NULL; // Current executing process
