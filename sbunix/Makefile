@@ -66,10 +66,14 @@ build/tarfs.o: $(USER_BIN)
 
 build/kernel.elf: $(KERN_ALL) build/tarfs.o
 <<<<<<< HEAD
+<<<<<<< HEAD
         $(LD) -T kernel/kernel.ld $(KERN_ALL) build/tarfs.o -o $@
 =======
 	$(LD) -T kernel/kernel.ld -Map=build/kernel.map $(KERN_ALL) build/tarfs.o -o $@
 >>>>>>> 284e1add5292ef1ef9151adc37150070a4fe504b
+=======
+	$(LD) -T kernel/kernel.ld -Map=build/kernel.map $(KERN_ALL) build/tarfs.o -o $@
+>>>>>>> 09f7142cb84c59c5a1e5dc28bd1219339f9fbd23
 
 thirdparty: build/libc/crt.S.o build/libc.a
         $(MAKE) -C thirdparty install
@@ -115,6 +119,12 @@ submit:
         mkdir -p $(SUBMIT_DIR)/sbunix; \
         git archive HEAD | tar -x -C $(SUBMIT_DIR)/sbunix; \
         echo "Submitted to $(SUBMIT_DIR)/sbunix"
+
+OBJDUMP := $(CROSS)objdump
+
+.PHONY: disasm
+disasm: build/kernel.elf
+	$(OBJDUMP) -d -S build/kernel.elf > build/kernel.disasm
 
 OBJDUMP := $(CROSS)objdump
 
