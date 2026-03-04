@@ -2,6 +2,17 @@
 
 This repo builds a RISC‑V kernel, embeds a tar-based root filesystem into the kernel, and can boot under QEMU with an optional GDB stub for debugging.
 
+## Boot memory map (QEMU virt + OpenSBI)
+
+- Physical DRAM on `qemu-system-riscv64 -machine virt` starts at `0x80000000`.
+- The Makefile uses `-bios default`, so OpenSBI firmware is loaded first.
+- The kernel linker script places SBUnix at `0x80200000` (`kernel/kernel.ld`).
+- OpenSBI transfers control to the kernel entry point at that linked address.
+
+So both addresses are correct:
+- `0x80000000` = RAM base (and firmware region)
+- `0x80200000` = kernel load/entry region in this project
+
 
 ## SBUnix Makefile usage
 

@@ -1,16 +1,12 @@
 KLANG ?= c
+SUBMIT_DIR ?= /submit
 
 CROSS   := riscv64-unknown-elf-
 CC      := $(CROSS)gcc
 LD      := $(CROSS)ld
 AR      := $(CROSS)ar
 OBJCOPY := $(CROSS)objcopy
-CFLAGS  := -Wall -Werror -ffreestanding -nostdlib -nostdinc -mcmodel=medany -march=rv64imac_zicsr_zifencei -mabi=lp64
-
-DEBUG ?= 1
-ifeq ($(DEBUG),1)
-  CFLAGS += -g -Og
-endif
+CFLAGS  := -Wall -Werror -Os -ffreestanding -fno-builtin -nostdlib -nostdinc -isystem $(shell $(CC) -print-file-name=include) -mcmodel=medany -march=rv64imac_zicsr_zifencei -mabi=lp64 -ffunction-sections -fdata-sections
 
 KERN_ASM := $(patsubst %,build/%.o,$(wildcard kernel/*.S))
 LIBC_OBJ := $(patsubst %,build/%.o,$(filter-out libc/crt.S,$(wildcard libc/*.c libc/*.S)))
@@ -34,81 +30,87 @@ DISK_IMG  := build/disk.img
 all: build/kernel.elf
 
 build/%.c.o: %.c
-	@mkdir -p $(@D)
-	$(CC) $(CFLAGS) -I$(<D)/include -c $< -o $@
+        @mkdir -p $(@D)
+        $(CC) $(CFLAGS) -I$(<D)/include -c $< -o $@
 
 build/%.S.o: %.S
-	@mkdir -p $(@D)
-	$(CC) $(CFLAGS) -I$(<D)/include -c $< -o $@
+        @mkdir -p $(@D)
+        $(CC) $(CFLAGS) -I$(<D)/include -c $< -o $@
 
 build/libc.a: $(LIBC_OBJ)
-	@mkdir -p $(@D)
-	$(AR) rcs $@ $^
+        @mkdir -p $(@D)
+        $(AR) rcs $@ $^
 
 # Rust kernel build
 build/rust/riscv64imac-unknown-none-elf/debug/libsbunix.a: $(wildcard kernel/*.rs) Cargo.toml
-	cargo build
+        cargo build
 
 # Zig kernel build
 zig-out/lib/libsbunix.a: $(wildcard kernel/*.zig) build.zig
-	zig build -Doptimize=ReleaseSafe
+        zig build -Doptimize=ReleaseSafe
 
 .SECONDEXPANSION:
 build/rootfs/bin/%: $$(wildcard bin/%/*.c) build/libc/crt.S.o build/libc.a
-	@mkdir -p $(@D)
-	$(CC) $(CFLAGS) -Ilibc/include build/libc/crt.S.o bin/$*/*.c build/libc.a -o $@
+        @mkdir -p $(@D)
+        $(CC) $(CFLAGS) -Ilibc/include build/libc/crt.S.o bin/$*/*.c build/libc.a -Wl,--gc-sections -o $@
 
 build/tarfs.o: $(USER_BIN)
-	cp -a rootfs/. build/rootfs/
-	tar cf build/rootfs.tar -C build/rootfs .
-	cd build && $(OBJCOPY) -I binary -O elf64-littleriscv -B riscv \
-		--rename-section .data=.tarfs \
-		--redefine-sym _binary_rootfs_tar_start=_tarfs_start \
-		--redefine-sym _binary_rootfs_tar_end=_tarfs_end \
-		--redefine-sym _binary_rootfs_tar_size=_tarfs_size \
-		rootfs.tar tarfs.o
+        cp -a rootfs/. build/rootfs/
+        tar cf build/rootfs.tar -C build/rootfs .
+        cd build && $(OBJCOPY) -I binary -O elf64-littleriscv -B riscv \
+                --rename-section .data=.tarfs \
+                --redefine-sym _binary_rootfs_tar_start=_tarfs_start \
+                --redefine-sym _binary_rootfs_tar_end=_tarfs_end \
+                --redefine-sym _binary_rootfs_tar_size=_tarfs_size \
+                rootfs.tar tarfs.o
 
 build/kernel.elf: $(KERN_ALL) build/tarfs.o
-	$(LD) -T kernel/kernel.ld $(KERN_ALL) build/tarfs.o -o $@
+        $(LD) -T kernel/kernel.ld $(KERN_ALL) build/tarfs.o -o $@
 
 thirdparty: build/libc/crt.S.o build/libc.a
-	$(MAKE) -C thirdparty busybox-install
-	@rm -f build/tarfs.o
-	$(MAKE) build/kernel.elf
+        $(MAKE) -C thirdparty install
+        @rm -f build/tarfs.o
+        $(MAKE) build/kernel.elf
 
 build/tools/mkfs: tools/mkfs.c
-	@mkdir -p $(@D)
-	gcc -Wall -o $@ $<
+        @mkdir -p $(@D)
+        gcc -Wall -o $@ $<
 
 $(DISK_IMG): build/tools/mkfs
-	build/tools/mkfs $@ $(DISK_SIZE)
+        build/tools/mkfs $@ $(DISK_SIZE)
 
 qemu: build/kernel.elf $(DISK_IMG)
-	qemu-system-riscv64 -machine virt -bios default -kernel $< \
-		-drive file=$(DISK_IMG),format=raw,if=none,id=hd0 \
-		-device virtio-blk-pci-non-transitional,drive=hd0 \
-		-device virtio-gpu-pci \
-		-device virtio-net-pci-non-transitional,netdev=net0 \
-		-netdev user,id=net0 \
-		-nographic
-
-qemu-gdb: build/kernel.elf $(DISK_IMG)
-	qemu-system-riscv64 -machine virt -bios default -kernel $< \
-		-drive file=$(DISK_IMG),format=raw,if=none,id=hd0 \
-		-device virtio-blk-pci-non-transitional,drive=hd0 \
-		-device virtio-gpu-pci \
-		-device virtio-net-pci-non-transitional,netdev=net0 \
-		-netdev user,id=net0 \
-		-nographic \
-		-S -s
+        qemu-system-riscv64 -machine virt -bios default -kernel $< \
+                -drive file=$(DISK_IMG),format=raw,if=none,id=hd0 \
+                -device virtio-blk-pci-non-transitional,drive=hd0 \
+                -device virtio-gpu-pci \
+                -device virtio-net-pci-non-transitional,netdev=net0 \
+                -netdev user,id=net0 \
+                -nographic
 
 clean:
-	rm -rf build zig-out .zig-cache
+        rm -rf build zig-out .zig-cache
 
-.PHONY: rebuild
-rebuild:
-	$(MAKE) clean
-	$(MAKE) all
+submit:
+        @set -e; \
+        STMP=$$(mktemp -d /tmp/sbunix-submit.XXXXXX); \
+        cleanup() { set +e; chmod -R u+w "$$STMP" 2>/dev/null; rm -rf "$$STMP" 2>/dev/null; }; \
+        trap cleanup EXIT; \
+        rsync -a \
+                --exclude='.git' --exclude='build/' --exclude='zig-out/' \
+                --exclude='.zig-cache/' --exclude='.claude/' --exclude='thirdparty/' \
+                --max-size=100K \
+                . "$$STMP/"; \
+        cd "$$STMP"; \
+        git init -q; \
+        git add -A; \
+        git -c user.name=student -c user.email=student@sbunix commit -q -m "submit"; \
+        rm -rf $(SUBMIT_DIR)/sbunix.2 2>/dev/null || true; \
+        mv $(SUBMIT_DIR)/sbunix.1 $(SUBMIT_DIR)/sbunix.2 2>/dev/null || true; \
+        mv $(SUBMIT_DIR)/sbunix $(SUBMIT_DIR)/sbunix.1 2>/dev/null || true; \
+        mkdir -p $(SUBMIT_DIR)/sbunix; \
+        git archive HEAD | tar -x -C $(SUBMIT_DIR)/sbunix; \
+        echo "Submitted to $(SUBMIT_DIR)/sbunix"
 
 .PRECIOUS: build/%.S.o build/%.c.o
-.PHONY: all qemu clean thirdparty
+.PHONY: all qemu clean thirdparty submit
