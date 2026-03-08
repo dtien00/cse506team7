@@ -1,5 +1,4 @@
-#ifndef SBUNIX_DEFS_H
-#define SBUNIX_DEFS_H
+#pragma once
 
 #define NULL ((void*)0)
 #define UINT64_MAX  (~0ULL)
@@ -13,6 +12,9 @@ typedef          short  int16_t;
 typedef unsigned char   uint8_t;
 typedef          char    int8_t;
 
-typedef uint64_t size_t;
+typedef uint64_t  uintptr_t;   // RISC-V 64-bit
+typedef int64_t   intptr_t;
+typedef uint64_t  size_t;
+typedef int64_t   ssize_t;
 
-#endif //SBUNIX_DEFS_H
+typedef int pid_t;
