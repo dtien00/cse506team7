@@ -1,5 +1,5 @@
 #pragma once
 
-#include <defs.h>
+#include <types.h>
 
-void console_write(uint64_t num_bytes, const char* data);
+void console_write(uint64_t num_bytes, const char *data);

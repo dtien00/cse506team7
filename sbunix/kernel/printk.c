@@ -1,7 +1,7 @@
-#include <printk.h>
 #include <console.h>
-#include <defs.h>
+#include <printk.h>
 #include <stdarg.h>
+#include <types.h>
 
 // we maintain a buffer of 128 characters to reduce the number of SBI ecalls
 #define PRINTK_BUF_SZ 128
@@ -16,7 +16,8 @@ static void flush(const char *buf, uint64_t *idx) {
 
 // to add a single character to the buffer
 static void putc_buf(char *buf, uint64_t *idx, const char c) {
-    if (*idx == PRINTK_BUF_SZ) flush(buf, idx);
+    if (*idx == PRINTK_BUF_SZ)
+        flush(buf, idx);
     buf[(*idx)++] = c;
 }
 
@@ -33,7 +34,8 @@ static void put_i64_buf(char *buf, uint64_t *idx, const int64_t i) {
     if (i < 0) {
         putc_buf(buf, idx, '-');
         n = (uint64_t) -i;
-    } else n = (uint64_t) i;
+    } else
+        n = (uint64_t) i;
 
     // add each digit as a char to tmp in reverse
     while (n && t < 32) {
@@ -42,7 +44,8 @@ static void put_i64_buf(char *buf, uint64_t *idx, const int64_t i) {
     }
 
     // add each char in tmp to buffer in reverse to print digits in the right order
-    while (t--) putc_buf(buf, idx, tmp[t]);
+    while (t--)
+        putc_buf(buf, idx, tmp[t]);
 }
 
 static void put_hex_buf(char *buf, uint64_t *idx, const uint64_t x, int digits) {
@@ -67,7 +70,8 @@ void printk(const char *fmt, ...) {
         }
         // if we find a %
         p++;
-        if (!*p) break;
+        if (!*p)
+            break;
 
         switch (*p) {
             case '%':
@@ -75,13 +79,15 @@ void printk(const char *fmt, ...) {
                 break;
             case 'c': {
                 const int c = va_arg(args, int);
-                putc_buf(buf, &idx, (char)c);
+                putc_buf(buf, &idx, (char) c);
                 break;
             }
             case 's': {
                 const char *s = va_arg(args, const char *);
-                if (!s) s = "(NULL)";
-                while (*s != '\0' && *s) putc_buf(buf, &idx, *s++);
+                if (!s)
+                    s = "(NULL)";
+                while (*s != '\0' && *s)
+                    putc_buf(buf, &idx, *s++);
                 break;
             }
             case 'd': {
@@ -104,7 +110,7 @@ void printk(const char *fmt, ...) {
                 void *ptr = va_arg(args, void *);
                 putc_buf(buf, &idx, '0');
                 putc_buf(buf, &idx, 'x');
-                put_hex_buf(buf, &idx, (uint64_t)ptr, 16); /* RV64 has 16-byte pointers */
+                put_hex_buf(buf, &idx, (uint64_t) ptr, 16); /* RV64 has 16-byte pointers */
                 break;
             }
             default: {
