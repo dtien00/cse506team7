@@ -1,11 +1,11 @@
+#include "trap/syscall.h"
 #include "kernel/printk.h"
 #include "process/process.h"
-#include "trap/syscall.h"
 #include "trap/trap.h"
 
 void syscall_init(void) { printk("Syscall: Initialized\n"); }
 
-void syscall_handler(trapframe_t *frame) {
+void syscall_handler(trap_frame *frame) {
     // System call number is in a7
     const uint64_t syscall_num = frame->a7;
 

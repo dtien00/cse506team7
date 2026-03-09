@@ -22,7 +22,7 @@
 void syscall_init(void);
 
 // Handle system call (called from trap handler)
-void syscall_handler(trapframe_t *tf);
+void syscall_handler(trap_frame *tf);
 
 // Individual system call implementations
 void sys_exit(int status);

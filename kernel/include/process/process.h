@@ -36,7 +36,7 @@ typedef struct process {
   uint64_t context_s[12];       // Saved registers s0-s11
   
   // Trap frame (for user mode)
-  trapframe_t *trapframe;
+  trap_frame *trapframe;
   
   // Parent/child relationships
   struct process *parent;
