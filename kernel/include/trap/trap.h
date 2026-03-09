@@ -1,5 +1,5 @@
 #pragma once
-#include <kernel/types.h>
+#include "kernel/types.h"
 
 // struct to store trap-related data
 typedef struct trap_frame {
@@ -40,7 +40,7 @@ typedef struct trap_frame {
     uint64_t sstatus; // 256
     uint64_t scause; // 264
     uint64_t stval; // 272
-} trapframe_t;
+} trap_frame;
 
 // called to initialize trap handler
 void trap_init(void);
