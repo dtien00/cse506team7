@@ -42,6 +42,16 @@
 #define SCAUSE_LOAD_PAGE_FAULT 13
 #define SCAUSE_STORE_PAGE_FAULT 15
 
+// Page table entry (PTE) flags
+#define PTE_V (1UL << 0) // Valid
+#define PTE_R (1UL << 1) // Readable
+#define PTE_W (1UL << 2) // Writable
+#define PTE_X (1UL << 3) // Executable
+#define PTE_U (1UL << 4) // User accessible
+#define PTE_G (1UL << 5) // Global
+#define PTE_A (1UL << 6) // Accessed
+#define PTE_D (1UL << 7) // Dirty
+
 // Page table entry manipulation
 #define PTE_PPN_SHIFT 10
 #define PA_TO_PTE(pa) (((uint64_t) (pa) >> 12) << PTE_PPN_SHIFT)
