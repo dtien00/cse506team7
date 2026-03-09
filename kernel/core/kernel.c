@@ -20,13 +20,13 @@ void boot(uint64_t hart_id, uint64_t dtb) {
     printk("\n");
 
     // TODO: Debug each setup function
-    // // Calculate kernel size
-    // uintptr_t kernel_start = 0x80200000;
-    // uintptr_t kernel_end = (uintptr_t)_kernel_end;
-    // size_t kernel_size = kernel_end - kernel_start;
+    // Calculate kernel size
+    uintptr_t kernel_start = 0x80200000;
+    uintptr_t kernel_end = (uintptr_t)_kernel_end;
+    size_t kernel_size = kernel_end - kernel_start;
 
-    // printk("Kernel: 0x%lx - 0x%lx (%lu KB)\n",
-    //        kernel_start, kernel_end, kernel_size / 1024);
+    printk("Kernel: %p - %p (%d KB)\n",
+           kernel_start, kernel_end, kernel_size / 1024);
 
     // // Initialize physical memory manager
     // // Start after kernel, manage up to 128MB

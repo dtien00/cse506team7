@@ -34,7 +34,7 @@ void kmalloc_init(void) {
   heap_start->free = 1;
   heap_start->next = NULL;
   
-  printk("kmalloc: Initialized with %lu KB heap\n", 
+  printk("kmalloc: Initialized with %d KB heap\n",
          (initial_pages * PGSIZE) / 1024);
 }
 
@@ -85,7 +85,7 @@ void *kmalloc(size_t size) {
   void *new_mem = pmm_alloc_pages(pages_needed);
   
   if (new_mem == NULL) {
-    printk("kmalloc: Out of memory (requested %lu bytes)\n", size);
+    printk("kmalloc: Out of memory (requested %d bytes)\n", size);
     return NULL;
   }
   
@@ -199,9 +199,9 @@ void *krealloc(void *ptr, size_t size) {
 
 void kmalloc_stats(void) {
   printk("kmalloc statistics:\n");
-  printk("  Total allocated: %lu bytes\n", total_allocated);
-  printk("  Total freed: %lu bytes\n", total_freed);
-  printk("  Currently used: %lu bytes\n", total_allocated - total_freed);
+  printk("  Total allocated: %d bytes\n", total_allocated);
+  printk("  Total freed: %d bytes\n", total_freed);
+  printk("  Currently used: %d bytes\n", total_allocated - total_freed);
   
   // Walk the heap and count free/used blocks
   size_t free_blocks = 0;
@@ -221,6 +221,6 @@ void kmalloc_stats(void) {
     current = current->next;
   }
   
-  printk("  Free blocks: %lu (%lu bytes)\n", free_blocks, free_bytes);
-  printk("  Used blocks: %lu (%lu bytes)\n", used_blocks, used_bytes);
+  printk("  Free blocks: %d (%d bytes)\n", free_blocks, free_bytes);
+  printk("  Used blocks: %d (%d bytes)\n", used_blocks, used_bytes);
 }

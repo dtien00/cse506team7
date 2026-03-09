@@ -49,18 +49,18 @@ uint64_t *vmm_walk(pagetable_t pagetable, uintptr_t va, int alloc) {
 int vmm_map(pagetable_t pagetable, uintptr_t va, uintptr_t pa, uint64_t perm) {
   // Check alignment
   if (va % PGSIZE != 0 || pa % PGSIZE != 0) {
-    printk("VMM: Unaligned mapping va=0x%lx pa=0x%lx\n", va, pa);
+    printk("VMM: Unaligned mapping va=%p pa=%p\n", va, pa);
     return -1;
   }
   
   uint64_t *pte = vmm_walk(pagetable, va, 1);
   if (pte == NULL) {
-    printk("VMM: Failed to walk page table for va=0x%lx\n", va);
+    printk("VMM: Failed to walk page table for va=%p\n", va);
     return -1;
   }
   
   if (*pte & PTE_V) {
-    printk("VMM: Remapping va=0x%lx (was pa=0x%lx)\n", va, PTE_TO_PA(*pte));
+    printk("VMM: Remapping va=%p (was pa=%p)\n", va, PTE_TO_PA(*pte));
     return -1;
   }
   
@@ -70,13 +70,13 @@ int vmm_map(pagetable_t pagetable, uintptr_t va, uintptr_t pa, uint64_t perm) {
 
 void vmm_unmap(pagetable_t pagetable, uintptr_t va) {
   if (va % PGSIZE != 0) {
-    printk("VMM: Unaligned unmap va=0x%lx\n", va);
+    printk("VMM: Unaligned unmap va=%p\n", va);
     return;
   }
   
   uint64_t *pte = vmm_walk(pagetable, va, 0);
   if (pte == NULL || (*pte & PTE_V) == 0) {
-    printk("VMM: Unmapping non-mapped page va=0x%lx\n", va);
+    printk("VMM: Unmapping non-mapped page va=%p\n", va);
     return;
   }
   
@@ -184,7 +184,7 @@ void vmm_init(void) {
   // Map kernel text, data, bss
   for (uintptr_t pa = kernel_start; pa < kernel_end; pa += PGSIZE) {
     if (vmm_map(kernel_pagetable, pa, pa, PTE_R | PTE_W | PTE_X) != 0) {
-      printk("VMM: Failed to map kernel page at 0x%lx\n", pa);
+      printk("VMM: Failed to map kernel page at %p\n", pa);
       return;
     }
   }
@@ -192,7 +192,7 @@ void vmm_init(void) {
   // Map remaining physical memory (for PMM and dynamic allocation)
   for (uintptr_t pa = kernel_end; pa < PHYSTOP; pa += PGSIZE) {
     if (vmm_map(kernel_pagetable, pa, pa, PTE_R | PTE_W) != 0) {
-      printk("VMM: Failed to map memory page at 0x%lx\n", pa);
+      printk("VMM: Failed to map memory page at %p\n", pa);
       return;
     }
   }
@@ -201,7 +201,7 @@ void vmm_init(void) {
   // QEMU virt machine has devices at 0x10000000
   for (uintptr_t pa = 0x10000000; pa < 0x10010000; pa += PGSIZE) {
     if (vmm_map(kernel_pagetable, pa, pa, PTE_R | PTE_W) != 0) {
-      printk("VMM: Failed to map device page at 0x%lx\n", pa);
+      printk("VMM: Failed to map device page at %p\n", pa);
       return;
     }
   }

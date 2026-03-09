@@ -51,9 +51,9 @@ void pmm_init(uintptr_t mem_start, size_t mem_size) {
   
   free_pages = total_pages - bitmap_pages;
   
-  printk("PMM: Initialized %lu MB (%lu pages, %lu free)\n",
+  printk("PMM: Initialized %d MB (%d pages, %d free)\n",
          mem_size / (1024 * 1024), total_pages, free_pages);
-  printk("PMM: Bitmap at 0x%lx (%lu bytes, %lu pages)\n",
+  printk("PMM: Bitmap at %p (%d bytes, %d pages)\n",
          mem_start_addr, bitmap_size, bitmap_pages);
 }
 
@@ -83,13 +83,13 @@ void pmm_free_page(void *page) {
   
   // Validate address
   if (addr < mem_start_addr || addr >= mem_start_addr + total_pages * PGSIZE) {
-    printk("PMM: Invalid free address 0x%lx\n", addr);
+    printk("PMM: Invalid free address %p\n", addr);
     return;
   }
   
   // Check alignment
   if (addr % PGSIZE != 0) {
-    printk("PMM: Unaligned free address 0x%lx\n", addr);
+    printk("PMM: Unaligned free address %p\n", addr);
     return;
   }
   
@@ -97,7 +97,7 @@ void pmm_free_page(void *page) {
   
   // Check if already free
   if (!bitmap_test(page_idx)) {
-    printk("PMM: Double free at 0x%lx\n", addr);
+    printk("PMM: Double free at %p\n", addr);
     return;
   }
   
@@ -145,13 +145,13 @@ void pmm_free_pages(void *page, size_t n) {
   
   // Validate address
   if (addr < mem_start_addr || addr >= mem_start_addr + total_pages * PGSIZE) {
-    printk("PMM: Invalid free address 0x%lx\n", addr);
+    printk("PMM: Invalid free address %p\n", addr);
     return;
   }
   
   // Check alignment
   if (addr % PGSIZE != 0) {
-    printk("PMM: Unaligned free address 0x%lx\n", addr);
+    printk("PMM: Unaligned free address %p\n", addr);
     return;
   }
   
@@ -165,7 +165,7 @@ void pmm_free_pages(void *page, size_t n) {
     }
     
     if (!bitmap_test(page_idx + i)) {
-      printk("PMM: Double free in range at 0x%lx\n", addr + i * PGSIZE);
+      printk("PMM: Double free in range at %p\n", addr + i * PGSIZE);
       continue;
     }
     
