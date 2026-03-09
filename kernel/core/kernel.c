@@ -7,12 +7,14 @@
 #include "trap/syscall.h"
 #include "arch/riscv.h"
 
-// make KLANG=c all & make qemu
 
 // External symbols from linker script
 extern char _kernel_end[];
 
-void boot(void) {
+// sbi passed in the hart_id and dtb address in a0 and a1 registers
+// which also double as function arguments - call boot will pass those values as arguments to the boot function
+// as long as boot is the very first method that runs
+void boot(uint64_t hart_id, uint64_t dtb) {
   printk("\n");
   printk("========================================\n");
   printk("       SBUnix Operating System\n");
@@ -20,55 +22,58 @@ void boot(void) {
   printk("========================================\n");
   printk("\n");
   
-  // Calculate kernel size
-  uintptr_t kernel_start = 0x80200000;
-  uintptr_t kernel_end = (uintptr_t)_kernel_end;
-  size_t kernel_size = kernel_end - kernel_start;
+  // TODO: Debug each setup function
+  // // Calculate kernel size
+  // uintptr_t kernel_start = 0x80200000;
+  // uintptr_t kernel_end = (uintptr_t)_kernel_end;
+  // size_t kernel_size = kernel_end - kernel_start;
   
-  printk("Kernel: 0x%lx - 0x%lx (%lu KB)\n", 
-         kernel_start, kernel_end, kernel_size / 1024);
+  // printk("Kernel: 0x%lx - 0x%lx (%lu KB)\n", 
+  //        kernel_start, kernel_end, kernel_size / 1024);
   
-  // Initialize physical memory manager
-  // Start after kernel, manage up to 128MB
-  uintptr_t mem_start = PGROUNDUP(kernel_end);
-  size_t mem_size = 0x88000000 - mem_start;  // Up to 128MB total
-  pmm_init(mem_start, mem_size);
+  // // Initialize physical memory manager
+  // // Start after kernel, manage up to 128MB
+  // uintptr_t mem_start = PGROUNDUP(kernel_end);
+  // size_t mem_size = 0x88000000 - mem_start;  // Up to 128MB total
+
   
-  // Initialize virtual memory manager
-  vmm_init();
+  // pmm_init(mem_start, mem_size);
   
-  // Initialize kernel heap
-  kmalloc_init();
+  // // Initialize virtual memory manager
+  // vmm_init();
   
-  // Initialize trap handling
+  // // Initialize kernel heap
+  // kmalloc_init();
+  
+  // // Initialize trap handling
   trap_init();
   
-  // Initialize process management
-  proc_init();
+  // // Initialize process management
+  // proc_init();
   
-  // Initialize system calls
+  // // Initialize system calls
   syscall_init();
   
-  printk("\n");
-  printk("========================================\n");
-  printk("  Kernel initialization complete!\n");
-  printk("========================================\n");
-  printk("\n");
+  // printk("\n");
+  // printk("========================================\n");
+  // printk("  Kernel initialization complete!\n");
+  // printk("========================================\n");
+  // printk("\n");
   
-  // Test memory allocation
-  printk("Testing memory allocation...\n");
-  void *test1 = kmalloc(100);
-  void *test2 = kmalloc(200);
-  void *test3 = kmalloc(300);
-  printk("  Allocated: %p, %p, %p\n", test1, test2, test3);
-  kfree(test2);
-  printk("  Freed: %p\n", test2);
-  void *test4 = kmalloc(150);
-  printk("  Allocated: %p\n", test4);
-  kmalloc_stats();
+  // // Test memory allocation
+  // printk("Testing memory allocation...\n");
+  // void *test1 = kmalloc(100);
+  // void *test2 = kmalloc(200);
+  // void *test3 = kmalloc(300);
+  // printk("  Allocated: %p, %p, %p\n", test1, test2, test3);
+  // kfree(test2);
+  // printk("  Freed: %p\n", test2);
+  // void *test4 = kmalloc(150);
+  // printk("  Allocated: %p\n", test4);
+  // kmalloc_stats();
   
-  printk("\n");
-  printk("Kernel ready. Waiting for interrupts...\n");
+  // printk("\n");
+  // printk("Kernel ready. Waiting for interrupts...\n");
   
   // Enable interrupts
   intr_on();

@@ -8,11 +8,16 @@ The kernel directory has been reorganized from a flat structure into a logical, 
 
 ```
 kernel/
+kernel/
 ├── arch/
 │   └── riscv/
-│       ├── start.S              # Architecture-specific startup code
-│       └── trap_entry.S         # Architecture-specific trap entry
+│       ├── start.S
+│       ├── trap_entry.S
+│       └── sbi.c
 │
+├── drivers/ 
+│   └── console.c
+|
 ├── core/
 │   ├── kernel.c                 # Main kernel initialization
 │   └── printk.c                 # Core kernel printing
@@ -38,9 +43,11 @@ kernel/
 ├── include/
 │   ├── arch/
 │   │   └── riscv.h              # RISC-V specific definitions
+│   │   └── sbi.h
 │   ├── kernel/
 │   │   ├── types.h              # Basic type definitions
 │   │   └── printk.h             # Kernel printing interface
+│   |   ├── console.h
 │   ├── mm/
 │   │   ├── pmm.h
 │   │   ├── vmm.h

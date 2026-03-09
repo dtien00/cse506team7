@@ -13,8 +13,7 @@ typedef uint64_t  uintptr_t;   // RISC-V 64-bit
 typedef int64_t   intptr_t;
 typedef uint64_t  size_t;
 typedef int64_t   ssize_t;
+typedef int32_t   pid_t;
 
 #define NULL ((void *)0)
-#define true 1
-#define false 0
-typedef int bool;
+// typedef enum { false, true } bool; // apparently is now standard
