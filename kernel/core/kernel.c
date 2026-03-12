@@ -2,6 +2,9 @@
 #include "kernel/printk.h"
 #include "trap/trap.h"
 #include "process/process.h"
+#include "mm/pmm.h"
+#include "mm/vmm.h"
+#include "mm/kmalloc.h"
 
 // External symbols from linker script
 extern char _kernel_end[];
@@ -24,6 +27,14 @@ void boot(uint64_t hart_id, uint64_t dtb) {
     // TODO: Initialize physical memory manager
     // TODO: Initialize virtual memory manager
     // TODO: Initialize kernel heap
+    // Initialize physical memory manager
+    pmm_init(kernel_end, PHYSTOP - kernel_end);
+
+    // Initialize virtual memory manager
+    vmm_init();
+
+    // Initialize kernel heap
+    kmalloc_init();
 
     // Initialize scheduler
     proc_init();
