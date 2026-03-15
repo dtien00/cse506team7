@@ -2,8 +2,9 @@
 #include "riscv.h"
 #include "sbi.h"
 #include "printk.h"
+#include "process.h"
 
-#define TIMER_INTERVAL 100000000ULL // 10 MHz clock × 10 second
+#define TIMER_INTERVAL 1000000ULL // ~0.1 second at 10 MHz clock
 
 // trap entry point code written in trap.S
 extern void trap_entry(void);
@@ -128,8 +129,8 @@ static uint64_t timer_ticks = 0;
 
 void timer_handler(void) {
     timer_ticks++;
-    printk("Timer: %d ticks\n", timer_ticks * TIMER_INTERVAL);
     sbi_set_timer(read_csr(time) + TIMER_INTERVAL);
+    proc_yield();
 }
 
 // Set/clear the SIE (supervisor interrupt enable) bit in sstatus

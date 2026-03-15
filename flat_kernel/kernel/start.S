@@ -3,4 +3,6 @@
 _start:
   la sp, _stack_top
   call boot
-  j .
+1:
+  wfi
+  j 1b

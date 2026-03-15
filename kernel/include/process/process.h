@@ -3,71 +3,97 @@
 #include "kernel/types.h"
 #include "mm/vmm.h"
 #include "trap/trap.h"
-
-// Process states
-typedef enum {
-  PROC_UNUSED = 0,
-  PROC_EMBRYO,     // Being created
-  PROC_RUNNABLE,   // Ready to run
-  PROC_RUNNING,    // Currently running
-  PROC_SLEEPING,   // Waiting for event
-  PROC_ZOMBIE      // Exited but not yet cleaned up
-} proc_state_t;
-
-// Process ID type
-typedef int pid_t;
+#include "lib/string.h"
 
 #define MAX_PROCS 64
-#define PROC_NAME_LEN 16
+#define MAX_NAME 16
 
-// Process control block
-typedef struct process {
-  pid_t pid;                    // Process ID
-  proc_state_t state;           // Process state
-  char name[PROC_NAME_LEN];     // Process name
-  
-  // Memory management
-  pagetable_t pagetable;        // Page table
-  uint64_t sz;                  // Size of process memory (bytes)
-  
-  // Saved context for scheduling
-  uint64_t context_sp;          // Saved stack pointer
-  uint64_t context_ra;          // Saved return address
-  uint64_t context_s[12];       // Saved registers s0-s11
-  
-  // Trap frame (for user mode)
-  trap_frame *trapframe;
-  
-  // Parent/child relationships
-  struct process *parent;
-  
-  // Exit status
-  int exit_status;
-  
-  // File descriptors (TODO)
-  // void *ofile[MAX_FDS];
-  
-  // Working directory (TODO)
-  // struct inode *cwd;
-} process_t;
+extern struct proc *current;
 
-// Initialize process subsystem
+// Saved context for kernel-to-kernel context switch (callee-saved regs only).
+// Field order must match register save/load order in swtch.S.
+struct context {
+    uint64_t ra;
+    uint64_t sp;
+    uint64_t s0;
+    uint64_t s1;
+    uint64_t s2;
+    uint64_t s3;
+    uint64_t s4;
+    uint64_t s5;
+    uint64_t s6;
+    uint64_t s7;
+    uint64_t s8;
+    uint64_t s9;
+    uint64_t s10;
+    uint64_t s11;
+};
+
+typedef enum {
+    PROC_UNUSED = 0,
+    PROC_CREATED = 1,
+    PROC_READY = 2,
+    PROC_RUNNING = 3,
+    PROC_BLOCKED = 4,
+    PROC_ZOMBIE = 5,
+} proc_state_t;
+
+struct proc {
+    pid_t pid;
+    char name[MAX_NAME];
+
+    // Memory management
+    pagetable_t pagetable;
+    uint64_t sz;
+
+    // User-mode state (saved/restored by trap_entry/sret in trap.S)
+    uint64_t pc;
+    uint64_t sp;
+    uint64_t regs[32];
+    uint64_t satp;
+
+    proc_state_t state;
+    int exit_code;
+
+    uint64_t time_slice;
+    uint64_t total_time;
+    struct proc *next;
+
+    // Kernel scheduler context (callee-saved regs, used by swtch)
+    struct context context;
+
+    // Trap frame (for user mode)
+    trap_frame *trapframe;
+
+    // Process hierarchy
+    struct proc *parent;
+    struct proc *first_child;
+    struct proc *sibling;
+};
+
+// Core process management
+struct proc* proc_alloc(void);
+void proc_free(struct proc *p);
 void proc_init(void);
+struct proc* proc_find(pid_t pid);
 
-// Allocate a new process
-process_t *proc_alloc(void);
+// Lifecycle
+struct proc* proc_create(const char *name);
+void proc_exit(int code);
+void proc_kill(struct proc *p);
+void proc_wait(struct proc *p);
 
-// Free a process
-void proc_free(process_t *p);
+// Scheduling
+struct proc* proc_current(void);
+void proc_yield(void);
+void schedule(void);
+struct proc* proc_next_ready(void);
 
-// Get current process
-process_t *proc_current(void);
+// State transitions
+void proc_ready(struct proc *p);
+void proc_block(struct proc *p);
+void proc_unblock(struct proc *p);
+void context_switch(struct proc *next);
 
-// Set current process
-void proc_set_current(process_t *p);
-
-// Find process by PID
-process_t *proc_find(pid_t pid);
-
-// Print process table
+// Debug
 void proc_dump(void);
