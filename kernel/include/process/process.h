@@ -10,7 +10,6 @@
 #define KSTACK_SIZE 4096
 
 extern struct proc *current;
-extern struct proc proctab[];
 extern uint8_t kstacks[][KSTACK_SIZE];
 
 // Saved context for kernel-to-kernel context switch (callee-saved regs only).
@@ -73,6 +72,8 @@ struct proc {
     struct proc *first_child;
     struct proc *sibling;
 };
+
+extern struct proc proctab[];
 
 // Core process management
 struct proc* proc_alloc(void);
