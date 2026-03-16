@@ -7,8 +7,11 @@
 
 #define MAX_PROCS 64
 #define MAX_NAME 16
+#define KSTACK_SIZE 4096
 
 extern struct proc *current;
+extern struct proc proctab[];
+extern uint8_t kstacks[][KSTACK_SIZE];
 
 // Saved context for kernel-to-kernel context switch (callee-saved regs only).
 // Field order must match register save/load order in swtch.S.
