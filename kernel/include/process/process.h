@@ -7,8 +7,10 @@
 
 #define MAX_PROCS 64
 #define MAX_NAME 16
+#define KSTACK_SIZE 4096
 
 extern struct proc *current;
+extern uint8_t kstacks[][KSTACK_SIZE];
 
 // Saved context for kernel-to-kernel context switch (callee-saved regs only).
 // Field order must match register save/load order in swtch.S.
@@ -70,6 +72,8 @@ struct proc {
     struct proc *first_child;
     struct proc *sibling;
 };
+
+extern struct proc proctab[];
 
 // Core process management
 struct proc* proc_alloc(void);

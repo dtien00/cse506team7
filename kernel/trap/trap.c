@@ -129,6 +129,7 @@ static uint64_t timer_ticks = 0;
 
 void timer_handler(void) {
     timer_ticks++;
+    printk("Timer: %d ticks\n", timer_ticks * TIMER_INTERVAL);
     sbi_set_timer(read_csr(time) + TIMER_INTERVAL);
     proc_yield();
 }
