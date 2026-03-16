@@ -4,6 +4,7 @@ kernel/
 ├── arch/
 │   └── riscv/
 │       ├── start.S
+│       ├── swtch.S
 │       ├── trap_entry.S
 │       └── sbi.c
 |
@@ -17,7 +18,8 @@ kernel/
 ├── fs/
 │   ├── file.c
 │   ├── tarfs.c 
-│   └── vfs.c   
+│   └── vfs.c  
+│ 
 ├── include/
 │   ├── arch/
 │   │   ├── riscv.h              # RISC-V specific definitions
@@ -31,13 +33,16 @@ kernel/
 │   │   ├── printk.h             # Kernel printing interface
 │   |   └── console.h
 │   ├── lib/
-│   │   └── stdarg.h
+│   │   └── string.h
 │   ├── mm/
 │   │   ├── pmm.h
 │   │   ├── vmm.h
 │   │   └── kmalloc.h
 │   ├── process/
-│   │   └── process.h
+│   │   ├── process.h
+│   │   └── swtch.h
+│   ├── tests/
+│   │   └── test.h
 │   └── trap/
 │       ├── trap.h
 │       └── syscall.h
@@ -55,6 +60,9 @@ kernel/
 │
 ├── process/
 │   └── process.c                # Process management
+│
+├── tests/
+│   └── mm_test.c 
 │
 ├── trap/
 │   ├── trap.c                   # Trap handling

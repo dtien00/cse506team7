@@ -19,3 +19,9 @@ static inline size_t strlen(const char *s) {
     while (*s++) len++;
     return len;
 }
+
+// Compare two null-terminated strings. Returns 0 if equal.
+static int strcmp(const char *a, const char *b) {
+    while (*a && *b && *a == *b) { a++; b++; }
+    return (unsigned char)*a - (unsigned char)*b;
+}
