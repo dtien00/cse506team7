@@ -119,43 +119,51 @@ uintptr_t vmm_translate(pagetable_t pagetable, uintptr_t va) {
 }
 
 pagetable_t vmm_create_pagetable(void) {
-  pagetable_t pt = (pagetable_t)pmm_alloc_page();
-  if (pt == NULL) {
-    return NULL;
-  }
-  
-  // Zero out the page table
-  for (int i = 0; i < 512; i++) {
-    pt[i] = 0;
-  }
-  
-  return pt;
+    pagetable_t pt = (pagetable_t)pmm_alloc_page();
+    if (pt == NULL) return NULL;
+
+    for (int i = 0; i < 512; i++) pt[i] = 0;
+
+    // Copy ALL valid kernel L2 entries, not just the upper half.
+    // The kernel lives at 0x80200000 which is L2 index 2 — well below 256.
+    // Any new page table must be able to reach kernel code and the trap
+    // handler immediately after vmm_switch(), so we inherit every mapping
+    // the kernel page table has established.
+    pagetable_t kpt = vmm_kernel_pagetable();
+    if (kpt) {
+        for (int i = 0; i < 512; i++) {
+            if (kpt[i] & PTE_V)
+                pt[i] = kpt[i];
+        }
+    }
+
+    return pt;
 }
 
-// Recursively free page table and its children
 static void vmm_free_pagetable_recursive(pagetable_t pagetable, int level) {
-  if (level > 0) {
-    // Free child page tables
-    for (int i = 0; i < 512; i++) {
-      uint64_t pte = pagetable[i];
-      if ((pte & PTE_V) && (pte & (PTE_R | PTE_W | PTE_X)) == 0) {
-        // This is a pointer to another page table
-        pagetable_t child = (pagetable_t)PTE_TO_PA(pte);
-        vmm_free_pagetable_recursive(child, level - 1);
-      }
+    if (level > 0) {
+        pagetable_t kpt = vmm_kernel_pagetable();
+
+        for (int i = 0; i < 512; i++) {
+            uint64_t pte = pagetable[i];
+            if (!((pte & PTE_V) && (pte & (PTE_R | PTE_W | PTE_X)) == 0))
+                continue;
+
+            // Skip entries shared with the kernel page table — they are
+            // owned by the kernel and must not be freed here.
+            if (kpt && pagetable[i] == kpt[i])
+                continue;
+
+            pagetable_t child = (pagetable_t)PTE_TO_PA(pte);
+            vmm_free_pagetable_recursive(child, level - 1);
+        }
     }
-  }
-  
-  // Free this page table
-  pmm_free_page(pagetable);
+    pmm_free_page(pagetable);
 }
 
 void vmm_free_pagetable(pagetable_t pagetable) {
-  if (pagetable == NULL) {
-    return;
-  }
-  
-  vmm_free_pagetable_recursive(pagetable, 2);
+    if (pagetable == NULL) return;
+    vmm_free_pagetable_recursive(pagetable, 2);
 }
 
 pagetable_t vmm_kernel_pagetable(void) {
@@ -212,3 +220,4 @@ void vmm_init(void) {
   vmm_switch(kernel_pagetable);
   printk("VMM: Paging enabled\n");
 }
+

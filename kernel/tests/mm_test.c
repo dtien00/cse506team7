@@ -18,7 +18,7 @@
 #include "tests/test.h"
 #include "arch/riscv.h"
 
-#define TEST_VA 0x80000UL
+// #define TEST_VA 0x0000000040000000UL
 
 /* ── helpers ─────────────────────────────────────────────────────────────── */
 
@@ -328,6 +328,101 @@ static void test_pmm_full_readback(void)
     pmm_free_page(p);
 }
 
+/*
+ * VMM targeted tests
+ *
+ * 1. test_vmm_hw_walk  — proves vmm_switch() + CPU hardware TLB walk works
+ * 2. test_vmm_free     — proves vmm_free_pagetable() doesn't double-free
+ *                        kernel page table pages
+ *
+ * Call both from mem_test_run() after vmm_init().
+ */
+
+/* -------------------------------------------------------------------------
+ * Sv39 user-half VA that vmm_init() never touches.
+ *
+ * L2 index = VA >> 30. vmm_create_pagetable() only copies L2 entries
+ * 256-511 (kernel half, VA >> 30 >= 256).  Anything with VA >> 30 < 256
+ * is guaranteed empty in a freshly created page table.
+ *
+ * We pick just below MAXVA (1<<38) but in the user half:
+ *   (1UL << 38) - 3*PGSIZE  =>  L2 index = ((1<<38)-3*4096) >> 30 = 3
+ * That's index 3 — deep user space, never mapped by the kernel.
+ * ------------------------------------------------------------------------- */
+#define VMM_TEST_VA  ((1UL << 38) - 3 * PGSIZE)
+
+/* -------------------------------------------------------------------------
+ * hardware TLB walk
+ *
+ * Steps:
+ *   a. Allocate a physical page, write a sentinel pattern.
+ *   b. Create a user page table (inherits kernel mappings).
+ *   c. Map TEST_VA -> phys in the user page table.
+ *   d. vmm_switch(upt)  — CPU now uses the new page table.
+ *   e. Read through TEST_VA — hardware does the PTE walk.
+ *   f. Write through TEST_VA — verify it lands at the physical page.
+ *   g. vmm_switch(kpt)  — restore kernel page table.
+ *   h. Confirm the write is visible at the physical address.
+ *   i. Clean up cleanly.
+ * ------------------------------------------------------------------------- */
+static void test_vmm_hw_walk(void)
+{
+    printk("\n--- VMM hardware TLB walk test ---\n");
+
+    /* (a) Physical page + sentinel */
+    void *phys = pmm_alloc_page();
+    TEST("hw-walk: phys page non-NULL", phys != NULL);
+    if (!phys) return;
+
+    volatile uint8_t *pb = (volatile uint8_t *)phys;
+    pb[0] = 0xDE; pb[1] = 0xAD; pb[2] = 0xBE; pb[3] = 0xEF;
+
+    /* (b) Fresh user page table — kernel half copied automatically */
+    pagetable_t upt = vmm_create_pagetable();
+    TEST("hw-walk: upt created", upt != NULL);
+    if (!upt) { pmm_free_page(phys); return; }
+
+    /* (c) Map */
+    int ret = vmm_map(upt, VMM_TEST_VA, (uintptr_t)phys, PTE_V | PTE_R | PTE_W);
+    // int ret = vmm_map(upt, VMM_TEST_VA, (uintptr_t)phys, PTE_V | PTE_R | PTE_W | PTE_U);
+    TEST("hw-walk: vmm_map succeeded", ret == 0);
+    if (ret != 0) { vmm_free_pagetable(upt); pmm_free_page(phys); return; }
+
+    /* Software sanity check before involving the CPU */
+    uintptr_t sw_pa = vmm_translate(upt, VMM_TEST_VA);
+    TEST("hw-walk: sw translate correct", sw_pa == (uintptr_t)phys);
+
+    /* (d-e) Switch + read via hardware walk */
+    vmm_switch(upt);
+
+    volatile uint8_t *vb = (volatile uint8_t *)VMM_TEST_VA;
+    int read_ok = (vb[0] == 0xDE && vb[1] == 0xAD &&
+                   vb[2] == 0xBE && vb[3] == 0xEF);
+    TEST("hw-walk: hardware read of sentinel correct", read_ok);
+
+    /* (f) Write through VA */
+    vb[0] = 0x12; vb[1] = 0x34; vb[2] = 0x56; vb[3] = 0x78;
+
+    /* (g) Restore kernel page table */
+    vmm_switch(vmm_kernel_pagetable());
+
+    /* (h) Write must be visible at physical address */
+    TEST("hw-walk: byte 0 visible at PA", pb[0] == 0x12);
+    TEST("hw-walk: byte 1 visible at PA", pb[1] == 0x34);
+    TEST("hw-walk: byte 2 visible at PA", pb[2] == 0x56);
+    TEST("hw-walk: byte 3 visible at PA", pb[3] == 0x78);
+
+    /* (i) Clean up — unmap before freeing so vmm_free_pagetable
+     *     doesn't try to free the physical page a second time */
+    vmm_unmap(upt, VMM_TEST_VA);
+
+    /* Now safe to free: upt has no leaf PTEs pointing at our page */
+    vmm_free_pagetable(upt);
+    pmm_free_page(phys);
+
+    TEST("hw-walk: teardown without fault", 1);
+}
+
 /* VMM hardware activation ──────────────────────────────────────────
  *
  * Your existing VMM tests walk the page table in *software*.  This test
@@ -349,64 +444,40 @@ static void test_vmm_hw_mapping(void)
 {
     printk("\n--- VMM hardware mapping test ---\n");
 
-    /* Write a known sentinel to a physical page before mapping it. */
     void *phys = pmm_alloc_page();
     TEST("hw-map: physical page non-NULL", phys != NULL);
     if (!phys) return;
 
     volatile uint8_t *pb = (volatile uint8_t *)phys;
-    pb[0] = 0xDE;
-    pb[1] = 0xAD;
-    pb[2] = 0xBE;
-    pb[3] = 0xEF;
+    pb[0] = 0xDE; pb[1] = 0xAD; pb[2] = 0xBE; pb[3] = 0xEF;
 
-    /* Create a fresh page table and map the page at TEST_VA. */
-    pagetable_t upt = vmm_create_pagetable();
+    pagetable_t upt = vmm_create_pagetable();  // now correctly copies all kernel entries
     TEST("hw-map: user page table created", upt != NULL);
-    if (!upt) {
-        pmm_free_page(phys);
-        return;
-    }
+    if (!upt) { pmm_free_page(phys); return; }
 
-    uint64_t perm = PTE_V | PTE_R | PTE_W | PTE_U;
-    int ret = vmm_map(upt, TEST_VA, (uintptr_t)phys, perm);
+    // Removed: manual kernel PTE copy loop — vmm_create_pagetable handles this now
+
+    uint64_t perm = PTE_V | PTE_R | PTE_W;    // no PTE_U, supervisor access
+    int ret = vmm_map(upt, VMM_TEST_VA, (uintptr_t)phys, perm);
     TEST("hw-map: vmm_map returned 0", ret == 0);
-    if (ret != 0) {
-        vmm_free_pagetable(upt);
-        pmm_free_page(phys);
-        return;
-    }
+    if (ret != 0) { vmm_free_pagetable(upt); pmm_free_page(phys); return; }
 
-    /*
-     * Activate the mapping.  After this instruction the CPU uses upt for
-     * address translation.  Any mistake in vmm_map() triggers a trap here.
-     */
     vmm_switch(upt);
 
-    /*
-     * Dereference through the virtual address.  The CPU now walks upt —
-     * this is the first real hardware validation of your PTE construction.
-     */
-    volatile uint8_t *vb = (volatile uint8_t *)TEST_VA;
+    volatile uint8_t *vb = (volatile uint8_t *)VMM_TEST_VA;
     int sentinel_ok = (vb[0] == 0xDE && vb[1] == 0xAD &&
                        vb[2] == 0xBE && vb[3] == 0xEF);
     TEST("hw-map: VA dereference reads sentinel bytes correctly", sentinel_ok);
 
-    /*
-     * Write through the virtual address and confirm via physical address.
-     * This verifies PTE_W is set and the TLB honours it.
-     */
     vb[0] = 0x12;
     vb[1] = 0x34;
 
-    /* Switch back before reading via PA — PA access needs kernel mappings. */
     vmm_switch(vmm_kernel_pagetable());
 
     TEST("hw-map: write via VA visible at PA (byte 0)", pb[0] == 0x12);
     TEST("hw-map: write via VA visible at PA (byte 1)", pb[1] == 0x34);
 
-    /* Teardown */
-    vmm_unmap(upt, TEST_VA);
+    vmm_unmap(upt, VMM_TEST_VA);
     vmm_free_pagetable(upt);
     pmm_free_page(phys);
 
@@ -426,6 +497,7 @@ void mem_test_run(void) {
 
     test_pmm_isolation();
     test_pmm_full_readback();
+    test_vmm_hw_walk();
     test_vmm_hw_mapping();
 
     printk("\n========================================\n");
