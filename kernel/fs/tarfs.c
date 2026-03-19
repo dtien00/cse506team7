@@ -28,9 +28,29 @@ extern char _tarfs_end[];
 static tarfs_entry_t entries[TARFS_MAX_ENTRIES];
 static int           entry_count = 0;
 
+// Filesystem type for tarfs
+static fs_type_t tarfs_type = {
+    .name = "tarfs",
+    .ops = {
+        .mount = tarfs_mount,
+        .unmount = tarfs_unmount,
+        .lookup = tarfs_lookup,
+        .read = tarfs_read,
+        .write = NULL,     // Read-only
+        .create = NULL,    // Read-only
+        .unlink = NULL,    // Read-only
+        .mkdir = NULL,     // Read-only
+    },
+    .next = NULL
+};
+
 // -----------------------------------------------------------------------------
 // Helpers
 // -----------------------------------------------------------------------------
+
+fs_type_t *tarfs_get_type(void) {
+    return &tarfs_type;
+}
 
 // Parse an octal string (null or space terminated) into a size_t.
 // TAR stores file sizes as ASCII octal, e.g. "00000000trucks\0"
@@ -52,6 +72,7 @@ static size_t round_up_block(size_t size) {
 // tarfs_init
 // Walks the TAR blob and indexes every regular file entry.
 // Must be called after kmalloc is ready.
+// Also registers tarfs with the VFS.
 // -----------------------------------------------------------------------------
 void tarfs_init(void) {
     entry_count = 0;
@@ -91,7 +112,7 @@ void tarfs_init(void) {
             e->data   = ptr + TAR_BLOCK_SIZE;   // data immediately follows header
             e->size   = file_size;
 
-            printk("tarfs: [%d] %s (%zu bytes)\n", entry_count - 1, hdr->name, file_size);
+            printk("tarfs: [%d] %s (%d bytes)\n", entry_count - 1, hdr->name, file_size);
         }
 
         // Advance past this header block + data blocks (rounded up to 512)
@@ -99,13 +120,17 @@ void tarfs_init(void) {
     }
 
     printk("tarfs: indexed %d files\n", entry_count);
+    
+    // Register with VFS
+    vfs_register_fs(&tarfs_type);
+    printk("tarfs: registered with VFS\n");
 }
 
 // -----------------------------------------------------------------------------
-// tarfs_lookup
+// Internal helper: lookup entry by path
 // Linear scan for a file by name. Returns NULL if not found.
 // -----------------------------------------------------------------------------
-tarfs_entry_t *tarfs_lookup(const char *path) {
+static tarfs_entry_t *lookup_entry(const char *path) {
     // TAR paths often start with "./" — strip it for convenience
     if (path[0] == '.' && path[1] == '/') path += 2;
 
@@ -121,11 +146,11 @@ tarfs_entry_t *tarfs_lookup(const char *path) {
 }
 
 // -----------------------------------------------------------------------------
-// tarfs_read
+// Internal helper: read from entry
 // Copy up to `len` bytes from `entry` starting at `offset` into `buf`.
 // Returns number of bytes actually copied, or -1 on bad args.
 // -----------------------------------------------------------------------------
-int tarfs_read(tarfs_entry_t *entry, void *buf, size_t offset, size_t len) {
+static int read_entry(tarfs_entry_t *entry, void *buf, size_t offset, size_t len) {
     if (!entry || !buf) return -1;
     if (offset >= entry->size) return 0;         // past EOF
 
@@ -137,15 +162,50 @@ int tarfs_read(tarfs_entry_t *entry, void *buf, size_t offset, size_t len) {
 }
 
 // -----------------------------------------------------------------------------
-// tarfs_stat
-// Return a copy of the header for a given path. Caller checks name[0] == '\0'
-// for the not-found case (or we could return a pointer — see tarfs.h note).
+// VFS operations for tarfs
 // -----------------------------------------------------------------------------
-tar_header_t tarfs_stat(const char *path) {
-    tarfs_entry_t *e = tarfs_lookup(path);
-    if (e) return *e->header;
 
-    // Return an empty header to signal not found
-    tar_header_t empty = {0};
-    return empty;
+int tarfs_mount(mount_t *mnt, const char *source) {
+    if (!mnt) return -1;
+    
+    // tarfs is already initialized globally, just mark that it's mounted
+    mnt->fs_data = NULL;  // No per-mount data needed
+    
+    printk("tarfs: mounted at '%s'\n", mnt->mountpoint);
+    return 0;
+}
+
+int tarfs_unmount(mount_t *mnt) {
+    if (!mnt) return -1;
+    
+    printk("tarfs: unmounted from '%s'\n", mnt->mountpoint);
+    return 0;
+}
+
+vnode_t *tarfs_lookup(mount_t *mnt, const char *path) {
+    if (!mnt || !path) return NULL;
+
+    tarfs_entry_t *entry = lookup_entry(path);
+    if (!entry) return NULL;
+
+    // Allocate a vnode
+    vnode_t *vnode = kzalloc(sizeof(vnode_t));
+    if (!vnode) return NULL;
+
+    vnode->ino = (uint64_t)entry;  // Use entry pointer as inode number
+    vnode->mode = 0644;  // Default read permissions
+    vnode->size = entry->size;
+    vnode->ref_count = 0;
+    vnode->mount = mnt;
+    vnode->fs_data = entry;
+    vnode->fs_type = mnt->fs_type;
+
+    return vnode;
+}
+
+int tarfs_read(vnode_t *vnode, void *buf, size_t offset, size_t len) {
+    if (!vnode || !buf) return -1;
+
+    tarfs_entry_t *entry = (tarfs_entry_t *)vnode->fs_data;
+    return read_entry(entry, buf, offset, len);
 }

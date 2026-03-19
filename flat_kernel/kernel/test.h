@@ -16,3 +16,5 @@ extern int failed;
     } while (0)
 
 void mem_test_run(void);
+void fs_test_run(void);
+void tarfs_test(void);

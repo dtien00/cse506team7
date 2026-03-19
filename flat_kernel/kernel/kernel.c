@@ -7,6 +7,9 @@
 #include "syscall.h"
 #include "riscv.h"
 #include "test.h"
+#include "vfs.h"
+#include "tarfs.h"
+#include "tmpfs.h"
 
 
 // External symbols from linker script
@@ -15,7 +18,7 @@ extern char _kernel_end[];
 void run_all_tests(void) {
     mem_test_run();
     // trap_test_run();
-    // fs_test_run();
+    fs_test_run();
 
     printk("%d passed, %d failed\n", passed, failed);
 }
@@ -43,20 +46,31 @@ void boot(uint64_t hart_id, uint64_t dtb) {
 
     pmm_init(mem_start, mem_size);
 
+    // Initialize trap handling
+    trap_init();
+
     // Initialize virtual memory manager
     vmm_init();
 
     // Initialize kernel heap
     kmalloc_init();
 
-    // Initialize trap handling
-    trap_init();
-
     // Initialize process management
     proc_init();
 
     // // Initialize system calls
     syscall_init();
+
+    // Initialize VFS and filesystems
+    vfs_init();
+    tarfs_init();   // Parses TAR and registers with VFS
+    tmpfs_init();   // Registers tmpfs with VFS
+
+    // Mount root filesystem (tarfs)
+    vfs_mount(NULL, "/", "tarfs");
+
+    // Mount tmpfs at /tmp
+    vfs_mount(NULL, "/tmp", "tmpfs");
 
     printk("\n");
     printk("========================================\n");
@@ -65,7 +79,10 @@ void boot(uint64_t hart_id, uint64_t dtb) {
     printk("\n");
 
     #ifdef RUN_TESTS
-        run_all_tests();  // runs, prints results, then shuts down
+        run_all_tests();
+    #else
+        while (1)
+            asm volatile("wfi");
     #endif
 
     // // Test memory allocation
@@ -95,8 +112,5 @@ void boot(uint64_t hart_id, uint64_t dtb) {
     // schedule();
 
     // printk("End of SBUNIX DEBUGGING\n");
-
-    while (1)
-        asm volatile("wfi");
 }
 

@@ -6,13 +6,267 @@
 #include "lib/string.h"
 
 // -----------------------------------------------------------------------------
-// vfs_open
-// Looks up path in tarfs, allocates a file_t, and returns it.
-// Returns NULL if the file doesn't exist or kmalloc fails.
+// Internal state
 // -----------------------------------------------------------------------------
+
+static fs_type_t *fs_types = NULL;  // Linked list of registered filesystems
+static mount_t *mounts = NULL;      // Linked list of mount points
+
+// -----------------------------------------------------------------------------
+// VFS Initialization
+// -----------------------------------------------------------------------------
+
+void vfs_init(void) {
+    fs_types = NULL;
+    mounts = NULL;
+    printk("vfs: initialized\n");
+}
+
+// -----------------------------------------------------------------------------
+// Filesystem Registration
+// -----------------------------------------------------------------------------
+
+int vfs_register_fs(fs_type_t *fs_type) {
+    if (!fs_type || !fs_type->name) {
+        printk("vfs: invalid filesystem type\n");
+        return -1;
+    }
+
+    // Check if already registered
+    fs_type_t *curr = fs_types;
+    while (curr) {
+        if (strcmp(curr->name, fs_type->name) == 0) {
+            printk("vfs: filesystem '%s' already registered\n", fs_type->name);
+            return -1;
+        }
+        curr = curr->next;
+    }
+
+    // Add to front of list
+    fs_type->next = fs_types;
+    fs_types = fs_type;
+
+    printk("vfs: registered filesystem '%s'\n", fs_type->name);
+    return 0;
+}
+
+// -----------------------------------------------------------------------------
+// Mount Point Management
+// -----------------------------------------------------------------------------
+
+int vfs_mount(const char *source, const char *target, const char *fstype) {
+    if (!target || !fstype) {
+        printk("vfs: invalid mount arguments\n");
+        return -1;
+    }
+
+    // Find the filesystem type
+    fs_type_t *fs = fs_types;
+    while (fs) {
+        if (strcmp(fs->name, fstype) == 0)
+            break;
+        fs = fs->next;
+    }
+
+    if (!fs) {
+        printk("vfs: unknown filesystem type '%s'\n", fstype);
+        return -1;
+    }
+
+    // Check if already mounted at this target
+    mount_t *existing = mounts;
+    while (existing) {
+        if (strcmp(existing->mountpoint, target) == 0) {
+            printk("vfs: '%s' already mounted\n", target);
+            return -1;
+        }
+        existing = existing->next;
+    }
+
+    // Allocate mount structure
+    mount_t *mnt = kmalloc(sizeof(mount_t));
+    if (!mnt) {
+        printk("vfs: kmalloc failed for mount\n");
+        return -1;
+    }
+
+    // Initialize mount
+    strncpy(mnt->mountpoint, target, sizeof(mnt->mountpoint) - 1);
+    mnt->mountpoint[sizeof(mnt->mountpoint) - 1] = '\0';
+    mnt->fs_type = fs;
+    mnt->fs_data = NULL;
+    mnt->next = NULL;
+
+    // Call filesystem-specific mount operation
+    if (fs->ops.mount) {
+        int ret = fs->ops.mount(mnt, source);
+        if (ret < 0) {
+            printk("vfs: mount operation failed for '%s'\n", fstype);
+            kfree(mnt);
+            return -1;
+        }
+    }
+
+    // Add to mount list
+    mnt->next = mounts;
+    mounts = mnt;
+
+    printk("vfs: mounted '%s' at '%s' (type: %s)\n", 
+           source ? source : "none", target, fstype);
+    return 0;
+}
+
+int vfs_unmount(const char *target) {
+    if (!target) return -1;
+
+    mount_t **prev = &mounts;
+    mount_t *curr = mounts;
+
+    while (curr) {
+        if (strcmp(curr->mountpoint, target) == 0) {
+            // Call filesystem-specific unmount
+            if (curr->fs_type->ops.unmount) {
+                curr->fs_type->ops.unmount(curr);
+            }
+
+            // Remove from list
+            *prev = curr->next;
+            kfree(curr);
+
+            printk("vfs: unmounted '%s'\n", target);
+            return 0;
+        }
+        prev = &curr->next;
+        curr = curr->next;
+    }
+
+    printk("vfs: mount point '%s' not found\n", target);
+    return -1;
+}
+
+mount_t *vfs_find_mount(const char *path) {
+    if (!path) return NULL;
+
+    mount_t *best_match = NULL;
+    size_t best_len = 0;
+
+    // Find the longest matching mount point
+    mount_t *curr = mounts;
+    while (curr) {
+        size_t mnt_len = strlen(curr->mountpoint);
+        
+        // Check if path starts with this mount point
+        int matches = 1;
+        for (size_t i = 0; i < mnt_len; i++) {
+            if (path[i] != curr->mountpoint[i]) {
+                matches = 0;
+                break;
+            }
+        }
+
+        // Must be exact match or followed by '/' or end of string
+        if (matches && mnt_len > best_len) {
+            if (path[mnt_len] == '/' || path[mnt_len] == '\0' || 
+                curr->mountpoint[mnt_len - 1] == '/') {
+                best_match = curr;
+                best_len = mnt_len;
+            }
+        }
+
+        curr = curr->next;
+    }
+
+    return best_match;
+}
+
+// -----------------------------------------------------------------------------
+// VFS-level operations
+// -----------------------------------------------------------------------------
+
+vnode_t *vfs_lookup(const char *path) {
+    if (!path) return NULL;
+
+    mount_t *mnt = vfs_find_mount(path);
+    if (!mnt) {
+        printk("vfs: no mount point for path '%s'\n", path);
+        return NULL;
+    }
+
+    // Get relative path within the mount
+    const char *rel_path = path;
+    size_t mnt_len = strlen(mnt->mountpoint);
+    
+    // Skip past mount point
+    if (mnt_len > 1) {  // Not root mount
+        rel_path += mnt_len;
+        if (*rel_path == '/') rel_path++;  // Skip leading slash
+    } else if (mnt->mountpoint[0] == '/' && path[0] == '/') {
+        rel_path++;  // Skip leading slash for root mount
+    }
+
+    // Call filesystem-specific lookup
+    if (mnt->fs_type->ops.lookup) {
+        return mnt->fs_type->ops.lookup(mnt, rel_path);
+    }
+
+    return NULL;
+}
+
+int vfs_create(const char *path, uint32_t mode) {
+    if (!path) return -1;
+
+    mount_t *mnt = vfs_find_mount(path);
+    if (!mnt) return -1;
+
+    const char *rel_path = path + strlen(mnt->mountpoint);
+    if (*rel_path == '/') rel_path++;
+
+    if (mnt->fs_type->ops.create) {
+        return mnt->fs_type->ops.create(mnt, rel_path, mode);
+    }
+
+    return -1;
+}
+
+int vfs_unlink(const char *path) {
+    if (!path) return -1;
+
+    mount_t *mnt = vfs_find_mount(path);
+    if (!mnt) return -1;
+
+    const char *rel_path = path + strlen(mnt->mountpoint);
+    if (*rel_path == '/') rel_path++;
+
+    if (mnt->fs_type->ops.unlink) {
+        return mnt->fs_type->ops.unlink(mnt, rel_path);
+    }
+
+    return -1;
+}
+
+int vfs_mkdir(const char *path, uint32_t mode) {
+    if (!path) return -1;
+
+    mount_t *mnt = vfs_find_mount(path);
+    if (!mnt) return -1;
+
+    const char *rel_path = path + strlen(mnt->mountpoint);
+    if (*rel_path == '/') rel_path++;
+
+    if (mnt->fs_type->ops.mkdir) {
+        return mnt->fs_type->ops.mkdir(mnt, rel_path, mode);
+    }
+
+    return -1;
+}
+
+// -----------------------------------------------------------------------------
+// File operations (backward compatible with existing code)
+// -----------------------------------------------------------------------------
+
 file_t *vfs_open(const char *path) {
-    tarfs_entry_t *entry = tarfs_lookup(path);
-    if (!entry) {
+    vnode_t *vnode = vfs_lookup(path);
+    if (!vnode) {
         printk("vfs: file not found: %s\n", path);
         return NULL;
     }
@@ -20,53 +274,62 @@ file_t *vfs_open(const char *path) {
     file_t *f = kmalloc(sizeof(file_t));
     if (!f) {
         printk("vfs: kmalloc failed in vfs_open\n");
+        kfree(vnode);
         return NULL;
     }
 
-    f->type      = FILE_TARFS;
-    f->entry     = entry;
-    f->offset    = 0;
+    // Determine file type from filesystem name
+    if (strcmp(vnode->fs_type->name, "tmpfs") == 0) {
+        f->type = FILE_TMPFS;
+    } else if (strcmp(vnode->fs_type->name, "tarfs") == 0) {
+        f->type = FILE_TARFS;
+    } else {
+        f->type = FILE_TARFS;  // Default fallback
+    }
+
+    f->vnode = vnode;
+    f->offset = 0;
     f->ref_count = 1;
+    vnode->ref_count++;
 
     return f;
 }
 
-// -----------------------------------------------------------------------------
-// vfs_close
-// Decrements ref count and frees the file_t when it hits zero.
-// -----------------------------------------------------------------------------
 void vfs_close(file_t *f) {
     if (!f) return;
 
     f->ref_count--;
-    if (f->ref_count <= 0)
+    if (f->ref_count <= 0) {
+        if (f->vnode) {
+            f->vnode->ref_count--;
+            if (f->vnode->ref_count <= 0) {
+                kfree(f->vnode);
+            }
+        }
         kfree(f);
+    }
 }
 
-// -----------------------------------------------------------------------------
-// vfs_read
-// Dispatches to the appropriate backend based on file type.
-// Advances f->offset by the number of bytes read.
-// Returns bytes read, 0 on EOF, -1 on error.
-// -----------------------------------------------------------------------------
 int vfs_read(file_t *f, void *buf, size_t len) {
     if (!f || !buf) return -1;
 
     switch (f->type) {
-        case FILE_TARFS: {
-            int n = tarfs_read(f->entry, buf, f->offset, len);
-            if (n > 0)
-                f->offset += (size_t)n;
-            return n;
+        case FILE_TARFS:
+        case FILE_TMPFS: {
+            if (f->vnode && f->vnode->mount && f->vnode->mount->fs_type->ops.read) {
+                int n = f->vnode->mount->fs_type->ops.read(f->vnode, buf, f->offset, len);
+                if (n > 0)
+                    f->offset += (size_t)n;
+                return n;
+            }
+            return -1;
         }
 
         case FILE_STDIN:
-            // No keyboard driver yet — stub
             printk("vfs: vfs_read on stdin not supported\n");
             return -1;
 
         case FILE_STDOUT:
-            // Reading from stdout doesn't make sense
             return -1;
 
         default:
@@ -74,23 +337,26 @@ int vfs_read(file_t *f, void *buf, size_t len) {
     }
 }
 
-// -----------------------------------------------------------------------------
-// vfs_write
-// Only meaningful for stdout/stderr right now — routes through printk.
-// tarfs is read-only, so writing to a FILE_TARFS fd is an error.
-// -----------------------------------------------------------------------------
 int vfs_write(file_t *f, const void *buf, size_t len) {
     if (!f || !buf) return -1;
 
     switch (f->type) {
         case FILE_STDOUT: {
-            // printk expects a format string — write raw bytes via %.*s
             printk("%.*s", (int)len, (const char *)buf);
             return (int)len;
         }
 
+        case FILE_TMPFS: {
+            if (f->vnode && f->vnode->mount && f->vnode->mount->fs_type->ops.write) {
+                int n = f->vnode->mount->fs_type->ops.write(f->vnode, buf, f->offset, len);
+                if (n > 0)
+                    f->offset += (size_t)n;
+                return n;
+            }
+            return -1;
+        }
+
         case FILE_TARFS:
-            // tarfs is read-only
             printk("vfs: write to read-only tarfs file\n");
             return -1;
 

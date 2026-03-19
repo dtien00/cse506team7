@@ -26,8 +26,6 @@
 extern void printk(const char *fmt, ...);
 extern void panic(const char *msg);
 
-#define PAGE_SIZE 4096UL
-
 int passed = 0;
 int failed = 0;
 
@@ -44,10 +42,10 @@ static void test_pmm(void) {
     // 2. Single page allocation
     void *p1 = pmm_alloc_page();
     TEST("alloc_page returns non-NULL",   p1 != NULL);
-    TEST("free memory decreased by 4KB", pmm_free_memory() == before - PAGE_SIZE);
+    TEST("free memory decreased by 4KB", pmm_free_memory() == before - PGSIZE);
 
     // 3. Page is 4KB-aligned (bitmap allocators always should be)
-    TEST("page is 4KB-aligned", ((uintptr_t)p1 & (PAGE_SIZE - 1)) == 0);
+    TEST("page is 4KB-aligned", ((uintptr_t)p1 & (PGSIZE - 1)) == 0);
 
     // 4. Two consecutive allocs return distinct pages
     void *p2 = pmm_alloc_page();
@@ -61,14 +59,14 @@ static void test_pmm(void) {
     // 6. Multi-page contiguous allocation
     void *mp = pmm_alloc_pages(4);
     TEST("alloc_pages(4) non-NULL",        mp != NULL);
-    TEST("alloc_pages(4) is 4KB-aligned",  ((uintptr_t)mp & (PAGE_SIZE - 1)) == 0);
-    TEST("free memory decreased by 16KB",  pmm_free_memory() == before - 4 * PAGE_SIZE);
+    TEST("alloc_pages(4) is 4KB-aligned",  ((uintptr_t)mp & (PGSIZE - 1)) == 0);
+    TEST("free memory decreased by 16KB",  pmm_free_memory() == before - 4 * PGSIZE);
 
     pmm_free_pages(mp, 4);
     TEST("free_pages reclaims memory", pmm_free_memory() == before);
 
     // 7. Allocate every free page, then expect NULL
-    size_t n_pages = before / PAGE_SIZE;
+    size_t n_pages = before / PGSIZE;
     void **pages = (void **)pmm_alloc_pages(n_pages); // borrow a big slab for ptrs
     // If that giant alloc fails (fragmentation) just skip exhaustion test
     if (pages != NULL) {
@@ -142,7 +140,7 @@ static void test_kmalloc(void) {
 
     // After freeing everything the allocator should be able to serve a
     // fresh large-ish request (basic fragmentation / coalescing check)
-    void *big = kmalloc(PAGE_SIZE);
+    void *big = kmalloc(PGSIZE);
     TEST("large alloc after mass-free succeeds (coalescing)", big != NULL);
     kfree(big);
 #undef N_STRESS
@@ -199,18 +197,18 @@ static void test_vmm(void) {
 
     uintptr_t range_va = 0x10000;
     int range_ret = vmm_map_range(upt, range_va, (uintptr_t)phys2,
-                                  4 * PAGE_SIZE, perm);
+                                  4 * PGSIZE, perm);
     TEST("vmm_map_range returns 0", range_ret == 0);
 
     // Each page in the range should translate correctly
     int range_ok = 1;
     for (int i = 0; i < 4; i++) {
-        uintptr_t t = vmm_translate(upt, range_va + i * PAGE_SIZE);
-        if (t != (uintptr_t)phys2 + i * PAGE_SIZE) { range_ok = 0; break; }
+        uintptr_t t = vmm_translate(upt, range_va + i * PGSIZE);
+        if (t != (uintptr_t)phys2 + i * PGSIZE) { range_ok = 0; break; }
     }
     TEST("range: all 4 pages translate correctly", range_ok);
 
-    vmm_unmap_range(upt, range_va, 4 * PAGE_SIZE);
+    vmm_unmap_range(upt, range_va, 4 * PGSIZE);
 
     // 8. Tear down — free the page table and physical pages
     pmm_free_page(phys);
@@ -236,25 +234,13 @@ static void test_vmm(void) {
  *   - printk(), panic() available
  */
 
-#include "printk.h"
-#include "types.h"
-#include "pmm.h"
-#include "vmm.h"
-#include "test.h"   // provides TEST(name, cond), extern int passed, failed
 
-#define PAGE_SIZE 4096UL
 
-/* PTE permission bits — match your vmm.h / riscv.h definitions */
-#define PTE_V (1UL << 0)
-#define PTE_R (1UL << 1)
-#define PTE_W (1UL << 2)
-#define PTE_X (1UL << 3)
-#define PTE_U (1UL << 4)
 
 /* Arbitrary user VA that doesn't conflict with kernel mappings */
 
 
-/* ── 1. Page isolation ────────────────────────────────────────────────────
+/*  Page isolation ────────────────────────────────────────────────────
  *
  * Allocate two pages, write distinct patterns to each, then cross-check.
  * A bitmap off-by-one that hands out overlapping pages will fail here
@@ -278,22 +264,22 @@ static void test_pmm_isolation(void)
     uint8_t *b1 = (uint8_t *)p1;
     uint8_t *b2 = (uint8_t *)p2;
 
-    for (size_t i = 0; i < PAGE_SIZE; i++) b1[i] = 0xAA;
-    for (size_t i = 0; i < PAGE_SIZE; i++) b2[i] = 0xBB;
+    for (size_t i = 0; i < PGSIZE; i++) b1[i] = 0xAA;
+    for (size_t i = 0; i < PGSIZE; i++) b2[i] = 0xBB;
 
     /*
      * If p1 and p2 overlap at all, the 0xBB pass overwrote part of p1.
      * Any byte of p1 that isn't 0xAA reveals the overlap.
      */
     int p1_intact = 1;
-    for (size_t i = 0; i < PAGE_SIZE; i++) {
+    for (size_t i = 0; i < PGSIZE; i++) {
         if (b1[i] != 0xAA) { p1_intact = 0; break; }
     }
     TEST("isolation: p1 unaffected by write to p2", p1_intact);
 
     /* Symmetric check: p2 must be all 0xBB. */
     int p2_intact = 1;
-    for (size_t i = 0; i < PAGE_SIZE; i++) {
+    for (size_t i = 0; i < PGSIZE; i++) {
         if (b2[i] != 0xBB) { p2_intact = 0; break; }
     }
     TEST("isolation: p2 unaffected by write to p1", p2_intact);
@@ -302,7 +288,7 @@ static void test_pmm_isolation(void)
     pmm_free_page(p2);
 }
 
-/* ── 2. Full page write / read-back ──────────────────────────────────────
+/* Full page write / read-back ──────────────────────────────────────
  *
  * Write a unique value to every byte of a page, then verify each one.
  * Catches partial mappings, read-only physical regions, and hardware
@@ -321,12 +307,12 @@ static void test_pmm_full_readback(void)
 
     uint8_t *b = (uint8_t *)p;
 
-    for (size_t i = 0; i < PAGE_SIZE; i++)
+    for (size_t i = 0; i < PGSIZE; i++)
         b[i] = (uint8_t)((i ^ 0xC3) & 0xFF);
 
     int ok = 1;
     size_t first_bad = 0;
-    for (size_t i = 0; i < PAGE_SIZE; i++) {
+    for (size_t i = 0; i < PGSIZE; i++) {
         if (b[i] != (uint8_t)((i ^ 0xC3) & 0xFF)) {
             ok = 0;
             first_bad = i;
@@ -342,7 +328,7 @@ static void test_pmm_full_readback(void)
     pmm_free_page(p);
 }
 
-/* ── 3. Free / realloc integrity ─────────────────────────────────────────
+/* Free / realloc integrity ─────────────────────────────────────────
  *
  * Free a page, allocate again, verify:
  *   a) The bitmap returned the same physical address (expected for a
@@ -378,15 +364,15 @@ static void test_pmm_free_realloc(void)
     /* Verify the reallocated page is actually writable. */
     volatile uint8_t *b = (volatile uint8_t *)p2;
     b[0]             = 0x42;
-    b[PAGE_SIZE - 1] = 0x99;
+    b[PGSIZE - 1] = 0x99;
 
     TEST("free/realloc: first byte writable",  b[0]             == 0x42);
-    TEST("free/realloc: last byte writable",   b[PAGE_SIZE - 1] == 0x99);
+    TEST("free/realloc: last byte writable",   b[PGSIZE - 1] == 0x99);
 
     pmm_free_page(p2);
 }
 
-/* ── 4. VMM hardware activation ──────────────────────────────────────────
+/* VMM hardware activation ──────────────────────────────────────────
  *
  * Your existing VMM tests walk the page table in *software*.  This test
  * goes one step further: it switches the CPU to the new page table, then

@@ -3,6 +3,7 @@ kernel/
 kernel/
 ├── arch/
 │   └── riscv/
+│       ├── initrd.S
 │       ├── start.S
 │       ├── swtch.S
 │       ├── trap_entry.S

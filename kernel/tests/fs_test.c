@@ -1,37 +1,12 @@
-#include "kernel/printk.h"
-#include "kernel/types.h"
-#include "fs/tarfs.h"
-#include "fs/vfs.h"
-#include "fs/file.h"
-#include "tests/test.h"
+#include "printk.h"
+#include "types.h"
+#include "tarfs.h"
+#include "vfs.h"
+#include "file.h"
+#include "tmpfs.h"
+#include "test.h"
+#include "string.h"
 
-void tarfs_test(void) {
-    printk("=== tarfs tests ===\n");
-
-    // 1. Does lookup find a known file?
-    tarfs_entry_t *e = tarfs_lookup("hello.txt");
-    if (!e) { printk("FAIL: lookup returned NULL\n"); return; }
-    printk("PASS: found hello.txt, size=%zu\n", e->size);
-
-    // 2. Does read return correct data?
-    char buf[64] = {0};
-    int n = tarfs_read(e, buf, 0, sizeof(buf) - 1);
-    printk("PASS: read %d bytes: '%s'\n", n, buf);
-
-    // 3. Does offset read work?
-    char buf2[8] = {0};
-    tarfs_read(e, buf2, 2, 4);  // read 4 bytes starting at offset 2
-    printk("     offset read: '%s'\n", buf2);
-
-    // 4. Does reading past EOF clamp correctly?
-    int n2 = tarfs_read(e, buf, e->size - 2, 100);
-    printk("PASS: clamped read got %d bytes (expected 2)\n", n2);
-
-    // 5. Does lookup return NULL for a missing file?
-    tarfs_entry_t *missing = tarfs_lookup("doesnotexist.txt");
-    if (missing) printk("FAIL: got non-NULL for missing file\n");
-    else         printk("PASS: missing file returned NULL\n");
-}
 
 void vfs_test(void) {
     printk("=== vfs tests ===\n");
@@ -48,7 +23,7 @@ void vfs_test(void) {
 
     // 3. Does offset advance after read?
     char buf2[8] = {0};
-    int n2 = vfs_read(f, buf2, 4);   // should read from where we left off
+    int n2 = vfs_read(f, buf2, 4);
     printk("PASS: second read from offset %zu got %d bytes\n", f->offset, n2);
 
     // 4. Read past EOF returns 0
@@ -58,7 +33,7 @@ void vfs_test(void) {
     printk("PASS: EOF read returned %d (expected 0)\n", eof);
 
     // 5. ref_count and close
-    vfs_close(f);  // ref_count should hit 0 and kfree
+    vfs_close(f);
 
     // 6. Open nonexistent file
     file_t *bad = vfs_open("nope.txt");
@@ -72,24 +47,227 @@ void fd_test(void) {
     fd_table_t table;
     fd_init(&table);
 
-    // 1. Allocate an fd
+    // 1. stdin/stdout/stderr are initialized correctly
+    file_t *stdin_f  = fd_get(&table, 0);
+    file_t *stdout_f = fd_get(&table, 1);
+    file_t *stderr_f = fd_get(&table, 2);
+    TEST("fd 0 is FILE_STDIN",  stdin_f  != NULL && stdin_f->type  == FILE_STDIN);
+    TEST("fd 1 is FILE_STDOUT", stdout_f != NULL && stdout_f->type == FILE_STDOUT);
+    TEST("fd 2 is FILE_STDOUT", stderr_f != NULL && stderr_f->type == FILE_STDOUT);
+
+    // 2. Allocate an fd — should land at 3
     file_t *f = vfs_open("hello.txt");
     int fd = fd_alloc(&table, f);
-    printk("PASS: allocated fd=%d\n", fd);  // expect 3 (0/1/2 = stdin/out/err)
+    TEST("first user fd is 3", fd == 3);
 
-    // 2. Get it back
+    // 3. Get it back
     file_t *got = fd_get(&table, fd);
-    if (got != f) printk("FAIL: fd_get returned wrong pointer\n");
-    else          printk("PASS: fd_get returned correct file\n");
+    TEST("fd_get returns correct file", got == f);
 
-    // 3. Close it
+    // 4. Close it
     fd_close(&table, fd);
-    file_t *closed = fd_get(&table, fd);
-    if (closed) printk("FAIL: fd still valid after close\n");
-    else        printk("PASS: fd correctly invalidated\n");
+    TEST("fd slot cleared after close", fd_get(&table, fd) == NULL);
 
-    // 4. Out of bounds
-    file_t *oob = fd_get(&table, 999);
-    if (oob) printk("FAIL: got non-NULL for fd=999\n");
-    else     printk("PASS: out-of-bounds fd returned NULL\n");
+    // 5. Slot is reused after close
+    file_t *f2 = vfs_open("hello.txt");
+    int fd2 = fd_alloc(&table, f2);
+    TEST("freed slot is reused", fd2 == fd);
+    fd_close(&table, fd2);
+
+    // 6. Out of bounds
+    TEST("fd -1 returns NULL",  fd_get(&table, -1)  == NULL);
+    TEST("fd 999 returns NULL", fd_get(&table, 999) == NULL);
+
+    // 7. NULL table / file guards
+    TEST("fd_alloc NULL table returns -1", fd_alloc(NULL, f)     == -1);
+    TEST("fd_alloc NULL file returns -1",  fd_alloc(&table, NULL) == -1);
+
+    // 8. Fill the table, then verify overflow returns -1
+    file_t *fds[MAX_FDS];
+    int allocated = 0;
+    // slots 0-2 are already taken by stdin/stdout/stderr
+    for (int i = 3; i < MAX_FDS; i++) {
+        fds[i] = vfs_open("hello.txt");
+        if (fd_alloc(&table, fds[i]) >= 0) allocated++;
+    }
+    file_t *overflow = vfs_open("hello.txt");
+    TEST("fd_alloc on full table returns -1", fd_alloc(&table, overflow) == -1);
+    vfs_close(overflow);
+    for (int i = 3; i < MAX_FDS; i++) fd_close(&table, i);
+}
+
+void mount_test(void) {
+    printk("=== mount tests ===\n");
+
+    // 1. Find root mount
+    mount_t *root_mnt = vfs_find_mount("/");
+    TEST("root mount found", root_mnt != NULL);
+
+    // 2. Find /tmp mount
+    mount_t *tmp_mnt = vfs_find_mount("/tmp");
+    TEST("/tmp mount found", tmp_mnt != NULL);
+
+    // 3. Verify /tmp is tmpfs
+    TEST("/tmp is tmpfs",
+         tmp_mnt != NULL && strcmp(tmp_mnt->fs_type->name, "tmpfs") == 0);
+
+    // 4. Verify root is tarfs
+    TEST("root is tarfs",
+         root_mnt != NULL && strcmp(root_mnt->fs_type->name, "tarfs") == 0);
+
+    // 5. /tmp/foo resolves to /tmp, not root
+    mount_t *tmp_foo_mnt = vfs_find_mount("/tmp/foo");
+    TEST("/tmp/foo resolves to /tmp mount", tmp_foo_mnt == tmp_mnt);
+
+    // 6. Root and /tmp are distinct mounts
+    TEST("/tmp mount differs from root mount", tmp_mnt != root_mnt);
+
+    // 7. Nested path still resolves longest prefix
+    mount_t *deep = vfs_find_mount("/tmp/a/b/c");
+    TEST("/tmp/a/b/c resolves to /tmp mount", deep == tmp_mnt);
+}
+
+void tmpfs_test(void) {
+    printk("=== tmpfs tests ===\n");
+
+    // 1. Create a file in /tmp
+    int ret = vfs_create("/tmp/test.txt", 0644);
+    TEST("created /tmp/test.txt", ret == 0);
+
+    // 2. Open and write to the file
+    file_t *f = vfs_open("/tmp/test.txt");
+    TEST("opened /tmp/test.txt", f != NULL);
+    if (!f) return;
+
+    const char *test_data = "Hello from tmpfs!";
+    int written = vfs_write(f, test_data, strlen(test_data));
+    TEST("write returned correct byte count", written == (int)strlen(test_data));
+
+    vfs_close(f);
+
+    // 3. Read back the data
+    f = vfs_open("/tmp/test.txt");
+    TEST("reopened /tmp/test.txt", f != NULL);
+    if (!f) return;
+
+    char buf[64] = {0};
+    int rb = vfs_read(f, buf, sizeof(buf) - 1);
+    TEST("read back correct data", rb > 0 && strcmp(buf, test_data) == 0);
+    vfs_close(f);
+
+    // 4. Write advances offset; second read continues from where first left off
+    f = vfs_open("/tmp/test.txt");
+    if (f) {
+        char first[8] = {0}, second[8] = {0};
+        vfs_read(f, first, 5);
+        size_t mid_offset = f->offset;
+        vfs_read(f, second, 5);
+        TEST("offset advances across sequential reads", f->offset == mid_offset + 5);
+        vfs_close(f);
+    }
+
+    // 5. Write at non-zero offset (sparse / append-style)
+    ret = vfs_create("/tmp/sparse.txt", 0644);
+    TEST("created /tmp/sparse.txt", ret == 0);
+    f = vfs_open("/tmp/sparse.txt");
+    if (f) {
+        // Manually advance offset to simulate appending
+        f->offset = 10;
+        int w = vfs_write(f, "end", 3);
+        TEST("write at offset 10 succeeds", w == 3);
+        TEST("file offset is 13 after write", f->offset == 13);
+        vfs_close(f);
+    }
+
+    // 6. Write to tarfs file returns error
+    file_t *tarf = vfs_open("hello.txt");
+    if (tarf) {
+        int w = vfs_write(tarf, "x", 1);
+        TEST("write to read-only tarfs returns error", w < 0);
+        vfs_close(tarf);
+    }
+
+    // 7. Create duplicate file returns error
+    ret = vfs_create("/tmp/test.txt", 0644);
+    TEST("creating duplicate file returns error", ret < 0);
+
+    // 8. Create a directory
+    ret = vfs_mkdir("/tmp/testdir", 0755);
+    TEST("created /tmp/testdir", ret == 0);
+
+    // 9. Duplicate mkdir returns error
+    ret = vfs_mkdir("/tmp/testdir", 0755);
+    TEST("duplicate mkdir returns error", ret < 0);
+
+    // 10. Create a file in the directory
+    ret = vfs_create("/tmp/testdir/nested.txt", 0644);
+    TEST("created /tmp/testdir/nested.txt", ret == 0);
+
+    // 11. Write and read nested file
+    f = vfs_open("/tmp/testdir/nested.txt");
+    if (f) {
+        const char *nested_data = "Nested file data";
+        vfs_write(f, nested_data, strlen(nested_data));
+        vfs_close(f);
+
+        f = vfs_open("/tmp/testdir/nested.txt");
+        if (f) {
+            char nbuf[32] = {0};
+            int nr = vfs_read(f, nbuf, sizeof(nbuf) - 1);
+            TEST("nested file read back correctly",
+                 nr > 0 && strcmp(nbuf, nested_data) == 0);
+            vfs_close(f);
+        }
+    }
+
+    // 12. Open a nonexistent file in tmpfs returns NULL
+    file_t *missing = vfs_open("/tmp/does_not_exist.txt");
+    TEST("open nonexistent tmpfs file returns NULL", missing == NULL);
+
+    // 13. ref_count: two opens increment, each close decrements
+    ret = vfs_create("/tmp/reftest.txt", 0644);
+    if (ret == 0) {
+        file_t *r1 = vfs_open("/tmp/reftest.txt");
+        file_t *r2 = vfs_open("/tmp/reftest.txt");
+        TEST("two opens give ref_count >= 1 each", r1 != NULL && r2 != NULL);
+        if (r1) vfs_close(r1);
+        if (r2) vfs_close(r2);
+    }
+
+    // 14. Unlink a file
+    ret = vfs_unlink("/tmp/test.txt");
+    TEST("unlinked /tmp/test.txt", ret == 0);
+
+    // 15. Unlinked file is no longer accessible
+    f = vfs_open("/tmp/test.txt");
+    TEST("unlinked file not accessible", f == NULL);
+    if (f) vfs_close(f);
+
+    // 16. Unlink nonexistent file returns error
+    ret = vfs_unlink("/tmp/test.txt");
+    TEST("unlink nonexistent file returns error", ret < 0);
+
+    // 17. Unlink non-empty directory returns error
+    ret = vfs_unlink("/tmp/testdir");
+    TEST("unlink non-empty dir returns error", ret < 0);
+}
+
+void fs_test_run(void) {
+    printk("\n");
+    printk("========================================\n");
+    printk("       Filesystem Tests\n");
+    printk("========================================\n");
+    printk("\n");
+
+    vfs_test();
+    printk("\n");
+
+    fd_test();
+    printk("\n");
+
+    mount_test();
+    printk("\n");
+
+    tmpfs_test();
+    printk("\n");
 }

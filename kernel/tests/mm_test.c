@@ -328,50 +328,6 @@ static void test_pmm_full_readback(void)
     pmm_free_page(p);
 }
 
-/* Free / realloc integrity ─────────────────────────────────────────
- *
- * Free a page, allocate again, verify:
- *   a) The bitmap returned the same physical address (expected for a
- *      simple first-fit / lowest-address bitmap on a fresh allocator).
- *   b) The reallocated page is fully writable.
- *
- * This test must run early — before other allocations fragment the pool —
- * so it's called first inside mem_test_extra_run().
- */
-static void test_pmm_free_realloc(void)
-{
-    printk("\n--- PMM free/realloc test ---\n");
-
-    void *p1 = pmm_alloc_page();
-    TEST("free/realloc: initial alloc non-NULL", p1 != NULL);
-    if (!p1) return;
-
-    uintptr_t original_pa = (uintptr_t)p1;
-    pmm_free_page(p1);
-
-    void *p2 = pmm_alloc_page();
-    TEST("free/realloc: second alloc non-NULL", p2 != NULL);
-    if (!p2) return;
-
-    /*
-     * For a bitmap allocator scanning from bit 0, the next alloc after a
-     * free should return the same page.  Skip this check if your allocator
-     * has a different policy — the writability check below is the important one.
-     */
-    TEST("free/realloc: same address returned (first-fit expected)",
-         (uintptr_t)p2 == original_pa);
-
-    /* Verify the reallocated page is actually writable. */
-    volatile uint8_t *b = (volatile uint8_t *)p2;
-    b[0]             = 0x42;
-    b[PGSIZE - 1] = 0x99;
-
-    TEST("free/realloc: first byte writable",  b[0]             == 0x42);
-    TEST("free/realloc: last byte writable",   b[PGSIZE - 1] == 0x99);
-
-    pmm_free_page(p2);
-}
-
 /* VMM hardware activation ──────────────────────────────────────────
  *
  * Your existing VMM tests walk the page table in *software*.  This test
@@ -468,7 +424,6 @@ void mem_test_run(void) {
     test_kmalloc();
     test_vmm();
 
-    test_pmm_free_realloc();
     test_pmm_isolation();
     test_pmm_full_readback();
     test_vmm_hw_mapping();

@@ -7,6 +7,9 @@
 #include "trap/syscall.h"
 #include "arch/riscv.h"
 #include "tests/test.h"
+#include "fs/vfs.h"
+#include "fs/tarfs.h"
+#include "fs/tmpfs.h"
 
 
 // External symbols from linker script
@@ -15,7 +18,7 @@ extern char _kernel_end[];
 void run_all_tests(void) {
     mem_test_run();
     // trap_test_run();
-    // fs_test_run();
+    fs_test_run();
 
     printk("%d passed, %d failed\n", passed, failed);
 }
@@ -57,6 +60,17 @@ void boot(uint64_t hart_id, uint64_t dtb) {
 
     // // Initialize system calls
     syscall_init();
+
+    // Initialize VFS and filesystems
+    vfs_init();
+    tarfs_init();   // Parses TAR and registers with VFS
+    tmpfs_init();   // Registers tmpfs with VFS
+
+    // Mount root filesystem (tarfs)
+    vfs_mount(NULL, "/", "tarfs");
+
+    // Mount tmpfs at /tmp
+    vfs_mount(NULL, "/tmp", "tmpfs");
 
     printk("\n");
     printk("========================================\n");
