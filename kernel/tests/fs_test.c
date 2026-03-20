@@ -1,11 +1,11 @@
-#include "printk.h"
-#include "types.h"
-#include "tarfs.h"
-#include "vfs.h"
-#include "file.h"
-#include "tmpfs.h"
-#include "test.h"
-#include "string.h"
+#include "kernel/printk.h"
+#include "kernel/types.h"
+#include "fs/tarfs.h"
+#include "fs/vfs.h"
+#include "fs/file.h"
+#include "fs/tmpfs.h"
+#include "tests/test.h"
+#include "lib/string.h"
 
 
 void vfs_test(void) {
