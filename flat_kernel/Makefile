@@ -1,4 +1,8 @@
 KLANG ?= c
+KLANG_NORM := $(strip $(shell echo "$(KLANG)" | tr '[:upper:]' '[:lower:]'))
+ifeq ($(KLANG_NORM),)
+  KLANG_NORM := c
+endif
 SUBMIT_DIR ?= /submit
 
 CROSS   := riscv64-unknown-elf-
@@ -17,15 +21,17 @@ RS_BIN   := $(addprefix build/rootfs/bin/,$(shell ls -d bin/*/*.rs 2>/dev/null |
 USER_BIN := $(C_BIN) $(RS_BIN)
 
 # Language-specific kernel object/library
-ifeq ($(KLANG),c)
+ifeq ($(KLANG_NORM),c)
   KERN_C   := $(patsubst %,build/%.o,$(shell find kernel -name '*.c'))
   KERN_ALL := $(KERN_ASM) $(KERN_C)
-else ifeq ($(KLANG),rust)
+else ifeq ($(KLANG_NORM),rust)
   KERN_LIB := build/rust/riscv64imac-unknown-none-elf/debug/libsbunix.a
   KERN_ALL := $(KERN_ASM) $(KERN_LIB)
-else ifeq ($(KLANG),zig)
+else ifeq ($(KLANG_NORM),zig)
   KERN_LIB := zig-out/lib/libsbunix.a
   KERN_ALL := $(KERN_ASM) $(KERN_LIB)
+else
+  $(error Unsupported KLANG='$(KLANG)'. Use one of: c, rust, zig)
 endif
 
 DISK_SIZE ?= 16
@@ -143,6 +149,5 @@ test: build/disk.img
 		-netdev user,id=net0 \
 		-nographic
 # ********************** TEST (NOT IN ORIGINAL /shared)
-
 
 .PHONY: all qemu clean thirdparty submit
