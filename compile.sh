@@ -1,5 +1,7 @@
 #!/bin/bash
 
+./flat_kernel.sh
+
 # push to remote
 rsync -avz --delete \
   --exclude='build/kernel' \
@@ -19,4 +21,5 @@ rsync -avz --delete \
 echo -e "\n\033[0;32m------------------------\nBUILD SUCCESS — launching QEMU interactively\n------------------------\033[0m\n"
 
 # Hand off terminal fully to QEMU via interactive SSH
-exec ssh -t 506 "cd ~/jchlee && make qemu"
+# exec ssh -t 506 "cd ~/jchlee/flat_kernel && make test"
+exec ssh -t 506 "cd ~/jchlee/flat_kernel && make qemu"

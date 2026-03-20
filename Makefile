@@ -137,4 +137,17 @@ submit:
 	echo "Submitted to $(SUBMIT_DIR)/sbunix"
 
 .PRECIOUS: build/%.S.o build/%.c.o
+
+# ********************** TEST (NOT IN ORIGINAL /shared)
+test: build/disk.img
+	$(MAKE) CFLAGS="$(CFLAGS) -DRUN_TESTS"
+	qemu-system-riscv64 -machine virt -bios default -kernel build/kernel.elf \
+		-drive file=$(DISK_IMG),format=raw,if=none,id=hd0 \
+		-device virtio-blk-pci-non-transitional,drive=hd0 \
+		-device virtio-gpu-pci \
+		-device virtio-net-pci-non-transitional,netdev=net0 \
+		-netdev user,id=net0 \
+		-nographic
+# ********************** TEST (NOT IN ORIGINAL /shared)
+
 .PHONY: all qemu clean thirdparty submit

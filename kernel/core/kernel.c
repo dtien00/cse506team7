@@ -1,10 +1,27 @@
-#include "arch/riscv.h"
 #include "kernel/printk.h"
+#include "mm/pmm.h"
+#include "mm/vmm.h"
+#include "mm/kmalloc.h"
 #include "trap/trap.h"
 #include "process/process.h"
+#include "trap/syscall.h"
+#include "arch/riscv.h"
+#include "tests/test.h"
+#include "fs/vfs.h"
+#include "fs/tarfs.h"
+#include "fs/tmpfs.h"
+
 
 // External symbols from linker script
 extern char _kernel_end[];
+
+void run_all_tests(void) {
+    mem_test_run();
+    // trap_test_run();
+    fs_test_run();
+
+    printk("%d passed, %d failed\n", passed, failed);
+}
 
 void boot(uint64_t hart_id, uint64_t dtb) {
     printk("\n");
@@ -21,28 +38,82 @@ void boot(uint64_t hart_id, uint64_t dtb) {
     printk("Kernel: %p - %p (%d KB)\n",
            kernel_start, kernel_end, kernel_size / 1024);
 
-    // TODO: Initialize physical memory manager
-    // TODO: Initialize virtual memory manager
-    // TODO: Initialize kernel heap
+    // Initialize physical memory manager
+    // Start after kernel, manage up to 128MB
+    uintptr_t mem_start = PGROUNDUP(kernel_end);
+    size_t mem_size = 0x88000000 - mem_start;  // Up to 128MB total
 
-    // Initialize scheduler
-    proc_init();
+
+    pmm_init(mem_start, mem_size);
 
     // Initialize trap handling
     trap_init();
 
-    // Enable interrupts
+    // Initialize virtual memory manager
+    vmm_init();
+
+    // Initialize kernel heap
+    kmalloc_init();
+
+    // Initialize process management
+    proc_init();
+
+    // // Initialize system calls
+    syscall_init();
+
     interrupts_on();
     printk("Turned on global interrupts. Now waiting for interrupts...\n");
 
-    // Create additional kernel threads
-    proc_create("task_a");
-    proc_create("task_b");
+    // // Initialize VFS and filesystems
+    // vfs_init();
+    // tarfs_init();   // Parses TAR and registers with VFS
+    // tmpfs_init();   // Registers tmpfs with VFS
 
-    // Enter scheduler (never returns while there are runnable processes)
-    schedule();
+    // // Mount root filesystem (tarfs)
+    // vfs_mount(NULL, "/", "tarfs");
 
-    printk("End of SBUNIX DEBUGGING\n");
-    while (1)
-        asm volatile("wfi");
+    // // Mount tmpfs at /tmp
+    // vfs_mount(NULL, "/tmp", "tmpfs");
+
+    printk("\n");
+    printk("========================================\n");
+    printk("  Kernel initialization complete!\n");
+    printk("========================================\n");
+    printk("\n");
+
+    #ifdef RUN_TESTS
+        run_all_tests();
+    #else
+        while (1)
+            asm volatile("wfi");
+    #endif
+
+    // // Test memory allocation
+    // printk("Testing memory allocation...\n");
+    // void *test1 = kmalloc(100);
+    // void *test2 = kmalloc(200);
+    // void *test3 = kmalloc(300);
+    // printk("  Allocated: %p, %p, %p\n", test1, test2, test3);
+    // kfree(test2);
+    // printk("  Freed: %p\n", test2);
+    // void *test4 = kmalloc(150);
+    // printk("  Allocated: %p\n", test4);
+    // kmalloc_stats();
+
+    // printk("\n");
+    // printk("Kernel ready. Waiting for interrupts...\n");
+
+    // // Enable interrupts
+    // interrupts_on();
+    // printk("Turned on global interrupts. Now waiting for interrupts...\n");
+
+    // // Create additional kernel threads
+    // proc_create("task_a");
+    // proc_create("task_b");
+
+    // // Enter scheduler (never returns while there are runnable processes)
+    // schedule();
+
+    // printk("End of SBUNIX DEBUGGING\n");
 }
+
