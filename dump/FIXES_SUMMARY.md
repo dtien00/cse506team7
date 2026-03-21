@@ -2,37 +2,12 @@
 
 ## Problems Identified
 
-### Problem 1: Kernel Not Building (0 object files)
-The Makefile uses `$(shell find kernel -name '*.c')` which fails on Windows PowerShell, resulting in no kernel source files being compiled. The kernel.elf ends up with only tarfs data and no executable code.
-
 ### Problem 2: Missing POSIX Headers
 The libc only had 3 headers (stdio.h, stdlib.h, types.h). User programs need standard POSIX headers to compile.
 
 ---
 
 ## Fixes Applied
-
-### Fix 1: Makefile - Replace `find` with `wildcard`
-
-**File: `Makefile`**
-
-Changed line 17 from:
-```makefile
-KERN_ASM := $(patsubst %,build/%.o,$(shell find kernel -name '*.S'))
-```
-To:
-```makefile
-KERN_ASM := $(patsubst %,build/%.o,$(wildcard kernel/arch/riscv/*.S))
-```
-
-Changed line 25 from:
-```makefile
-  KERN_C   := $(patsubst %,build/%.o,$(shell find kernel -name '*.c'))
-```
-To:
-```makefile
-  KERN_C   := $(patsubst %,build/%.o,$(wildcard kernel/arch/riscv/*.c kernel/core/*.c kernel/drivers/*.c kernel/fs/*.c kernel/lib/*.c kernel/mm/*.c kernel/process/*.c kernel/trap/*.c kernel/tests/*.c))
-```
 
 ### Fix 2: Added Missing POSIX Headers
 
