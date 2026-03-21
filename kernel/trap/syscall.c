@@ -85,19 +85,21 @@ void syscall_handler(trap_frame *frame) {
 // System call implementations (stubs for now)
 
 void sys_exit(int status) {
-    // Implement when processes are up
-    // process_t *p = proc_current();
-    // if (p != NULL) {
-    //     printk("Process %d exiting with status %d\n", p->pid, status);
-    //     p->state = PROC_ZOMBIE;
-    //     p->exit_status = status;
-    //     // Wake up parent, schedule next process
-    // }
+    proc_exit(status);
 }
 
 pid_t sys_fork(void) {
-    printk("sys_fork() not implemented\n");
-    return -1;
+    // Allocate and initialize new process (assigns pid, stack, context)
+    struct proc *child = proc_create(current->name);
+    if (!child) return -1;
+
+    // Parent-child linking
+    child->parent = current;
+    child->sibling = current->first_child;
+    current->first_child = child;
+
+    // Return child pid to parent that called fork syscall
+    return child->pid;
 }
 
 ssize_t sys_read(int fd, void *buf, size_t count) {
@@ -130,8 +132,31 @@ int sys_close(int fd) {
 }
 
 pid_t sys_wait(int *status) {
-    printk("sys_wait(%p) not implemented\n", status);
-    return -1;
+    if (!current->first_child) // No children at all
+        return -1;
+
+    for (;;) { // Scan children for a zombie
+        struct proc *prev = NULL;
+        struct proc *child = current->first_child;
+        while (child) {
+            if (child->state == PROC_ZOMBIE) { // Checks if ZOMBIE
+                pid_t pid = child->pid;
+                if (status)
+                    *status = child->exit_code;
+                // Remove from sibling list
+                if (prev)
+                    prev->sibling = child->sibling;
+                else
+                    current->first_child = child->sibling;
+                proc_free(child);
+                return pid;
+            }
+            prev = child;
+            child = child->sibling;
+        }
+        
+        proc_sleep(current); // No zombie yet — sleep until a child exits
+    }
 }
 
 int sys_exec(const char *path, char **argv) {
@@ -140,11 +165,10 @@ int sys_exec(const char *path, char **argv) {
 }
 
 pid_t sys_getpid(void) {
-    // implement when processes are up
-    // process_t *p = proc_current();
-    // if (p != NULL) {
-    //     return p->pid;
-    // }
+    struct proc *p = proc_current();
+    if (p != NULL) {
+        return p->pid;
+    }
     return -1;
 }
 

@@ -3,6 +3,7 @@
 #include "arch/sbi.h"
 #include "kernel/printk.h"
 #include "process/process.h"
+#include "trap/syscall.h"
 
 #define TIMER_INTERVAL 1000000ULL // ~0.1 second at 10 MHz clock
 
@@ -12,6 +13,7 @@ extern void trap_entry(void);
 void trap_init(void) {
 
     // Install trap entry point
+    write_csr(sscratch, 0);
     write_csr(stvec, (uint64_t) trap_entry);
     printk("Trap entry point (stvec) set to: %p\n", read_csr(stvec));
     sbi_set_timer(read_csr(time) + TIMER_INTERVAL);
@@ -76,9 +78,9 @@ void handle_exception(trap_frame *frame) {
             break;
         case SCAUSE_ECALL_FROM_U:
             // Handle system call
-            // syscall_handler(frame);
-            // Advance PC past ecall instruction
-            write_csr(sepc, frame->sepc + 4);
+            syscall_handler(frame);
+            // Advance PC past ecall instruction (assembly restores sepc from frame)
+            frame->sepc += 4;
             return; // Don't panic, return normally
         case SCAUSE_ECALL_FROM_S:
             printk("  System call from supervisor mode\n");

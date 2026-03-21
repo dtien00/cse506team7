@@ -2,6 +2,7 @@
 #include "process/swtch.h"
 #include "kernel/printk.h"
 #include "trap/trap.h"
+#include "arch/riscv.h"
 
 /**
  * Default entry point for new kernel threads.
@@ -65,6 +66,10 @@ struct proc* proc_create(const char *name) {
     p->context.sp = (uint64_t)&kstacks[idx][KSTACK_SIZE];
     p->context.ra = (uint64_t)proc_entry;
 
+    // User-mode processes allocates a trap_frame to save/restore user registers
+    // p->trapframe = (trap_frame *)kmalloc(sizeof(trap_frame));
+    // memset(p->trapframe, 0, sizeof(trap_frame));
+
     proc_ready(p);
     return p;
 }
@@ -77,11 +82,28 @@ void proc_free(struct proc *p) {
 }
 
 void proc_exit(int code) {
-    if (current) {
-        current->exit_code = code;
-        current->state = PROC_ZOMBIE;
-        schedule();
-    }
+    if (!current) return;
+
+    // Wake parent if it exists (guard against init having no parent)
+    if (current->parent)
+        proc_wakeup(current->parent);
+
+    // Reparent children to init (pid 1) to prevent orphans
+        struct proc *initproc = proc_find(1);
+        struct proc *child = current->first_child;
+        while (child) {
+            struct proc *next_sib = child->sibling;
+            child->parent = initproc;
+            child->sibling = initproc->first_child;
+            initproc->first_child = child;
+            child = next_sib;
+        }
+    current->first_child = NULL;
+    // free_user_pgtb() // Placeholder for when user-mode exists
+
+    current->exit_code = code;
+    current->state = PROC_ZOMBIE;
+    schedule();
 }
 
 void proc_kill(struct proc *p) {
@@ -111,4 +133,23 @@ void proc_dump(void) {
             printk("%3d  %-9s  %s\n", proctab[i].pid, state_str, proctab[i].name);
         }
     }
+}
+
+void proc_start_user(struct proc *p, uint64_t entry, uint64_t user_sp) {
+    // SPP=0 means sret goes to U-mode
+    // SPIE=1 means interrupts re-enable after sret
+    write_csr(sstatus, (read_csr(sstatus) & ~SSTATUS_SPP) | SSTATUS_SPIE);
+    
+    // User entry point
+    write_csr(sepc, entry);
+    
+    // Set sscratch to this process's kernel stack top
+    int idx = p - proctab;
+    write_csr(sscratch, (uint64_t)&kstacks[idx][KSTACK_SIZE]);
+    
+    // Switch to user page table
+    vmm_switch(p->pagetable);
+    
+    // Set user stack pointer and sret
+    // (done in assembly — load user sp, then sret)
 }

@@ -56,6 +56,7 @@ struct proc {
 
     proc_state_t state;
     int exit_code;
+    void *chan; // Sleep/wakeup channel support
 
     uint64_t time_slice;
     uint64_t total_time;
@@ -71,6 +72,7 @@ struct proc {
     struct proc *parent;
     struct proc *first_child;
     struct proc *sibling;
+
 };
 
 extern struct proc proctab[];
@@ -101,3 +103,7 @@ void context_switch(struct proc *next);
 
 // Debug
 void proc_dump(void);
+
+// Sleep/wakeup channel support
+void proc_sleep(void *chan);
+void proc_wakeup(void *chan);
