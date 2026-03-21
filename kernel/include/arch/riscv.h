@@ -59,7 +59,7 @@
 #define PTE_FLAGS(pte) ((pte) & 0x3FF)
 
 // Sv39 virtual address breakdown
-#define PGSIZE 4096
+#define PGSIZE 4096UL
 #define PGSHIFT 12
 #define PGROUNDUP(sz) (((sz) + PGSIZE - 1) & ~(PGSIZE - 1))
 #define PGROUNDDOWN(a) (((a)) & ~(PGSIZE - 1))

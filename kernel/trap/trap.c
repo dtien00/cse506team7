@@ -115,8 +115,8 @@ void handle_exception(trap_frame *frame) {
 }
 
 void trap_handler(trap_frame *frame) {
-    printk("TRAP: Register info scause=%p sip=%p sie=%p\n", (void *) frame->scause, (void *) read_csr(sip),
-           (void *) read_csr(sie));
+    // printk("TRAP: Register info scause=%p sip=%p sie=%p\n", (void *) frame->scause, (void *) read_csr(sip),
+    //        (void *) read_csr(sie));
     if (frame->scause & SCAUSE_INTERRUPT) {
         // Interrupt
         handle_interrupt(frame);

@@ -1,6 +1,9 @@
 #pragma once
 #include "kernel/types.h"
 
+#define TARFS_MAX_ENTRIES 64
+#define TAR_BLOCK_SIZE    512
+
 // The tar header structure (512 bytes)
 typedef struct tar_header {
     char name[100];
@@ -29,8 +32,17 @@ typedef struct tarfs_entry {
     size_t size;
 } tarfs_entry_t;
 
-// Function declarations
+// Forward declaration
+struct mount;
+struct vnode;
+struct filesystem_type;
+
+// Public API
 void tarfs_init(void);
-tarfs_entry_t *tarfs_lookup(const char *path);
-int tarfs_read(tarfs_entry_t *entry, void *buf, size_t offset, size_t len);
-tar_header tarfs_stat(const char *path);
+struct filesystem_type *tarfs_get_type(void);
+
+// VFS interface
+int tarfs_mount(struct mount *mnt, const char *source);
+int tarfs_unmount(struct mount *mnt);
+struct vnode *tarfs_lookup(struct mount *mnt, const char *path);
+int tarfs_read(struct vnode *vnode, void *buf, size_t offset, size_t len);

@@ -1,0 +1,367 @@
+FILESYSTEM ARCHITECTURE DIAGRAM
+================================
+
+Layer 1: User/Process Level
+----------------------------
+    +-------------------+
+    |   Process Code    |
+    |   (syscalls)      |
+    +-------------------+
+            |
+            v
+    +-------------------+
+    |   FD Table        |
+    |   fd_table_t      |
+    |   [0]=stdin       |
+    |   [1]=stdout      |
+    |   [2]=stderr      |
+    |   [3]=file_t*     |
+    |   [4]=file_t*     |
+    |   ...             |
+    +-------------------+
+            |
+            v
+
+Layer 2: VFS Layer (vfs.c)
+--------------------------
+    +------------------------------------------+
+    |  VFS Operations                          |
+    |  - vfs_open()    - vfs_read()           |
+    |  - vfs_close()   - vfs_write()          |
+    |  - vfs_create()  - vfs_unlink()         |
+    |  - vfs_mkdir()   - vfs_lookup()         |
+    +------------------------------------------+
+            |
+            v
+    +------------------------------------------+
+    |  Mount Point Manager                     |
+    |  - vfs_mount()                           |
+    |  - vfs_unmount()                         |
+    |  - vfs_find_mount() [longest prefix]    |
+    +------------------------------------------+
+            |
+            v
+    +------------------------------------------+
+    |  Mount List (linked list)                |
+    |                                          |
+    |  mount_t("/") -> mount_t("/tmp") -> NULL |
+    |    |                |                    |
+    |    v                v                    |
+    |  tarfs           tmpfs                   |
+    +------------------------------------------+
+            |
+            v
+
+Layer 3: Filesystem Types
+-------------------------
+    +-------------------+        +-------------------+
+    |   TARFS           |        |   TMPFS           |
+    |   (Read-Only)     |        |   (Read-Write)    |
+    +-------------------+        +-------------------+
+    | Operations:       |        | Operations:       |
+    | - mount           |        | - mount           |
+    | - unmount         |        | - unmount         |
+    | - lookup          |        | - lookup          |
+    | - read            |        | - read            |
+    | - (no write)      |        | - write           |
+    | - (no create)     |        | - create          |
+    | - (no unlink)     |        | - unlink          |
+    | - (no mkdir)      |        | - mkdir           |
+    +-------------------+        +-------------------+
+            |                            |
+            v                            v
+    +-------------------+        +-------------------+
+    | TAR Archive       |        | In-Memory Tree    |
+    | (Embedded in      |        |                   |
+    |  kernel binary)   |        | tmpfs_inode_t     |
+    |                   |        |   (root)          |
+    | tarfs_entry_t[]   |        |     |             |
+    | - header          |        |     +- children   |
+    | - data            |        |        |          |
+    | - size            |        |        +- file1   |
+    +-------------------+        |        +- dir1    |
+                                 |           +- file2|
+                                 +-------------------+
+
+
+DATA STRUCTURES
+===============
+
+file_t (Open File)
+------------------
+    +------------------+
+    | type: FILE_TMPFS |
+    | union {          |
+    |   tarfs_entry*   |  <-- Legacy style
+    |   vnode*         |  <-- New VFS style
+    | }                |
+    | offset: 1024     |
+    | ref_count: 1     |
+    | use_vnode: 1     |
+    +------------------+
+
+vnode_t (VFS Inode)
+-------------------
+    +------------------+
+    | ino: 42          |
+    | mode: 0644       |
+    | size: 2048       |
+    | ref_count: 1     |
+    | mount*           | ----> mount_t
+    | fs_data*         | ----> tmpfs_inode_t or tarfs_entry_t
+    | fs_type*         | ----> fs_type_t
+    +------------------+
+
+mount_t (Mount Point)
+---------------------
+    +---------------------------+
+    | mountpoint: "/tmp"        |
+    | fs_type*                  | ----> fs_type_t
+    | fs_data*                  | ----> tmpfs_mount_data_t
+    | next*                     | ----> next mount_t
+    +---------------------------+
+
+fs_type_t (Filesystem Type)
+----------------------------
+    +---------------------------+
+    | name: "tmpfs"             |
+    | ops: {                    |
+    |   mount: tmpfs_mount      |
+    |   unmount: tmpfs_unmount  |
+    |   lookup: tmpfs_lookup    |
+    |   read: tmpfs_read        |
+    |   write: tmpfs_write      |
+    |   create: tmpfs_create    |
+    |   unlink: tmpfs_unlink    |
+    |   mkdir: tmpfs_mkdir      |
+    | }                         |
+    | next*                     | ----> next fs_type_t
+    +---------------------------+
+
+
+CALL FLOW EXAMPLE
+=================
+
+Example: vfs_write(f, "data", 4) where f points to /tmp/file.txt
+
+1. User Code:
+   vfs_write(f, "data", 4)
+        |
+        v
+2. VFS Layer (vfs.c):
+   Check f->type == FILE_TMPFS
+   Check f->use_vnode == 1
+        |
+        v
+   Get vnode = f->vnode
+   Get mount = vnode->mount
+   Get fs_type = mount->fs_type
+        |
+        v
+   Call fs_type->ops.write(vnode, "data", offset=0, len=4)
+        |
+        v
+3. TMPFS Layer (tmpfs.c):
+   tmpfs_write(vnode, "data", 0, 4)
+        |
+        v
+   Get inode = (tmpfs_inode_t*)vnode->fs_data
+   Check if buffer needs expansion
+        |
+        v
+   If needed: krealloc(inode->data, new_size)
+        |
+        v
+   memcpy(inode->data + offset, "data", 4)
+        |
+        v
+   Update inode->size
+   Update vnode->size
+        |
+        v
+   Return 4 (bytes written)
+        |
+        v
+4. VFS Layer:
+   Update f->offset += 4
+   Return 4 to user
+
+
+PATH RESOLUTION EXAMPLE
+========================
+
+Example: vfs_open("/tmp/logs/boot.log")
+
+1. vfs_open("/tmp/logs/boot.log")
+        |
+        v
+2. vfs_lookup("/tmp/logs/boot.log")
+        |
+        v
+3. vfs_find_mount("/tmp/logs/boot.log")
+   
+   Check all mounts:
+   - "/" (tarfs)         -> matches, length=1
+   - "/tmp" (tmpfs)      -> matches, length=4  <-- BEST MATCH
+   
+   Return mount_t for "/tmp"
+        |
+        v
+4. Calculate relative path:
+   Full path: "/tmp/logs/boot.log"
+   Mount point: "/tmp"
+   Relative: "logs/boot.log"
+        |
+        v
+5. Call mount->fs_type->ops.lookup(mount, "logs/boot.log")
+        |
+        v
+6. tmpfs_lookup(mount, "logs/boot.log")
+   
+   Parse path: "logs" -> "boot.log"
+   Find "logs" in root directory
+   Find "boot.log" in "logs" directory
+   Return vnode for boot.log
+        |
+        v
+7. Create file_t with vnode
+   Set use_vnode = 1
+   Return to user
+
+
+MOUNT POINT STRUCTURE
+======================
+
+    Root (/)
+    |
+    +-- hello.txt (tarfs)
+    +-- bin/ (tarfs)
+    |   +-- ls (tarfs)
+    |   +-- cat (tarfs)
+    |
+    +-- tmp/ (tmpfs) <-- MOUNT POINT
+        |
+        +-- test.txt (tmpfs)
+        +-- logs/ (tmpfs)
+            +-- boot.log (tmpfs)
+
+
+FILESYSTEM REGISTRATION
+========================
+
+    fs_types (linked list)
+    |
+    +-> fs_type_t("tarfs") -> fs_type_t("tmpfs") -> NULL
+            |                        |
+            v                        v
+        tarfs_ops                tmpfs_ops
+        - mount                  - mount
+        - lookup                 - lookup
+        - read                   - read
+        - (no write)             - write
+        - (no create)            - create
+                                 - unlink
+                                 - mkdir
+
+
+MEMORY LAYOUT
+=============
+
+Kernel Memory:
+    +------------------------+
+    | Kernel Code & Data     |
+    +------------------------+
+    | TAR Archive (embedded) |  <-- tarfs reads from here
+    | _tarfs_start           |
+    | ...                    |
+    | _tarfs_end             |
+    +------------------------+
+    | Kernel Heap            |
+    | (kmalloc region)       |
+    |                        |
+    | - VFS structures       |
+    | - mount_t list         |
+    | - fs_type_t list       |
+    | - file_t objects       |
+    | - vnode_t objects      |
+    | - tmpfs inodes         |
+    | - tmpfs file data      |  <-- tmpfs stores data here
+    |                        |
+    +------------------------+
+
+
+INITIALIZATION SEQUENCE
+=======================
+
+boot()
+  |
+  +-> pmm_init()          (Physical memory)
+  +-> trap_init()         (Interrupts)
+  +-> vmm_init()          (Virtual memory)
+  +-> kmalloc_init()      (Heap allocator)
+  +-> proc_init()         (Process management)
+  +-> syscall_init()      (System calls)
+  |
+  +-> vfs_init()          (Initialize VFS)
+  |     |
+  |     +-> fs_types = NULL
+  |     +-> mounts = NULL
+  |
+  +-> tarfs_init()        (Parse TAR & register)
+  |     |
+  |     +-> Parse embedded TAR archive
+  |     +-> Index all files
+  |     +-> vfs_register_fs(&tarfs_type)
+  |
+  +-> tmpfs_init()        (Register tmpfs)
+  |     |
+  |     +-> vfs_register_fs(&tmpfs_type)
+  |
+  +-> vfs_mount(NULL, "/", "tarfs")
+  |     |
+  |     +-> Find "tarfs" in fs_types
+  |     +-> Create mount_t for "/"
+  |     +-> Call tarfs_mount()
+  |     +-> Add to mounts list
+  |
+  +-> vfs_mount(NULL, "/tmp", "tmpfs")
+        |
+        +-> Find "tmpfs" in fs_types
+        +-> Create mount_t for "/tmp"
+        +-> Call tmpfs_mount()
+        |     |
+        |     +-> Allocate tmpfs_mount_data_t
+        |     +-> Create root directory inode
+        +-> Add to mounts list
+
+
+REFERENCE COUNTING
+==================
+
+Example: Opening and sharing a file
+
+1. vfs_open("/tmp/file.txt")
+   - Allocate vnode (ref_count = 0)
+   - Allocate file_t (ref_count = 1)
+   - Increment vnode->ref_count to 1
+   - Return file_t
+
+2. fd_alloc(&table, file_t)
+   - Store file_t in fd table
+   - file_t->ref_count stays at 1
+
+3. Duplicate fd (if implemented):
+   - file_t->ref_count++  (now 2)
+
+4. fd_close(&table, fd1)
+   - file_t->ref_count--  (now 1)
+   - Don't free yet
+
+5. fd_close(&table, fd2)
+   - file_t->ref_count--  (now 0)
+   - Free file_t
+   - vnode->ref_count--   (now 0)
+   - Free vnode
+
+
+This completes the filesystem architecture overview!
