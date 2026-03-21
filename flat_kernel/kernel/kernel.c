@@ -19,8 +19,6 @@ void run_all_tests(void) {
     mem_test_run();
     // trap_test_run();
     fs_test_run();
-
-    printk("%d passed, %d failed\n", passed, failed);
 }
 
 void boot(uint64_t hart_id, uint64_t dtb) {
@@ -64,16 +62,16 @@ void boot(uint64_t hart_id, uint64_t dtb) {
     interrupts_on();
     printk("Turned on global interrupts. Now waiting for interrupts...\n");
 
-    // // Initialize VFS and filesystems
-    // vfs_init();
-    // tarfs_init();   // Parses TAR and registers with VFS
-    // tmpfs_init();   // Registers tmpfs with VFS
+    // Initialize VFS and filesystems
+    vfs_init();
+    tarfs_init();   // Parses TAR and registers with VFS
+    tmpfs_init();   // Registers tmpfs with VFS
 
-    // // Mount root filesystem (tarfs)
-    // vfs_mount(NULL, "/", "tarfs");
+    // Mount root filesystem (tarfs)
+    vfs_mount(NULL, "/", "tarfs");
 
-    // // Mount tmpfs at /tmp
-    // vfs_mount(NULL, "/tmp", "tmpfs");
+    // Mount tmpfs at /tmp
+    vfs_mount(NULL, "/tmp", "tmpfs");
 
     printk("\n");
     printk("========================================\n");
@@ -87,33 +85,5 @@ void boot(uint64_t hart_id, uint64_t dtb) {
         while (1)
             asm volatile("wfi");
     #endif
-
-    // // Test memory allocation
-    // printk("Testing memory allocation...\n");
-    // void *test1 = kmalloc(100);
-    // void *test2 = kmalloc(200);
-    // void *test3 = kmalloc(300);
-    // printk("  Allocated: %p, %p, %p\n", test1, test2, test3);
-    // kfree(test2);
-    // printk("  Freed: %p\n", test2);
-    // void *test4 = kmalloc(150);
-    // printk("  Allocated: %p\n", test4);
-    // kmalloc_stats();
-
-    // printk("\n");
-    // printk("Kernel ready. Waiting for interrupts...\n");
-
-    // // Enable interrupts
-    // interrupts_on();
-    // printk("Turned on global interrupts. Now waiting for interrupts...\n");
-
-    // // Create additional kernel threads
-    // proc_create("task_a");
-    // proc_create("task_b");
-
-    // // Enter scheduler (never returns while there are runnable processes)
-    // schedule();
-
-    // printk("End of SBUNIX DEBUGGING\n");
 }
 

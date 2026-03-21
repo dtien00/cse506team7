@@ -26,8 +26,8 @@
 extern void printk(const char *fmt, ...);
 extern void panic(const char *msg);
 
-int passed = 0;
-int failed = 0;
+static int passed = 0;
+static int failed = 0;
 
 static void test_pmm(void) {
     printk("\n=== PMM Tests ===\n");
