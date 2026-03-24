@@ -248,7 +248,7 @@ int exec(const char *path, char *const argv[]) {
     //    - For each loadable segment, allocate memory and load data
 
     // Unmap old user memory (except kernel stack)
-    vmm_unmap_range(current->pagetable, USER_BASE, USER_TOP - USER_BASE);
+    vmm_unmap_range(current->pagetable, KERNBASE, KERNBASE - USER_BASE);
 
     // Create new pagetable
     pagetable_t new_pt = vmm_create_pagetable();

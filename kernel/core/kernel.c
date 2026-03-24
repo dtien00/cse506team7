@@ -10,6 +10,7 @@
 #include "fs/vfs.h"
 #include "fs/tarfs.h"
 #include "fs/tmpfs.h"
+#include "kernel/types.h"
 
 
 // External symbols from linker script
@@ -42,7 +43,6 @@ void boot(uint64_t hart_id, uint64_t dtb) {
     // Start after kernel, manage up to 128MB
     uintptr_t mem_start = PGROUNDUP(kernel_end);
     size_t mem_size = 0x88000000 - mem_start;  // Up to 128MB total
-
 
     pmm_init(mem_start, mem_size);
 
