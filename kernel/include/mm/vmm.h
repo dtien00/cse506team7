@@ -1,6 +1,6 @@
-#pragma once
 
-#include "kernel/types.h"
+#pragma once
+#include "types.h"
 
 // Virtual Memory Manager (VMM)
 // Manages Sv39 page tables for RISC-V

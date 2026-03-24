@@ -3,7 +3,6 @@
 #include "kernel/types.h"
 #include "mm/vmm.h"
 #include "trap/trap.h"
-#include "lib/string.h"
 
 #define MAX_PROCS 64
 #define MAX_NAME 16
@@ -107,3 +106,6 @@ void proc_dump(void);
 // Sleep/wakeup channel support
 void proc_sleep(void *chan);
 void proc_wakeup(void *chan);
+
+// Utilities
+int exec(const char *path, char *const argv[]);
