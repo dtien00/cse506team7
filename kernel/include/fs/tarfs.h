@@ -1,5 +1,6 @@
+
 #pragma once
-#include "kernel/types.h"
+#include "types.h"
 
 // The tar header structure (512 bytes)
 typedef struct tar_header {
@@ -33,4 +34,4 @@ typedef struct tarfs_entry {
 void tarfs_init(void);
 tarfs_entry_t *tarfs_lookup(const char *path);
 int tarfs_read(tarfs_entry_t *entry, void *buf, size_t offset, size_t len);
-tar_header tarfs_stat(const char *path);
+struct tar_header tarfs_stat(const char *path);

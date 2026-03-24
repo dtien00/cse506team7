@@ -1,5 +1,6 @@
+// vfs.h
 #pragma once
-#include "kernel/types.h"
+#include "types.h"
 #include "fs/tarfs.h"
 // FILE MANAGER: Keeps track of all open file stats.
 
@@ -16,3 +17,4 @@ file_t *vfs_open(const char *path);
 void    vfs_close(file_t *f);
 int     vfs_read(file_t *f, void *buf, size_t len);
 int     vfs_write(file_t *f, const void *buf, size_t len); // stub
+int     vfs_lseek(file_t *f, size_t offset, int whence);

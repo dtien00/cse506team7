@@ -1,6 +1,6 @@
-#pragma once
 
-#include "kernel/types.h"
+#pragma once
+#include "types.h"
 
 static inline void* memcpy(void *dest, const void *src, size_t n) {
     uint8_t *d = dest;

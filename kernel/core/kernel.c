@@ -36,8 +36,8 @@ void boot(uint64_t hart_id, uint64_t dtb) {
     printk("Turned on global interrupts. Now waiting for interrupts...\n");
 
     // Create additional kernel threads
-    proc_create("task_a");
-    proc_create("task_b");
+    // proc_create("task_a");
+    // proc_create("task_b");
 
     // Enter scheduler (never returns while there are runnable processes)
     schedule();
