@@ -1,50 +1,3 @@
-// Recursively copy user-space mappings from parent to child pagetable
-static int vmm_copy_pagetable_recursive(pagetable_t child, pagetable_t parent, int level, uintptr_t va_base) {
-  for (int i = 0; i < 512; i++) {
-    uint64_t pte = parent[i];
-    if (!(pte & PTE_V)) continue;
-
-    if ((pte & (PTE_R | PTE_W | PTE_X)) == 0) {
-      // This is a lower-level page table
-      pagetable_t parent_next = (pagetable_t)PTE_TO_PA(pte);
-      pagetable_t child_next = (pagetable_t)pmm_alloc_page();
-      if (!child_next) return -1;
-      for (int j = 0; j < 512; j++) child_next[j] = 0;
-      // Set child PTE
-      child[i] = PA_TO_PTE((uintptr_t)child_next) | PTE_V;
-      // Recurse
-      if (vmm_copy_pagetable_recursive(child_next, parent_next, level - 1, va_base | ((uintptr_t)i << (level * 9 + 12))) < 0)
-        return -1;
-    } else {
-      // Leaf PTE: user mapping or kernel mapping
-      uintptr_t va = va_base | ((uintptr_t)i << (level * 9 + 12));
-      if (va >= KERNBASE) {
-        // Kernel mapping: just copy the PTE (shared)
-        child[i] = pte;
-      } else {
-        // User mapping: allocate new page, copy contents
-        void *newpage = pmm_alloc_page();
-        if (!newpage) return -1;
-        void *oldpage = (void *)PTE_TO_PA(pte);
-        memcpy(newpage, oldpage, PGSIZE);
-        child[i] = PA_TO_PTE((uintptr_t)newpage) | (pte & (PTE_R | PTE_W | PTE_X | PTE_U | PTE_V));
-      }
-    }
-  }
-  return 0;
-}
-
-// Clone a parent's page table for fork()
-pagetable_t vmm_copy_pagetable(pagetable_t parent) {
-  pagetable_t child = vmm_create_pagetable();
-  if (!child) return NULL;
-  // Recursively copy user mappings (levels 2, 1, 0)
-  if (vmm_copy_pagetable_recursive(child, parent, 2, 0) < 0) {
-    vmm_free_pagetable(child);
-    return NULL;
-  }
-  return child;
-}
 #include "mm/vmm.h"
 #include "mm/pmm.h"
 #include "arch/riscv.h"
@@ -268,3 +221,50 @@ void vmm_init(void) {
   printk("VMM: Paging enabled\n");
 }
 
+// Recursively copy user-space mappings from parent to child pagetable
+static int vmm_copy_pagetable_recursive(pagetable_t child, pagetable_t parent, int level, uintptr_t va_base) {
+  for (int i = 0; i < 512; i++) {
+    uint64_t pte = parent[i];
+    if (!(pte & PTE_V)) continue;
+
+    if ((pte & (PTE_R | PTE_W | PTE_X)) == 0) {
+      // This is a lower-level page table
+      pagetable_t parent_next = (pagetable_t)PTE_TO_PA(pte);
+      pagetable_t child_next = (pagetable_t)pmm_alloc_page();
+      if (!child_next) return -1;
+      for (int j = 0; j < 512; j++) child_next[j] = 0;
+      // Set child PTE
+      child[i] = PA_TO_PTE((uintptr_t)child_next) | PTE_V;
+      // Recurse
+      if (vmm_copy_pagetable_recursive(child_next, parent_next, level - 1, va_base | ((uintptr_t)i << (level * 9 + 12))) < 0)
+        return -1;
+    } else {
+      // Leaf PTE: user mapping or kernel mapping
+      uintptr_t va = va_base | ((uintptr_t)i << (level * 9 + 12));
+      if (va >= KERNBASE) {
+        // Kernel mapping: just copy the PTE (shared)
+        child[i] = pte;
+      } else {
+        // User mapping: allocate new page, copy contents
+        void *newpage = pmm_alloc_page();
+        if (!newpage) return -1;
+        void *oldpage = (void *)PTE_TO_PA(pte);
+        memcpy(newpage, oldpage, PGSIZE);
+        child[i] = PA_TO_PTE((uintptr_t)newpage) | (pte & (PTE_R | PTE_W | PTE_X | PTE_U | PTE_V));
+      }
+    }
+  }
+  return 0;
+}
+
+// Clone a parent's page table for fork()
+pagetable_t vmm_copy_pagetable(pagetable_t parent) {
+  pagetable_t child = vmm_create_pagetable();
+  if (!child) return NULL;
+  // Recursively copy user mappings (levels 2, 1, 0)
+  if (vmm_copy_pagetable_recursive(child, parent, 2, 0) < 0) {
+    vmm_free_pagetable(child);
+    return NULL;
+  }
+  return child;
+}
