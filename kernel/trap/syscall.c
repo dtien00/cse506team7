@@ -93,6 +93,30 @@ pid_t sys_fork(void) {
     struct proc *child = proc_create(current->name);
     if (!child) return -1;
 
+    // Copy parent's address space
+    child->pagetable = vmm_copy_pagetable(current->pagetable);
+    if (!child->pagetable) {
+        proc_free(child);
+        return -1; // Unable to create child address space as copy of the parent
+    }
+
+    // Copy parent's trap frame and register state to the child
+    if (current->trapframe) {
+        child->trapframe = (trap_frame *)kmalloc(sizeof(trap_frame));
+        if (!child->trapframe) {
+            vmm_free_pagetable(child->pagetable);
+            proc_free(child);
+            return -1;
+        }
+        memcpy(child->trapframe, current->trapframe, sizeof(trap_frame));
+    } else {
+        child->trapframe = NULL;
+    }
+    child->pc = current->pc;
+    child->sp = current->sp;
+    memcpy(child->regs, current->regs, sizeof(current->regs));
+    child->satp = current->satp;
+
     // Parent-child linking
     child->parent = current;
     child->sibling = current->first_child;
