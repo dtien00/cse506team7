@@ -110,7 +110,10 @@ void proc_unblock(struct proc *p) {
 //------------------------------//
 
 void sched_test_run(void) {
-    printk("[sched_test_run] Starting scheduler tests...\n");
+    printk("\n========================================\n");
+    printk("       Scheduler Tests\n");
+    printk("========================================\n\n");
+    printk("=== Scheduler Core Tests ===\n");
     // Create two processes
     struct proc *p1 = proc_create("sched1");
     struct proc *p2 = proc_create("sched2");
@@ -127,7 +130,9 @@ void sched_test_run(void) {
     TEST("proc_block sets BLOCKED", n1 && n1->state == PROC_BLOCKED);
     proc_unblock(n1);
     TEST("proc_unblock sets READY", n1 && n1->state == PROC_READY);
-    printk("[sched_test_run] Done.\n");
+    printk("\n========================================\n");
+    printk("    End of Scheduler Tests\n");
+    printk("========================================\n\n");
 }
 
 void sched_timeslice_test_run(void) {

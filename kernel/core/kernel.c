@@ -20,6 +20,12 @@ void run_all_tests(void) {
     mem_test_run();
     // trap_test_run();
     fs_test_run();
+    proc_test_run();
+    sched_test_run();
+    sched_timeslice_test_run();
+    sched_priority_test_run();
+    sched_fairness_test_run();
+    sched_idle_test_run();
 
     printk("%d passed, %d failed\n", passed, failed);
 }
