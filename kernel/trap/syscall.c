@@ -2,6 +2,9 @@
 #include "kernel/printk.h"
 #include "process/process.h"
 #include "trap/trap.h"
+#include "mm/vmm.h"
+#include "mm/kmalloc.h"
+#include "lib/string.h"
 
 void syscall_init(void) { printk("Syscall: Initialized\n"); }
 
