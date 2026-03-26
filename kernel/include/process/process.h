@@ -86,7 +86,7 @@ struct proc* proc_find(pid_t pid);
 struct proc* proc_create(const char *name);
 void proc_exit(int code);
 void proc_kill(struct proc *p);
-void proc_wait(struct proc *p);
+int proc_wait(int *exit_code_out);
 
 // Scheduling
 struct proc* proc_current(void);
