@@ -17,6 +17,7 @@
 #endif
 #include "elf/elf.h"
 #include "arch/riscv.h" // for KERNBASE, PHYSTOP
+#include "trap/syscall.h"
 
 /**
  * Default entry point for new kernel threads.
