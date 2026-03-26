@@ -2,6 +2,7 @@
 #include "process/swtch.h"
 #include "kernel/printk.h"
 #include "trap/trap.h"
+#include "tests/test.h"
 
 struct proc proctab[MAX_PROCS];
 struct proc *ready_queue = NULL;
