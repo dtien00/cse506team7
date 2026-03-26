@@ -330,7 +330,10 @@ int exec(const char *path, char *const argv[]) {
 
 
 void proc_test_run(void) {
-    printk("[proc_test_run] Starting process tests...\n");
+    printk("\n========================================\n");
+    printk("       Process Tests\n");
+    printk("========================================\n\n");
+    printk("=== Process Core Tests ===\n");
     // Test process creation
     struct proc *p1 = proc_create("test_proc1");
     TEST("proc_create returns non-NULL", p1 != NULL);
@@ -354,5 +357,7 @@ void proc_test_run(void) {
         if (proc_create("bulk") != NULL) count++;
     }
     TEST("proc_create respects MAX_PROCS", count <= MAX_PROCS);
-    printk("[proc_test_run] Done.\n");
+    printk("\n========================================\n");
+    printk("    End of Process Tests\n");
+    printk("========================================\n\n");
 }
