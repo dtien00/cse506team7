@@ -27,6 +27,7 @@ typedef struct vnode {
 
 // A generic open file
 typedef struct file {
+    tarfs_entry_t *entry;  // for FILE_TARFS
     file_type_t type;
     vnode_t *vnode;
     size_t offset;

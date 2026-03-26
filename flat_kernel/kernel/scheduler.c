@@ -3,6 +3,8 @@
 #include "printk.h"
 #include "trap.h"
 
+#include "test.h"
+
 struct proc proctab[MAX_PROCS];
 struct proc *ready_queue = NULL;
 struct proc *blocked_queue = NULL;
@@ -59,6 +61,7 @@ struct proc* proc_next_ready(void) {
     return p;
 }
 
+
 void proc_block(struct proc *p) {
     p->state = PROC_BLOCKED;
     if (ready_queue && ready_queue->pid == p->pid) {
@@ -100,4 +103,49 @@ void proc_unblock(struct proc *p) {
     }
     p->next = NULL;
     proc_ready(p);
+}
+
+//------------------------------//
+// ******** TEST CASES ******** //
+//------------------------------//
+
+void sched_test_run(void) {
+    printk("[sched_test_run] Starting scheduler tests...\n");
+    // Create two processes
+    struct proc *p1 = proc_create("sched1");
+    struct proc *p2 = proc_create("sched2");
+    TEST("proc_create for scheduler test", p1 && p2 && p1 != p2);
+    // Ready both
+    if (p1) proc_ready(p1);
+    if (p2) proc_ready(p2);
+    // Simulate scheduling
+    struct proc *n1 = proc_next_ready();
+    struct proc *n2 = proc_next_ready();
+    TEST("proc_next_ready returns both", n1 && n2 && n1 != n2);
+    // Block and unblock
+    if (n1) proc_block(n1);
+    TEST("proc_block sets BLOCKED", n1 && n1->state == PROC_BLOCKED);
+    proc_unblock(n1);
+    TEST("proc_unblock sets READY", n1 && n1->state == PROC_READY);
+    printk("[sched_test_run] Done.\n");
+}
+
+void sched_timeslice_test_run(void) {
+    printk("[sched_timeslice_test_run] Not implemented yet.\n");
+    TEST("sched_timeslice_test_run stub", 0);
+}
+
+void sched_priority_test_run(void) {
+    printk("[sched_priority_test_run] Not implemented yet.\n");
+    TEST("sched_priority_test_run stub", 0);
+}
+
+void sched_fairness_test_run(void) {
+    printk("[sched_fairness_test_run] Not implemented yet.\n");
+    TEST("sched_fairness_test_run stub", 0);
+}
+
+void sched_idle_test_run(void) {
+    printk("[sched_idle_test_run] Not implemented yet.\n");
+    TEST("sched_idle_test_run stub", 0);
 }

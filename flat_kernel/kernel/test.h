@@ -17,3 +17,10 @@ extern int failed;
 
 void mem_test_run(void);
 void fs_test_run(void);
+
+void proc_test_run(void);
+void sched_test_run(void);
+void sched_timeslice_test_run(void);
+void sched_priority_test_run(void);
+void sched_fairness_test_run(void);
+void sched_idle_test_run(void);

@@ -248,7 +248,7 @@ int exec(const char *path, char *const argv[]) {
     //    - For each loadable segment, allocate memory and load data
 
     // Unmap old user memory (except kernel stack)
-    vmm_unmap_range(current->pagetable, KERNBASE, KERNBASE - USER_BASE);
+    vmm_unmap_range(current->pagetable, KERNBASE, KERNBASE - PHYSTOP);
 
     // Create new pagetable
     pagetable_t new_pt = vmm_create_pagetable();
@@ -267,7 +267,7 @@ int exec(const char *path, char *const argv[]) {
 
     // Copy argv to the new user stack
     // Allocate and map stack
-    uintptr_t stack_top = USER_TOP;
+    uintptr_t stack_top = KERNBASE;
     uintptr_t stack_base = stack_top - USTACK_SIZE;
     for (uintptr_t va = stack_base; va < stack_top; va += PGSIZE) {
         void *page = pmm_alloc_page();
@@ -278,7 +278,7 @@ int exec(const char *path, char *const argv[]) {
     current->sp = stack_top;
 
     // (Optional) Copy argv to stack
-    uintptr_t sp = USER_TOP; // Top of stack start position
+    uintptr_t sp = KERNBASE; // Top of stack start position
     
     int argc = 0;
     while (argv[argc] != NULL) argc++;

@@ -3,6 +3,8 @@
 #include "printk.h"
 #include "trap.h"
 
+#include "test.h"
+
 /**
  * Default entry point for new kernel threads.
  * When swtch restores ra to this function, the new process starts here.
@@ -67,6 +69,34 @@ struct proc* proc_create(const char *name) {
 
     proc_ready(p);
     return p;
+}
+
+void proc_test_run(void) {
+    printk("[proc_test_run] Starting process tests...\n");
+    // Test process creation
+    struct proc *p1 = proc_create("test_proc1");
+    TEST("proc_create returns non-NULL", p1 != NULL);
+    TEST("proc_create sets state CREATED or READY", p1 && (p1->state == PROC_CREATED || p1->state == PROC_READY));
+    // Test process table population
+    struct proc *found = proc_find(p1 ? p1->pid : -1);
+    TEST("proc_find locates created process", found == p1);
+    // Test process exit
+    if (p1) {
+        proc_exit(0);
+        TEST("proc_exit sets ZOMBIE", p1->state == PROC_ZOMBIE);
+    }
+    // Test process free
+    if (p1) {
+        proc_free(p1);
+        TEST("proc_free sets UNUSED", p1->state == PROC_UNUSED);
+    }
+    // Test max process limit
+    int count = 0;
+    for (int i = 0; i < MAX_PROCS; i++) {
+        if (proc_create("bulk") != NULL) count++;
+    }
+    TEST("proc_create respects MAX_PROCS", count <= MAX_PROCS);
+    printk("[proc_test_run] Done.\n");
 }
 
 void proc_free(struct proc *p) {
