@@ -132,31 +132,8 @@ int sys_close(int fd) {
 }
 
 pid_t sys_wait(int *status) {
-    if (!current->first_child) // No children at all
-        return -1;
-
-    for (;;) { // Scan children for a zombie
-        struct proc *prev = NULL;
-        struct proc *child = current->first_child;
-        while (child) {
-            if (child->state == PROC_ZOMBIE) { // Checks if ZOMBIE
-                pid_t pid = child->pid;
-                if (status)
-                    *status = child->exit_code;
-                // Remove from sibling list
-                if (prev)
-                    prev->sibling = child->sibling;
-                else
-                    current->first_child = child->sibling;
-                proc_free(child);
-                return pid;
-            }
-            prev = child;
-            child = child->sibling;
-        }
-        
-        proc_sleep(current); // No zombie yet — sleep until a child exits
-    }
+    // Use the new proc_wait implementation for process reaping and blocking
+    return proc_wait(status);
 }
 
 int sys_exec(const char *path, char **argv) {

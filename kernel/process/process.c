@@ -106,25 +106,28 @@ void proc_free(struct proc *p) {
 void proc_exit(int code) {
     if (!current) return;
 
-    // Wake parent if it exists (guard against init having no parent)
+    // Store exit code and mark as ZOMBIE
+    current->exit_code = code;
+    current->state = PROC_ZOMBIE;
+
+    // Wake parent if it exists (so it can call wait)
     if (current->parent)
         proc_wakeup(current->parent);
 
     // Reparent children to init (pid 1) to prevent orphans
-        struct proc *initproc = proc_find(1);
-        struct proc *child = current->first_child;
-        while (child) {
-            struct proc *next_sib = child->sibling;
-            child->parent = initproc;
-            child->sibling = initproc->first_child;
-            initproc->first_child = child;
-            child = next_sib;
-        }
+    struct proc *initproc = proc_find(1);
+    struct proc *child = current->first_child;
+    while (child) {
+        struct proc *next_sib = child->sibling;
+        child->parent = initproc;
+        child->sibling = initproc->first_child;
+        initproc->first_child = child;
+        child = next_sib;
+    }
     current->first_child = NULL;
-    // free_user_pgtb() // Placeholder for when user-mode exists
 
-    current->exit_code = code;
-    current->state = PROC_ZOMBIE;
+    // Do not free process here; wait for parent to reap via wait()
+
     schedule();
 }
 
@@ -132,8 +135,35 @@ void proc_kill(struct proc *p) {
     if (p) p->state = PROC_ZOMBIE;
 }
 
-void proc_wait(struct proc *p) {
-    if (p) p->state = PROC_BLOCKED;
+
+// Wait for a child to exit. Returns child's PID, or -1 if no children.
+// If exit_code_out is non-NULL, stores the child's exit code there.
+int proc_wait(int *exit_code_out) {
+    if (!current) return -1;
+    struct proc *child = current->first_child;
+    int have_children = 0;
+    while (1) {
+        child = current->first_child;
+        while (child) {
+            have_children = 1;
+            if (child->state == PROC_ZOMBIE) {
+                int pid = child->pid;
+                if (exit_code_out) *exit_code_out = child->exit_code;
+                // Remove child from parent's child list
+                struct proc **link = &current->first_child;
+                while (*link && *link != child) link = &(*link)->sibling;
+                if (*link == child) *link = child->sibling;
+                // Free child resources
+                proc_free(child);
+                return pid;
+            }
+            child = child->sibling;
+        }
+        if (!have_children) return -1;
+        // Block current process until a child exits
+        current->state = PROC_BLOCKED;
+        schedule();
+    }
 }
 
 void proc_dump(void) {
@@ -357,6 +387,33 @@ void proc_test_run(void) {
         if (proc_alloc() != NULL) count++;
     }
     TEST("proc_alloc respects MAX_PROCS", count <= MAX_PROCS);
+
+    // === Test wait/zombie/exit code ===
+    struct proc *parent = proc_alloc();
+    struct proc *child = proc_alloc();
+    TEST("wait: parent and child alloc", parent && child);
+    if (parent && child) {
+        parent->pid = 100;
+        strncpy(parent->name, "parent", MAX_NAME - 1);
+        parent->state = PROC_CREATED;
+        child->pid = 101;
+        strncpy(child->name, "child", MAX_NAME - 1);
+        child->state = PROC_ZOMBIE;
+        child->exit_code = 42;
+        // Link child to parent
+        child->parent = parent;
+        child->sibling = NULL;
+        parent->first_child = child;
+
+        int exit_code = 0;
+        int waited_pid = proc_wait(&exit_code);
+        TEST("wait: correct pid", waited_pid == 101);
+        TEST("wait: correct exit code", exit_code == 42);
+        // After wait, child should be freed
+        TEST("wait: child reaped", child->state == PROC_UNUSED);
+        // No more children
+        TEST("wait: no more children", parent->first_child == NULL);
+    }
     printk("\n========================================\n");
     printk("    End of Process Tests\n");
     printk("========================================\n\n");
