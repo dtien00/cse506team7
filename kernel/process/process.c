@@ -483,5 +483,36 @@ void proc_test_run(void) {
         proc_free(ep);
     }
     printk("=== End of exec() Tests ===\n\n");
+    printk("=== exec() Live Run: /bin/echo ===\n");
 
+    pid_t child_pid = sys_fork();
+
+    if (child_pid == 0) {
+        // Child: set a 10-tick safety budget (~1 second at 10 MHz).
+        // bin/echo should exit cleanly before this fires, but the
+        // timer will kill the child if it somehow hangs.
+        current->time_slice = 10;
+        current->total_time = 0;
+
+        char *argv[] = { "echo", "hello", "from", "exec", NULL };
+        exec("/bin/echo", argv);
+
+        // exec() failed if we reach here
+        sys_exit(1);
+
+    } else if (child_pid > 0) {
+        // Parent: block in proc_wait until child exits or is timer-killed.
+        // proc_exit() in the child calls proc_wakeup(parent), so the
+        // timer-based kill path above also correctly unblocks us.
+        int exit_status = -1;
+        pid_t reaped = sys_wait(&exit_status);
+
+        TEST("exec echo: child was reaped",  reaped == child_pid);
+        TEST("exec echo: clean exit (0)",    exit_status == 0);
+
+    } else {
+        TEST("exec echo: fork succeeded", 0);  // -1 from sys_fork
+    }
+
+    printk("=== End of exec() Live Run ===\n\n");
 }
