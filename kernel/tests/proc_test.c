@@ -129,10 +129,36 @@ void proc_test_run(void) {
         proc_free(ep);
     }
 
+    printk("=== End of exec() Tests ===\n\n");
+
+    printk("=== exec() Live Run: /bin/echo ===\n");
+
+    pid_t child_pid = sys_fork();
+
+    if (child_pid == 0) {
+        current->time_slice = 10;
+        current->total_time = 0;
+
+        char *argv[] = { "echo", "hello", "from", "exec", NULL };
+        exec("/bin/echo", argv);
+
+        sys_exit(1);
+
+    } else if (child_pid > 0) {
+        int exit_status = -1;
+        pid_t reaped = sys_wait(&exit_status);
+
+        TEST("exec echo: child was reaped",  reaped == child_pid);
+        TEST("exec echo: clean exit (0)",    exit_status == 0);
+
+    } else {
+        TEST("exec echo: fork succeeded", 0);
+    }
+
+    printk("=== End of exec() Live Run ===\n\n");
+
     printk("\n========================================\n");
     printk("  Results: %d passed, %d failed\n", passed, failed);
     printk("========================================\n");
-
-    printk("=== End of exec() Tests ===\n\n");
 
 }
