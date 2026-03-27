@@ -7,7 +7,7 @@
 #include "fs/vfs.h"
 #include "mm/vmm.h"
 #include "mm/pmm.h"
-#include "mm/kmalloc.h"   // added — needed for kmalloc/kfree in exec()
+#include "mm/kmalloc.h"   // needed for kmalloc/kfree in exec()
 #include "types.h"
 #include "string.h"
 #include "elf/elf.h"
@@ -167,9 +167,12 @@ int proc_wait(int *exit_code_out) {
             child = child->sibling;
         }
         if (!have_children) return -1;
-        // Block current process until a child exits
-        current->state = PROC_BLOCKED;
-        schedule();
+        // Block until a child exits.  proc_sleep puts the process into
+        // blocked_queue (via proc_block) so that proc_wakeup() inside
+        // proc_exit() can find and unblock it.  The channel is the current
+        // process pointer itself; proc_exit calls proc_wakeup(child->parent)
+        // which matches any caller that slept on that same address.
+        proc_sleep(current);
     }
 }
 

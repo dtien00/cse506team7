@@ -64,14 +64,21 @@ void proc_test_run(void) {
         child->sibling = NULL;
         parent->first_child = child;
 
+        // proc_wait uses `current` as the parent; set it for the duration
+        // of the test (current is NULL throughout the test suite).
+        struct proc *wait_saved = current;
+        current = parent;
+
         int exit_code = 0;
         int waited_pid = proc_wait(&exit_code);
         TEST("wait: correct pid", waited_pid == 101);
         TEST("wait: correct exit code", exit_code == 42);
         // After wait, child should be freed
         TEST("wait: child reaped", child->state == PROC_UNUSED);
-        // No more children
-        TEST("wait: no more children", parent->first_child == NULL);
+        // No more children — proc_wait already cleared first_child
+        TEST("wait: no more children", proc_wait(NULL) == -1);
+
+        current = wait_saved;
     }
     printk("\n========================================\n");
     printk("    End of Process Tests\n");
@@ -124,11 +131,16 @@ void proc_test_run(void) {
         TEST("exec: pagetable allocated", ep->pagetable != NULL);
 
         current = saved;
-        // exec() called vmm_switch() internally; restore SATP to the
-        // original process's page table before freeing ep's page table,
-        // otherwise SATP points to freed memory.
-        if (saved && saved->pagetable)
-            vmm_switch(saved->pagetable);
+        // exec() called vmm_switch() internally; restore SATP before
+        // freeing ep's page table, otherwise SATP points to freed memory.
+        // When saved is NULL (current was NULL before this test) fall back
+        // to the kernel page table so kernel code keeps working.
+        {
+            pagetable_t restore_pt = (saved && saved->pagetable)
+                                     ? saved->pagetable
+                                     : vmm_kernel_pagetable();
+            vmm_switch(restore_pt);
+        }
         // Free the pagetable (don't schedule the process)
         vmm_free_pagetable(ep->pagetable);
         proc_free(ep);
@@ -138,27 +150,37 @@ void proc_test_run(void) {
 
     printk("=== exec() Live Run: /bin/echo ===\n");
 
-    pid_t child_pid = sys_fork();
+    // current is NULL throughout the test suite (proc_init sets it to NULL).
+    // sys_fork() and sys_wait() both require a valid current process.
+    // Use the init process (pid 1): proc_init already loaded /bin/echo into
+    // it via exec(), so any child forked from it inherits a ready-to-run
+    // /bin/echo image.  sys_fork() returns only once (to the caller with the
+    // child's PID); the child starts from proc_entry() and reaches user mode
+    // via proc_start_user(), so the `child_pid == 0` branch is intentionally
+    // unreachable here.
+    struct proc *live_saved = current;
+    current = proc_find(1);
 
-    if (child_pid == 0) {
-        current->time_slice = 10;
-        current->total_time = 0;
+    pid_t child_pid = -1;
+    if (!current) {
+        TEST("exec echo: fork succeeded", 0);
+    } else {
+        child_pid = sys_fork();
+    }
 
-        char *argv[] = { "echo", "hello", "from", "exec", NULL };
-        exec("/bin/echo", argv);
-
-        sys_exit(1);
-
-    } else if (child_pid > 0) {
+    if (child_pid > 0) {
         int exit_status = -1;
         pid_t reaped = sys_wait(&exit_status);
 
         TEST("exec echo: child was reaped",  reaped == child_pid);
         TEST("exec echo: clean exit (0)",    exit_status == 0);
 
-    } else {
-        TEST("exec echo: fork succeeded", 0);
+    } else if (child_pid == 0) {
+        // Unreachable with current sys_fork() semantics, but guard it.
+        sys_exit(1);
     }
+
+    current = live_saved;
 
     printk("=== End of exec() Live Run ===\n\n");
 
