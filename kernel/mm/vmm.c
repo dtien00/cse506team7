@@ -273,18 +273,22 @@ static int vmm_copy_pagetable_recursive(pagetable_t child, pagetable_t parent, i
       if (vmm_copy_pagetable_recursive(child_next, parent_next, level - 1, va_base | ((uintptr_t)i << (level * 9 + 12))) < 0)
         return -1;
     } else {
-      // Leaf PTE: user mapping or kernel mapping
-      uintptr_t va = va_base | ((uintptr_t)i << (level * 9 + 12));
-      if (va >= KERNBASE) {
-        // Kernel mapping: just copy the PTE (shared)
-        child[i] = pte;
-      } else {
-        // User mapping: allocate new page, copy contents
+      // Leaf PTE: user page or kernel/device mapping.
+      // Use PTE_U as the discriminator, not the VA range.  Device pages
+      // (e.g. UART at 0x10000000) sit below KERNBASE but are NOT marked
+      // PTE_U; reading their physical addresses as RAM would cause a load
+      // access fault.  Only pages explicitly tagged PTE_U by exec() are
+      // safe to copy.
+      if (pte & PTE_U) {
+        // True user page: allocate a new physical page and copy contents.
         void *newpage = pmm_alloc_page();
         if (!newpage) return -1;
         void *oldpage = (void *)PTE_TO_PA(pte);
         memcpy(newpage, oldpage, PGSIZE);
         child[i] = PA_TO_PTE((uintptr_t)newpage) | (pte & (PTE_R | PTE_W | PTE_X | PTE_U | PTE_V));
+      } else {
+        // Kernel or device mapping: share the PTE as-is.
+        child[i] = pte;
       }
     }
   }
