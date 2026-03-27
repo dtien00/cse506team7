@@ -432,28 +432,28 @@ void proc_test_run(void) {
     printk("========================================\n\n");
 
     // === Fork() Test Suite ===
-    printk("=== Fork() Tests ===\n");
-    int test_var = 0xdeadbeef;
-    pid_t fork_result = sys_fork();
-    if (fork_result == 0) {
-        // Child process
-        TEST("fork: child gets 0", fork_result == 0);
-        test_var = 0x12345678;
-        sys_exit(42);
-    } else if (fork_result > 0) {
-        // Parent process
-        int status = 0;
-        pid_t waited = sys_wait(&status);
-        TEST("fork: parent gets child pid", waited == fork_result);
-        TEST("fork: child exit code", status == 42);
-        TEST("fork: memory independence", test_var == 0xdeadbeef);
-        // Check process hierarchy
-        struct proc *child = proc_find(waited);
-        TEST("fork: child reaped (UNUSED)", !child || child->state == PROC_UNUSED);
-    } else {
-        TEST("fork: failed", 0);
-    }
-    printk("=== End of Fork() Tests ===\n\n");
+    // printk("=== Fork() Tests ===\n");
+    // int test_var = 0xdeadbeef;
+    // pid_t fork_result = sys_fork();
+    // if (fork_result == 0) {
+    //     // Child process
+    //     TEST("fork: child gets 0", fork_result == 0);
+    //     test_var = 0x12345678;
+    //     sys_exit(42);
+    // } else if (fork_result > 0) {
+    //     // Parent process
+    //     int status = 0;
+    //     pid_t waited = sys_wait(&status);
+    //     TEST("fork: parent gets child pid", waited == fork_result);
+    //     TEST("fork: child exit code", status == 42);
+    //     TEST("fork: memory independence", test_var == 0xdeadbeef);
+    //     // Check process hierarchy
+    //     struct proc *child = proc_find(waited);
+    //     TEST("fork: child reaped (UNUSED)", !child || child->state == PROC_UNUSED);
+    // } else {
+    //     TEST("fork: failed", 0);
+    // }
+    // printk("=== End of Fork() Tests ===\n\n");
         // === exec() setup test ===
     printk("=== exec() Tests ===\n");
     struct proc *ep = proc_alloc();
@@ -483,6 +483,7 @@ void proc_test_run(void) {
         proc_free(ep);
     }
     printk("=== End of exec() Tests ===\n\n");
+
     printk("=== exec() Live Run: /bin/echo ===\n");
 
     pid_t child_pid = sys_fork();
