@@ -22,8 +22,9 @@ USER_BIN := $(C_BIN) $(RS_BIN)
 
 # Language-specific kernel object/library
 ifeq ($(KLANG_NORM),c)
-  KERN_C   := $(patsubst %,build/%.o,$(shell find kernel -name '*.c'))
-  KERN_ALL := $(KERN_ASM) $(KERN_C)
+	KERN_C   := $(patsubst %,build/%.o,$(shell find kernel -name '*.c'))
+	KERN_TESTS := $(patsubst %,build/%.o,$(wildcard kernel/tests/*.c))
+	KERN_ALL := $(KERN_ASM) $(KERN_C) $(KERN_TESTS)
 else ifeq ($(KLANG_NORM),rust)
   KERN_LIB := build/rust/riscv64imac-unknown-none-elf/debug/libsbunix.a
   KERN_ALL := $(KERN_ASM) $(KERN_LIB)
