@@ -95,6 +95,9 @@ struct proc* proc_create(const char *name) {
     p->context.sp = (uint64_t)&kstacks[idx][KSTACK_SIZE];
     p->context.ra = (uint64_t)proc_entry;
 
+    // Initialize VMA list
+    vma_init(&p->vma_list);
+
     // User-mode processes allocates a trap_frame to save/restore user registers
     // p->trapframe = (trap_frame *)kmalloc(sizeof(trap_frame));
     // memset(p->trapframe, 0, sizeof(trap_frame));
@@ -105,6 +108,11 @@ struct proc* proc_create(const char *name) {
 
 void proc_free(struct proc *p) {
     if (!p) return;
+    
+    // Free VMA list
+    vma_free_all(p->vma_list);
+    p->vma_list = NULL;
+    
     p->pid = 0;
     p->state = PROC_UNUSED;
     p->next = NULL;
@@ -237,9 +245,12 @@ int exec(const char *path, char *const argv[]) {
         goto fail_file;
     }
 
-    // 3. Create a fresh page table for the new image BEFORE touching anything
+    // 3. Create a fresh page table and VMA list for the new image
     pagetable_t new_pt = vmm_create_pagetable();
     if (!new_pt) goto fail_file;
+    
+    struct vm_area *new_vma_list = NULL;
+    vma_init(&new_vma_list);
 
     // 4. Load each PT_LOAD segment into the new page table
     for (int i = 0; i < ehdr.e_phnum; i++) {
@@ -273,21 +284,34 @@ int exec(const char *path, char *const argv[]) {
 
         // Seek to segment data in file, then copy into the mapped PA range
         if (vfs_lseek(f, (size_t)phdr.p_offset, SEEK_SET) < 0)
-            goto fail_pt;
+            goto fail_vma;
         size_t remaining = (size_t)phdr.p_filesz;
         uintptr_t va     = phdr.p_vaddr;
         while (remaining > 0) {
             // Translate user VA → physical address (identity-mapped in kernel)
             uintptr_t pa = vmm_translate(new_pt, va);
-            if (!pa) goto fail_pt;
+            if (!pa) goto fail_vma;
             size_t chunk = PGSIZE - (va & (PGSIZE - 1));
             if (chunk > remaining) chunk = remaining;
             if (vfs_read(f, (void *)pa, chunk) != (int)chunk)
-                goto fail_pt;
+                goto fail_vma;
             va        += chunk;
             remaining -= chunk;
         }
         // p_memsz > p_filesz (BSS) is already zero from memset above
+        
+        // Create VMA for this segment
+        uint32_t vma_prot = 0;
+        if (phdr.p_flags & PF_R) vma_prot |= VMA_PROT_READ;
+        if (phdr.p_flags & PF_W) vma_prot |= VMA_PROT_WRITE;
+        if (phdr.p_flags & PF_X) vma_prot |= VMA_PROT_EXEC;
+        
+        struct vm_area *seg_vma = vma_create(seg_start, seg_end, vma_prot, VMA_PRIVATE, VMA_TYPE_FILE);
+        if (!seg_vma) goto fail_vma;
+        if (vma_insert(&new_vma_list, seg_vma) != 0) {
+            vma_free(seg_vma);
+            goto fail_vma;
+        }
     }
 
     // 5. Allocate and map user stack (just below KERNBASE)
@@ -295,12 +319,23 @@ int exec(const char *path, char *const argv[]) {
     uintptr_t stack_base = stack_top - USTACK_SIZE;
     for (uintptr_t va = stack_base; va < stack_top; va += PGSIZE) {
         void *pg = pmm_alloc_page();
-        if (!pg) goto fail_pt;
+        if (!pg) goto fail_vma;
         memset(pg, 0, PGSIZE);
         if (vmm_map(new_pt, va, (uintptr_t)pg, PTE_R | PTE_W | PTE_U) < 0) {
             pmm_free_page(pg);
-            goto fail_pt;
+            goto fail_vma;
         }
+    }
+    
+    // Create VMA for the stack
+    struct vm_area *stack_vma = vma_create(stack_base, stack_top,
+                                           VMA_PROT_READ | VMA_PROT_WRITE,
+                                           VMA_PRIVATE | VMA_GROWSDOWN,
+                                           VMA_TYPE_STACK);
+    if (!stack_vma) goto fail_vma;
+    if (vma_insert(&new_vma_list, stack_vma) != 0) {
+        vma_free(stack_vma);
+        goto fail_vma;
     }
 
     // 6. Copy argv strings onto the user stack via physical addresses
@@ -308,7 +343,7 @@ int exec(const char *path, char *const argv[]) {
     while (argv && argv[argc]) argc++;
 
     uintptr_t *argv_uvas = (uintptr_t *)kmalloc((size_t)(argc + 1) * sizeof(uintptr_t));
-    if (!argv_uvas) goto fail_pt;
+    if (!argv_uvas) goto fail_vma;
 
     uintptr_t sp = stack_top;
     for (int i = argc - 1; i >= 0; i--) {
@@ -335,7 +370,10 @@ int exec(const char *path, char *const argv[]) {
 
     // 7. Commit: discard old address space, install the new one
     vmm_free_pagetable(current->pagetable);
+    vma_free_all(current->vma_list);
+    
     current->pagetable = new_pt;
+    current->vma_list = new_vma_list;
     current->sz        = stack_top;
     current->satp      = MAKE_SATP((uintptr_t)new_pt);
 
@@ -361,6 +399,8 @@ int exec(const char *path, char *const argv[]) {
     vfs_close(f);
     return 0;
 
+fail_vma:
+    vma_free_all(new_vma_list);
 fail_pt:
     vmm_free_pagetable(new_pt);
 fail_file:

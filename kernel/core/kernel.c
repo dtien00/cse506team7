@@ -98,11 +98,12 @@ void boot(uint64_t hart_id, uint64_t dtb) {
 
     #ifdef RUN_TESTS
         run_all_tests();
-    #else
-        // Hand off to the scheduler; runs the init process (pid 1).
-        schedule();
-        while (1)
-            asm volatile("wfi");
     #endif
+
+    // Hand off to the scheduler; runs the init process (pid 1).
+    schedule();
+    while (1)
+        asm volatile("wfi");
+
 }
 
