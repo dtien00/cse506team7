@@ -13,8 +13,8 @@ OBJCOPY := $(CROSS)objcopy
 CFLAGS  := -gdwarf-4 -Wall -Werror -Os -ffreestanding -fno-builtin -nostdlib -nostdinc -isystem $(shell $(CC) -print-file-name=include) -mcmodel=medany -march=rv64imac_zicsr_zifencei -mabi=lp64 -ffunction-sections -fdata-sections -fno-tree-switch-conversion -Ikernel/include -Ilibc/include
 RUSTFLAGS := --target riscv64imac-unknown-none-elf -C panic=abort -C linker=$(CC) -C code-model=medium -C link-arg=-nostartfiles -C link-arg=-march=rv64imac -C link-arg=-mabi=lp64
 
-# KERN_ASM := $(patsubst %,build/%.o,$(wildcard kernel/*.S))
-KERN_ASM := $(patsubst %,build/%.o,$(shell find kernel -name '*.S'))
+KERN_ASM := $(patsubst %,build/%.o,$(wildcard kernel/*.S))
+# KERN_ASM := $(patsubst %,build/%.o,$(shell find kernel -name '*.S'))
 LIBC_OBJ := $(patsubst %,build/%.o,$(filter-out libc/crt.S,$(wildcard libc/*.c libc/*.S)))
 C_BIN    := $(addprefix build/rootfs/bin/,$(shell ls -d bin/*/*.c 2>/dev/null | cut -d/ -f2 | sort -u))
 RS_BIN   := $(addprefix build/rootfs/bin/,$(shell ls -d bin/*/*.rs 2>/dev/null | cut -d/ -f2 | sort -u))

@@ -6,12 +6,12 @@
 #include "process/process.h"
 #include "trap/syscall.h"
 #include "arch/riscv.h"
-#include "tests/test.h"
 #include "fs/vfs.h"
 #include "fs/tarfs.h"
 #include "fs/tmpfs.h"
 #include "kernel/types.h"
 
+#include "tests/test.h"
 
 // External symbols from linker script
 extern char _kernel_end[];
@@ -28,7 +28,7 @@ void run_all_tests(void) {
     sched_idle_test_run();
     proc_test_run();
 
-    printk("%d passed, %d failed\n", passed, failed);
+    // printk("%d passed, %d failed\n", passed, failed);
 }
 
 void boot(uint64_t hart_id, uint64_t dtb) {
@@ -77,6 +77,18 @@ void boot(uint64_t hart_id, uint64_t dtb) {
     proc_init();
 
     interrupts_on();
+    printk("Turned on global interrupts. Now waiting for interrupts...\n");
+
+    // Initialize VFS and filesystems
+    vfs_init();
+    tarfs_init();   // Parses TAR and registers with VFS
+    tmpfs_init();   // Registers tmpfs with VFS
+
+    // Mount root filesystem (tarfs)
+    vfs_mount(NULL, "/", "tarfs");
+
+    // Mount tmpfs at /tmp
+    vfs_mount(NULL, "/tmp", "tmpfs");
 
     printk("\n");
     printk("========================================\n");
