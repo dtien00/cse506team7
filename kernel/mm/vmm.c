@@ -168,22 +168,28 @@ pagetable_t vmm_create_pagetable(void) {
     return pt;
 }
 
-static void vmm_free_pagetable_recursive(pagetable_t pagetable, int level) {
+static void vmm_free_pagetable_recursive(pagetable_t pagetable, pagetable_t kernel_level_pt, int level) {
     if (level > 0) {
-        pagetable_t kpt = vmm_kernel_pagetable();
-
         for (int i = 0; i < 512; i++) {
             uint64_t pte = pagetable[i];
             if (!((pte & PTE_V) && (pte & (PTE_R | PTE_W | PTE_X)) == 0))
                 continue;
 
-            // Skip entries shared with the kernel page table — they are
-            // owned by the kernel and must not be freed here.
-            if (kpt && pagetable[i] == kpt[i])
+            // Skip entries that are identical to the kernel's entry at this
+            // same level — they are shared and must not be freed here.
+            if (kernel_level_pt && pte == kernel_level_pt[i])
                 continue;
 
-            pagetable_t child = (pagetable_t)PTE_TO_PA(pte);
-            vmm_free_pagetable_recursive(child, level - 1);
+            // Determine the kernel's corresponding child table (if any) so
+            // the next recursion level can perform the same shared-entry check.
+            pagetable_t kernel_child = NULL;
+            if (kernel_level_pt) {
+                uint64_t kpte = kernel_level_pt[i];
+                if ((kpte & PTE_V) && !(kpte & (PTE_R | PTE_W | PTE_X)))
+                    kernel_child = (pagetable_t)PTE_TO_PA(kpte);
+            }
+
+            vmm_free_pagetable_recursive((pagetable_t)PTE_TO_PA(pte), kernel_child, level - 1);
         }
     }
     pmm_free_page(pagetable);
@@ -191,7 +197,7 @@ static void vmm_free_pagetable_recursive(pagetable_t pagetable, int level) {
 
 void vmm_free_pagetable(pagetable_t pagetable) {
     if (pagetable == NULL) return;
-    vmm_free_pagetable_recursive(pagetable, 2);
+    vmm_free_pagetable_recursive(pagetable, vmm_kernel_pagetable(), 2);
 }
 
 pagetable_t vmm_kernel_pagetable(void) {

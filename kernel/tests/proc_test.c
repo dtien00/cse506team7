@@ -124,6 +124,11 @@ void proc_test_run(void) {
         TEST("exec: pagetable allocated", ep->pagetable != NULL);
 
         current = saved;
+        // exec() called vmm_switch() internally; restore SATP to the
+        // original process's page table before freeing ep's page table,
+        // otherwise SATP points to freed memory.
+        if (saved && saved->pagetable)
+            vmm_switch(saved->pagetable);
         // Free the pagetable (don't schedule the process)
         vmm_free_pagetable(ep->pagetable);
         proc_free(ep);
