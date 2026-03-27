@@ -150,11 +150,10 @@ mount_t *vfs_find_mount(const char *path) {
     mount_t *best_match = NULL;
     size_t best_len = 0;
 
-    // Find the longest matching mount point
     mount_t *curr = mounts;
     while (curr) {
         size_t mnt_len = strlen(curr->mountpoint);
-        
+
         // Check if path starts with this mount point
         int matches = 1;
         for (size_t i = 0; i < mnt_len; i++) {
@@ -164,10 +163,13 @@ mount_t *vfs_find_mount(const char *path) {
             }
         }
 
-        // Must be exact match or followed by '/' or end of string
         if (matches && mnt_len > best_len) {
-            if (path[mnt_len] == '/' || path[mnt_len] == '\0' || 
-                curr->mountpoint[mnt_len - 1] == '/') {
+            // Root mount "/" matches any absolute path
+            if (mnt_len == 1 && curr->mountpoint[0] == '/') {
+                best_match = curr;
+                best_len = mnt_len;
+            // Non-root mount must be followed by '/' or end of string
+            } else if (path[mnt_len] == '/' || path[mnt_len] == '\0') {
                 best_match = curr;
                 best_len = mnt_len;
             }

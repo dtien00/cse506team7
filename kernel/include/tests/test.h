@@ -1,8 +1,6 @@
 #pragma once
 
-extern int passed;
-extern int failed;
-
+// PASSED AND FAILED MUST BE DEFINED IN THE TEST FILES THEMSELVES, NOT HERE, WHEN TEST IS USED
 #define TEST(name, cond)                                    \
     do {                                                    \
         if (cond) {                                         \

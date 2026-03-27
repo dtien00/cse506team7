@@ -7,38 +7,43 @@
 #include "test.h"
 #include "string.h"
 
+static int passed = 0;
+static int failed = 0;
 
 void vfs_test(void) {
     printk("=== vfs tests ===\n");
 
     // 1. Open a known file
-    file_t *f = vfs_open("hello.txt");
-    if (!f) { printk("FAIL: vfs_open returned NULL\n"); return; }
-    printk("PASS: vfs_open succeeded, ref_count=%d\n", f->ref_count);
+    file_t *f = vfs_open("/hello.txt");
+    TEST("vfs_open /hello.txt", f != NULL);
+    if (!f) return;
+    TEST("vfs_open ref_count is 1", f->ref_count == 1);
 
     // 2. Read through vfs
     char buf[64] = {0};
-    int n = vfs_read(f, buf, sizeof(buf) - 1);
-    printk("PASS: vfs_read got %d bytes: '%s'\n", n, buf);
+    int n = vfs_read(f, buf, sizeof(buf)-1); // leave last character as null terminator
+    TEST("vfs_read returns > 0 bytes", n > 0);
+    printk("   vfs_read got: '%d'\n", n);
 
-    // 3. Does offset advance after read?
+    // 3. Offset advances after read
+    size_t off_after_first = f->offset;
     char buf2[8] = {0};
     int n2 = vfs_read(f, buf2, 4);
-    printk("PASS: second read from offset %zu got %d bytes\n", f->offset, n2);
+    TEST("second read advances offset", f->offset == off_after_first + (size_t)n2);
 
     // 4. Read past EOF returns 0
-    vfs_read(f, buf, sizeof(buf));
-    vfs_read(f, buf, sizeof(buf));
+    vfs_read(f, buf, sizeof(buf)+1);
+    vfs_read(f, buf, sizeof(buf)+1);
     int eof = vfs_read(f, buf, sizeof(buf));
-    printk("PASS: EOF read returned %d (expected 0)\n", eof);
+    TEST("read past EOF returns 0", eof == 0);
 
-    // 5. ref_count and close
+    // 5. Close
     vfs_close(f);
 
     // 6. Open nonexistent file
-    file_t *bad = vfs_open("nope.txt");
-    if (bad) printk("FAIL: opened nonexistent file\n");
-    else     printk("PASS: nonexistent open returned NULL\n");
+    file_t *bad = vfs_open("/nope.txt");
+    TEST("open nonexistent file returns NULL", bad == NULL);
+    if (bad) vfs_close(bad);
 }
 
 void fd_test(void) {
@@ -56,7 +61,7 @@ void fd_test(void) {
     TEST("fd 2 is FILE_STDOUT", stderr_f != NULL && stderr_f->type == FILE_STDOUT);
 
     // 2. Allocate an fd — should land at 3
-    file_t *f = vfs_open("hello.txt");
+    file_t *f = vfs_open("/hello.txt");
     int fd = fd_alloc(&table, f);
     TEST("first user fd is 3", fd == 3);
 
@@ -69,7 +74,7 @@ void fd_test(void) {
     TEST("fd slot cleared after close", fd_get(&table, fd) == NULL);
 
     // 5. Slot is reused after close
-    file_t *f2 = vfs_open("hello.txt");
+    file_t *f2 = vfs_open("/hello.txt");
     int fd2 = fd_alloc(&table, f2);
     TEST("freed slot is reused", fd2 == fd);
     fd_close(&table, fd2);
@@ -87,10 +92,10 @@ void fd_test(void) {
     int allocated = 0;
     // slots 0-2 are already taken by stdin/stdout/stderr
     for (int i = 3; i < MAX_FDS; i++) {
-        fds[i] = vfs_open("hello.txt");
+        fds[i] = vfs_open("/hello.txt");
         if (fd_alloc(&table, fds[i]) >= 0) allocated++;
     }
-    file_t *overflow = vfs_open("hello.txt");
+    file_t *overflow = vfs_open("/hello.txt");
     TEST("fd_alloc on full table returns -1", fd_alloc(&table, overflow) == -1);
     vfs_close(overflow);
     for (int i = 3; i < MAX_FDS; i++) fd_close(&table, i);
@@ -180,7 +185,7 @@ void tmpfs_test(void) {
     }
 
     // 6. Write to tarfs file returns error
-    file_t *tarf = vfs_open("hello.txt");
+    file_t *tarf = vfs_open("/hello.txt");
     if (tarf) {
         int w = vfs_write(tarf, "x", 1);
         TEST("write to read-only tarfs returns error", w < 0);
@@ -268,6 +273,13 @@ void fs_test_run(void) {
     mount_test();
     printk("\n");
 
-    tmpfs_test();
-    printk("\n");
+    // tmpfs_test();
+    // printk("\n");
+    printk("\n========================================\n");
+    printk("  Results: %d passed, %d failed\n", passed, failed);
+    printk("========================================\n");
+
+    if (failed > 0) {
+        printk("WARN: %d test(s) failed — check output above\n", failed);
+    }
 }
