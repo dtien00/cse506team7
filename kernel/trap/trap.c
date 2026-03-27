@@ -49,6 +49,13 @@ static void handle_interrupt(trap_frame *frame) {
 }
 
 void handle_exception(trap_frame *frame) {
+    // Handle U-mode syscalls silently — they are normal, not errors.
+    if (frame->scause == SCAUSE_ECALL_FROM_U) {
+        syscall_handler(frame);
+        frame->sepc += 4;
+        return;
+    }
+
     printk("\nEXCEPTION: scause=0x%p stval=0x%p sepc=0x%p\n", frame->scause, frame->stval, frame->sepc);
 
     switch (frame->scause) {
@@ -77,11 +84,7 @@ void handle_exception(trap_frame *frame) {
             printk("  Store access fault\n");
             break;
         case SCAUSE_ECALL_FROM_U:
-            // Handle system call
-            syscall_handler(frame);
-            // Advance PC past ecall instruction (assembly restores sepc from frame)
-            frame->sepc += 4;
-            return; // Don't panic, return normally
+            // Handled above; unreachable.
         case SCAUSE_ECALL_FROM_S:
             printk("  System call from supervisor mode\n");
             break;
