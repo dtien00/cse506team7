@@ -19,7 +19,14 @@ trap_entry:
     // each register is 64 bits or 8 bytes in the RV64
 
     sd ra, 0(sp) //return address register
-    sd sp, 8(sp)      /* save old sp (debuggable) though we overwrite sp anyway */
+    // Save t0 first (its original value) so we can use it as scratch below.
+    sd t0, 192(sp)
+    // For U-mode traps the user sp was swapped into sscratch at entry; read
+    // it back so the trapframe shows the real user sp, not the kernel sp.
+    // For S-mode traps sscratch holds the kernel sp (restored at line 13),
+    // which is the correct sp value to record for an S-mode trap.
+    csrr t0, sscratch
+    sd t0, 8(sp)
     sd gp, 16(sp) //global pointer for C compiler use
     sd tp, 24(sp) //thread pointer for C compiler use
 
@@ -45,7 +52,7 @@ trap_entry:
     sd s10, 176(sp)
     sd s11, 184(sp)
 
-    sd t0, 192(sp) //temporary registers
+    // t0 already saved at 192 above; continue with remaining temporaries
     sd t1, 200(sp)
     sd t2, 208(sp)
     sd t3, 216(sp)
