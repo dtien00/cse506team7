@@ -6,26 +6,33 @@
 #include "arch/riscv.h"
 #include "fs/vfs.h"
 #include "mm/vmm.h"
-#include "mm/pmm.h" // for pmm_alloc_page
 #include "mm/pmm.h"
-#include "process/process.h"
+#include "mm/kmalloc.h"   // added — needed for kmalloc/kfree in exec()
 #include "types.h"
 #include "string.h"
 #include "tests/test.h"
+#include "elf/elf.h"
+#include "trap/syscall.h"
+
 #ifndef SEEK_SET
 #define SEEK_SET 0
 #endif
-#include "elf/elf.h"
-#include "arch/riscv.h" // for KERNBASE, PHYSTOP
-#include "trap/syscall.h"
+
+
+/* Forward declaration — defined later in this file. */
+void proc_start_user(struct proc *p, uint64_t entry, uint64_t user_sp);
 
 /**
  * Default entry point for new kernel threads.
  * When swtch restores ra to this function, the new process starts here.
+ * If exec() has already loaded a user image (current->pc != 0), transfer
+ * control to user mode via sret; otherwise spin waiting for work.
  */
 static void proc_entry(void) {
     interrupts_on();
     printk("[proc %d] started\n", current->pid);
+    if (current->pc != 0)
+        proc_start_user(current, current->pc, current->sp);
     while (1)
         asm volatile("wfi");
 }
@@ -189,176 +196,181 @@ void proc_dump(void) {
 }
 
 void proc_start_user(struct proc *p, uint64_t entry, uint64_t user_sp) {
-    // SPP=0 means sret goes to U-mode
-    // SPIE=1 means interrupts re-enable after sret
+    // SPP=0 → sret returns to U-mode; SPIE=1 → interrupts enabled after sret
     write_csr(sstatus, (read_csr(sstatus) & ~SSTATUS_SPP) | SSTATUS_SPIE);
-    
-    // User entry point
     write_csr(sepc, entry);
-    
-    // Set sscratch to this process's kernel stack top
+
+    // Point sscratch at this process's kernel stack top so the next
+    // trap from U-mode can find the kernel stack.
     int idx = p - proctab;
     write_csr(sscratch, (uint64_t)&kstacks[idx][KSTACK_SIZE]);
-    
-    // Switch to user page table
-    vmm_switch(p->pagetable);
-    
-    // Set user stack pointer and sret
-    // (done in assembly — load user sp, then sret)
-}
 
+    // Switch to the process's page table.
+    // Kernel mappings are shared in every page table, so this is safe.
+    vmm_switch(p->pagetable);
+
+    // Load argument registers (set by exec) then switch stack and sret.
+    // Using explicit register variables ensures GCC places values in the
+    // correct architectural registers before the sret instruction fires.
+    register uint64_t a0_r asm("a0") = p->regs[10]; /* argc */
+    register uint64_t a1_r asm("a1") = p->regs[11]; /* argv */
+    asm volatile(
+        "mv sp, %2\n"
+        "sret\n"
+        :
+        : "r"(a0_r), "r"(a1_r), "r"(user_sp)
+        : "memory"
+    );
+    __builtin_unreachable();
+}
 int exec(const char *path, char *const argv[]) {
-    // 1. Open the binary file from the filesystem
+    // 1. Open the binary
     file_t *f = vfs_open(path);
     if (!f) return -1;
 
-    // Read ELF header into struct
-    elf_header_t header;
-    if (vfs_read(f, &header, sizeof(header)) != sizeof(header)) {
-        vfs_close(f);
-        return -1; // Failed to read header
+    // 2. Read and validate the ELF64 header
+    elf_header_t ehdr;
+    if (vfs_read(f, &ehdr, sizeof(ehdr)) != (int)sizeof(ehdr))
+        goto fail_file;
+    if (ehdr.e_ident[0] != 0x7F || ehdr.e_ident[1] != 'E' ||
+        ehdr.e_ident[2] != 'L'  || ehdr.e_ident[3] != 'F' ||
+        ehdr.e_ident[4] != 2 /* ELFCLASS64 */) {
+        goto fail_file;
     }
 
-    // 2. Read and parse the binary (e.g., ELF header)
-    //    - Validate ELF magic
-    if (header.e_ident[0] != 0x7F ||
-        header.e_ident[1] != 'E' ||
-        header.e_ident[2] != 'L' ||
-        header.e_ident[3] != 'F') {
-        // Not an ELF file
-        return -1;
-    }
-    // Seek to the program header table
-    if (vfs_lseek(f, header.e_phoff, 0) < 0) { // 0 = SEEK_SET
-        vfs_close(f);
-        return -1;
-    }
-
-    // For each program header
-    for (int i = 0; i < header.e_phnum; i++) {
-        elf_prog_header_t ph;
-        if (vfs_read(f, &ph, sizeof(ph)) != sizeof(ph)) {
-            vfs_close(f);
-            return -1;
-        }
-
-        if (ph.p_type != PT_LOAD)
-            continue; // Only loadable segments
-
-        // Allocate and map memory for the segment
-        size_t seg_start = ph.p_vaddr & ~(PGSIZE - 1);
-        size_t seg_end = ((ph.p_vaddr + ph.p_memsz + PGSIZE - 1) & ~(PGSIZE - 1));
-        for (size_t va = seg_start; va < seg_end; va += PGSIZE) {
-            void *page = pmm_alloc_page();
-            if (!page) {
-                vfs_close(f);
-                return -1;
-            }
-            if (vmm_map(current->pagetable, va, (uintptr_t)page, PTE_W | PTE_R | PTE_X | PTE_U) < 0) {
-                vfs_close(f);
-                return -1;
-            }
-        }
-
-        // Seek to segment offset in file
-        if (vfs_lseek(f, ph.p_offset, SEEK_SET) < 0) {
-            vfs_close(f);
-            return -1;
-        }
-
-        // Read segment data into memory
-        if (vfs_read(f, (void*)(uintptr_t)ph.p_vaddr, ph.p_filesz) != (int)ph.p_filesz) {
-            vfs_close(f);
-            return -1;
-        }
-
-        // Zero out the rest if p_memsz > p_filesz
-        if (ph.p_memsz > ph.p_filesz) {
-            memset((void*)(uintptr_t)(ph.p_vaddr + ph.p_filesz), 0, ph.p_memsz - ph.p_filesz);
-        }
-    }
-    //    - For each loadable segment, allocate memory and load data
-
-    // Unmap old user memory (except kernel stack)
-    vmm_unmap_range(current->pagetable, KERNBASE, KERNBASE - PHYSTOP);
-
-    // Create new pagetable
+    // 3. Create a fresh page table for the new image BEFORE touching anything
     pagetable_t new_pt = vmm_create_pagetable();
-    if (!new_pt) return -1;
+    if (!new_pt) goto fail_file;
 
-    // (Optional) Map kernel memory into new_pt
-    for (uintptr_t va = KERNBASE; va < PHYSTOP; va += PGSIZE) {
-        if (vmm_map(new_pt, va, va, PTE_R | PTE_W | PTE_X) < 0) {
-            // handle error
+    // 4. Load each PT_LOAD segment into the new page table
+    for (int i = 0; i < ehdr.e_phnum; i++) {
+        elf_prog_header_t phdr;
+        if (vfs_lseek(f, (size_t)(ehdr.e_phoff + (uint64_t)i * sizeof(phdr)), SEEK_SET) < 0)
+            goto fail_pt;
+        if (vfs_read(f, &phdr, sizeof(phdr)) != (int)sizeof(phdr))
+            goto fail_pt;
+        if (phdr.p_type != PT_LOAD)
+            continue;
+
+        // Derive PTE permission bits from ELF segment flags
+        uint64_t perm = PTE_U;
+        if (phdr.p_flags & PF_R) perm |= PTE_R;
+        if (phdr.p_flags & PF_W) perm |= PTE_W;
+        if (phdr.p_flags & PF_X) perm |= PTE_X;
+
+        uintptr_t seg_start = PGROUNDDOWN(phdr.p_vaddr);
+        uintptr_t seg_end   = PGROUNDUP(phdr.p_vaddr + phdr.p_memsz);
+
+        // Allocate and map physical pages; zero them so BSS is handled
+        for (uintptr_t va = seg_start; va < seg_end; va += PGSIZE) {
+            void *pg = pmm_alloc_page();
+            if (!pg) goto fail_pt;
+            memset(pg, 0, PGSIZE);
+            if (vmm_map(new_pt, va, (uintptr_t)pg, perm) < 0) {
+                pmm_free_page(pg);
+                goto fail_pt;
+            }
         }
+
+        // Seek to segment data in file, then copy into the mapped PA range
+        if (vfs_lseek(f, (size_t)phdr.p_offset, SEEK_SET) < 0)
+            goto fail_pt;
+        size_t remaining = (size_t)phdr.p_filesz;
+        uintptr_t va     = phdr.p_vaddr;
+        while (remaining > 0) {
+            // Translate user VA → physical address (identity-mapped in kernel)
+            uintptr_t pa = vmm_translate(new_pt, va);
+            if (!pa) goto fail_pt;
+            size_t chunk = PGSIZE - (va & (PGSIZE - 1));
+            if (chunk > remaining) chunk = remaining;
+            if (vfs_read(f, (void *)pa, chunk) != (int)chunk)
+                goto fail_pt;
+            va        += chunk;
+            remaining -= chunk;
+        }
+        // p_memsz > p_filesz (BSS) is already zero from memset above
     }
 
-    // Switch to new pagetable
-    vmm_free_pagetable(current->pagetable);
-    current->pagetable = new_pt;
-
-    // Copy argv to the new user stack
-    // Allocate and map stack
-    uintptr_t stack_top = KERNBASE;
+    // 5. Allocate and map user stack (just below KERNBASE)
+    uintptr_t stack_top  = KERNBASE;
     uintptr_t stack_base = stack_top - USTACK_SIZE;
     for (uintptr_t va = stack_base; va < stack_top; va += PGSIZE) {
-        void *page = pmm_alloc_page();
-        vmm_map(current->pagetable, va, (uintptr_t)page, PTE_W | PTE_R | PTE_U);
+        void *pg = pmm_alloc_page();
+        if (!pg) goto fail_pt;
+        memset(pg, 0, PGSIZE);
+        if (vmm_map(new_pt, va, (uintptr_t)pg, PTE_R | PTE_W | PTE_U) < 0) {
+            pmm_free_page(pg);
+            goto fail_pt;
+        }
     }
 
-    // Set SP to top of stack
-    current->sp = stack_top;
-
-    // (Optional) Copy argv to stack
-    uintptr_t sp = KERNBASE; // Top of stack start position
-    
+    // 6. Copy argv strings onto the user stack via physical addresses
     int argc = 0;
-    while (argv[argc] != NULL) argc++;
-    uintptr_t argv_ptrs[argc];
+    while (argv && argv[argc]) argc++;
 
-    // Copy strings onto stack
-    for (int i = argc - 1; i>=0; i--) {
+    uintptr_t *argv_uvas = (uintptr_t *)kmalloc((size_t)(argc + 1) * sizeof(uintptr_t));
+    if (!argv_uvas) goto fail_pt;
+
+    uintptr_t sp = stack_top;
+    for (int i = argc - 1; i >= 0; i--) {
         size_t len = strlen(argv[i]) + 1;
         sp -= len;
-        memcpy((void*)sp, argv[i], len);
-        argv_ptrs[i] = sp;
+        uintptr_t pa = vmm_translate(new_pt, sp);
+        if (!pa) { kfree(argv_uvas); goto fail_pt; }
+        memcpy((void *)pa, argv[i], len);
+        argv_uvas[i] = sp;   // user-space VA of this string
     }
+    argv_uvas[argc] = 0;     // NULL terminator
 
-    // Align stack pointer to 16 bytes, in case
-    sp &= ~0xF;
+    // Align sp to 16 bytes, then push the argv pointer array
+    sp &= ~(uintptr_t)0xF;
+    sp -= (uint64_t)(argc + 1) * sizeof(uintptr_t);
+    for (int i = 0; i <= argc; i++) {
+        uintptr_t slot_va = sp + (uint64_t)i * sizeof(uintptr_t);
+        uintptr_t slot_pa = vmm_translate(new_pt, slot_va);
+        if (!slot_pa) { kfree(argv_uvas); goto fail_pt; }
+        *(uintptr_t *)slot_pa = argv_uvas[i];
+    }
+    uintptr_t user_argv = sp;
+    kfree(argv_uvas);
 
-    // Copy argv pointers onto stack
-    sp -= (argc + 1) * sizeof(uintptr_t);
-    uintptr_t *user_argv = (uintptr_t*)sp;
-    for (int i = 0; i <argc; i++)
-        user_argv[i] = argv_ptrs[i];
-    user_argv[argc] = 0; // NULL terminator '\0'
+    // 7. Commit: discard old address space, install the new one
+    vmm_free_pagetable(current->pagetable);
+    current->pagetable = new_pt;
+    current->sz        = stack_top;
+    current->satp      = MAKE_SATP((uintptr_t)new_pt);
 
-    // Configure registers for user entry (risc-v: a0 = argc, a1 = argv)
-    current->sp = sp;
-    current->pc = header.e_entry;
-    current->regs[10] = argc;   // a0
-    current->regs[11] = sp;     // a1
-    
+    // 8. Write entry point and argument registers into the live trapframe
+    //    (set by syscall_handler before calling exec; NULL at boot-time)
+    if (current->trapframe) {
+        current->trapframe->sepc    = ehdr.e_entry;
+        current->trapframe->sstatus = (current->trapframe->sstatus & ~SSTATUS_SPP)
+                                      | SSTATUS_SPIE;
+        current->trapframe->sp      = sp;
+        current->trapframe->a0      = (uint64_t)argc;
+        current->trapframe->a1      = user_argv;
+    }
+    // Fallback proc fields for boot-time exec (no trapframe yet)
+    current->pc       = ehdr.e_entry;
+    current->sp       = sp;
+    current->regs[10] = (uint64_t)argc;
+    current->regs[11] = user_argv;
 
-    // Set PC to ELF entry point
-    current->pc = header.e_entry;
+    // Switch to the new page table
+    vmm_switch(current->pagetable);
 
-    // 5. Set up the process's registers to start at the new entry point
-    //    - Set PC to entry point
-    //    - Set SP to top of new user stack
-
-    // 6. Close the file
     vfs_close(f);
+    return 0;
 
-    // 7. Return to user mode at the new program's entry point (does not return)
-    //    - This may require a special return or context switch
-
-    return 0; // Only reached on error
+fail_pt:
+    vmm_free_pagetable(new_pt);
+fail_file:
+    vfs_close(f);
+    return -1;
 }
 
-// Test
 
+// Test
 
 void proc_test_run(void) {
     printk("\n========================================\n");
@@ -442,4 +454,34 @@ void proc_test_run(void) {
         TEST("fork: failed", 0);
     }
     printk("=== End of Fork() Tests ===\n\n");
+        // === exec() setup test ===
+    printk("=== exec() Tests ===\n");
+    struct proc *ep = proc_alloc();
+    TEST("exec: proc_alloc for exec test", ep != NULL);
+    if (ep) {
+        ep->pid = 200;
+        strncpy(ep->name, "exec_test", MAX_NAME - 1);
+        ep->state = PROC_CREATED;
+        ep->pagetable = NULL;
+        ep->trapframe = NULL;
+
+        struct proc *saved = current;
+        current = ep;
+
+        char *eargv[] = { "echo", "hello", NULL };
+        int r = exec("/bin/echo", eargv);
+        TEST("exec: returns 0 for valid binary", r == 0);
+        TEST("exec: entry point set (pc != 0)", ep->pc != 0);
+        TEST("exec: stack pointer set (sp != 0)", ep->sp != 0);
+        TEST("exec: argc in regs[10]", ep->regs[10] == 2);
+        TEST("exec: argv ptr in regs[11]", ep->regs[11] != 0);
+        TEST("exec: pagetable allocated", ep->pagetable != NULL);
+
+        current = saved;
+        // Free the pagetable (don't schedule the process)
+        vmm_free_pagetable(ep->pagetable);
+        proc_free(ep);
+    }
+    printk("=== End of exec() Tests ===\n\n");
+
 }

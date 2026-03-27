@@ -9,6 +9,9 @@
 void syscall_init(void) { printk("Syscall: Initialized\n"); }
 
 void syscall_handler(trap_frame *frame) {
+    // Make live trapframe accessible to exec() and sys_fork()
+    if (current) current->trapframe = frame;
+
     // System call number is in a7
     const uint64_t syscall_num = frame->a7;
 
@@ -19,6 +22,14 @@ void syscall_handler(trap_frame *frame) {
     // uint64_t arg3 = frame->a3;
     // uint64_t arg4 = frame->a4;
     // uint64_t arg5 = frame->a5;
+
+    // exec rewrites the entire trapframe on success; handle before the
+    // generic ret path so frame->a0 is not overwritten afterwards.
+    if (syscall_num == SYS_exec) {
+        if (exec((const char *)arg0, (char **)arg1) < 0)
+            frame->a0 = (uint64_t)-1LL;
+        return;
+    }
 
     uint64_t ret = 0;
 
@@ -164,9 +175,9 @@ pid_t sys_wait(int *status) {
 }
 
 int sys_exec(const char *path, char **argv) {
-    printk("sys_exec(%s) not implemented\n", path);
-    return -1;
+    return exec(path, argv);
 }
+
 
 pid_t sys_getpid(void) {
     struct proc *p = proc_current();
