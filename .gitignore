@@ -5,3 +5,4 @@ zig-out/
 .vscode/
 tools/run-remote-qemu.sh
 compile.sh
+flat_kernel/
