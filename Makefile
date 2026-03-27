@@ -10,7 +10,7 @@ CC      := $(CROSS)gcc
 LD      := $(CROSS)ld
 AR      := $(CROSS)ar
 OBJCOPY := $(CROSS)objcopy
-CFLAGS  := -gdwarf-4 -Wall -Werror -Os -ffreestanding -fno-builtin -nostdlib -nostdinc -isystem $(shell $(CC) -print-file-name=include) -mcmodel=medany -march=rv64imac_zicsr_zifencei -mabi=lp64 -ffunction-sections -fdata-sections -fno-tree-switch-conversion
+CFLAGS  := -gdwarf-4 -Wall -Werror -Os -ffreestanding -fno-builtin -nostdlib -nostdinc -isystem $(shell $(CC) -print-file-name=include) -mcmodel=medany -march=rv64imac_zicsr_zifencei -mabi=lp64 -ffunction-sections -fdata-sections -fno-tree-switch-conversion -Ikernel/include -Ilibc/include
 RUSTFLAGS := --target riscv64imac-unknown-none-elf -C panic=abort -C linker=$(CC) -C code-model=medium -C link-arg=-nostartfiles -C link-arg=-march=rv64imac -C link-arg=-mabi=lp64
 
 KERN_ASM := $(patsubst %,build/%.o,$(wildcard kernel/*.S))
@@ -22,8 +22,10 @@ USER_BIN := $(C_BIN) $(RS_BIN)
 
 # Language-specific kernel object/library
 ifeq ($(KLANG_NORM),c)
-  KERN_C   := $(patsubst %,build/%.o,$(shell find kernel -name '*.c'))
-  KERN_ALL := $(KERN_ASM) $(KERN_C)
+	# Exclude kernel/tests/*.c from KERN_C to avoid duplicate objects
+	KERN_C   := $(patsubst %,build/%.o,$(shell find kernel -name '*.c' ! -path 'kernel/tests/*'))
+	KERN_TESTS := $(patsubst %,build/%.o,$(wildcard kernel/tests/*.c))
+	KERN_ALL := $(KERN_ASM) $(KERN_C) $(KERN_TESTS)
 else ifeq ($(KLANG_NORM),rust)
   KERN_LIB := build/rust/riscv64imac-unknown-none-elf/debug/libsbunix.a
   KERN_ALL := $(KERN_ASM) $(KERN_LIB)

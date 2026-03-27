@@ -2,6 +2,7 @@
 #include "pmm.h"
 #include "riscv.h"
 #include "printk.h"
+#include "string.h"
 
 static pagetable_t kernel_pagetable = NULL;
 
@@ -124,16 +125,43 @@ pagetable_t vmm_create_pagetable(void) {
 
     for (int i = 0; i < 512; i++) pt[i] = 0;
 
-    // Copy ALL valid kernel L2 entries, not just the upper half.
-    // The kernel lives at 0x80200000 which is L2 index 2 — well below 256.
-    // Any new page table must be able to reach kernel code and the trap
-    // handler immediately after vmm_switch(), so we inherit every mapping
-    // the kernel page table has established.
     pagetable_t kpt = vmm_kernel_pagetable();
     if (kpt) {
         for (int i = 0; i < 512; i++) {
-            if (kpt[i] & PTE_V)
+            if (!(kpt[i] & PTE_V)) continue;
+
+            // L2 indices 0 and 1 cover VA < KERNBASE (0x80000000), i.e. the
+            // user/device range.  The kernel maps UART here (0x10000000,
+            // VPN[2]=0), so kpt[0] points to a live kernel L1 table.
+            //
+            // We MUST NOT share that L1 pointer in user page tables.
+            // vmm_walk(new_pt, user_va, alloc=1) would follow the shared L1
+            // pointer and write new L0 entries directly into the kernel's own
+            // L1 table.  Every other page table that later calls
+            // vmm_create_pagetable would then inherit those user entries —
+            // and any vmm_unmap on one page table would silently unmap the
+            // same VA in every other page table that shares the L1.
+            //
+            // Fix: for user-range L2 entries, allocate a private copy of the
+            // L1 page so that walks stay within the new page table.
+            if (i < (int)(KERNBASE >> 30)) {
+                if (kpt[i] & (PTE_R | PTE_W | PTE_X)) {
+                    // Huge-page leaf in user range — just copy the PTE.
+                    pt[i] = kpt[i];
+                } else {
+                    // Non-leaf: make a private copy of the kernel L1 page.
+                    pagetable_t kl1 = (pagetable_t)PTE_TO_PA(kpt[i]);
+                    pagetable_t pl1 = (pagetable_t)pmm_alloc_page();
+                    if (!pl1) { vmm_free_pagetable(pt); return NULL; }
+                    for (int j = 0; j < 512; j++) pl1[j] = kl1[j];
+                    pt[i] = PA_TO_PTE((uintptr_t)pl1) | (kpt[i] & 0x3FF);
+                }
+            } else {
+                // Kernel range (VA >= KERNBASE): safe to share — these are
+                // identity-mapped RAM pages that the kernel never walks via a
+                // user page table, so no user entry can be installed there.
                 pt[i] = kpt[i];
+            }
         }
     }
 
@@ -221,3 +249,50 @@ void vmm_init(void) {
   printk("VMM: Paging enabled\n");
 }
 
+// Recursively copy user-space mappings from parent to child pagetable
+static int vmm_copy_pagetable_recursive(pagetable_t child, pagetable_t parent, int level, uintptr_t va_base) {
+  for (int i = 0; i < 512; i++) {
+    uint64_t pte = parent[i];
+    if (!(pte & PTE_V)) continue;
+
+    if ((pte & (PTE_R | PTE_W | PTE_X)) == 0) {
+      // This is a lower-level page table
+      pagetable_t parent_next = (pagetable_t)PTE_TO_PA(pte);
+      pagetable_t child_next = (pagetable_t)pmm_alloc_page();
+      if (!child_next) return -1;
+      for (int j = 0; j < 512; j++) child_next[j] = 0;
+      // Set child PTE
+      child[i] = PA_TO_PTE((uintptr_t)child_next) | PTE_V;
+      // Recurse
+      if (vmm_copy_pagetable_recursive(child_next, parent_next, level - 1, va_base | ((uintptr_t)i << (level * 9 + 12))) < 0)
+        return -1;
+    } else {
+      // Leaf PTE: user mapping or kernel mapping
+      uintptr_t va = va_base | ((uintptr_t)i << (level * 9 + 12));
+      if (va >= KERNBASE) {
+        // Kernel mapping: just copy the PTE (shared)
+        child[i] = pte;
+      } else {
+        // User mapping: allocate new page, copy contents
+        void *newpage = pmm_alloc_page();
+        if (!newpage) return -1;
+        void *oldpage = (void *)PTE_TO_PA(pte);
+        memcpy(newpage, oldpage, PGSIZE);
+        child[i] = PA_TO_PTE((uintptr_t)newpage) | (pte & (PTE_R | PTE_W | PTE_X | PTE_U | PTE_V));
+      }
+    }
+  }
+  return 0;
+}
+
+// Clone a parent's page table for fork()
+pagetable_t vmm_copy_pagetable(pagetable_t parent) {
+  pagetable_t child = vmm_create_pagetable();
+  if (!child) return NULL;
+  // Recursively copy user mappings (levels 2, 1, 0)
+  if (vmm_copy_pagetable_recursive(child, parent, 2, 0) < 0) {
+    vmm_free_pagetable(child);
+    return NULL;
+  }
+  return child;
+}

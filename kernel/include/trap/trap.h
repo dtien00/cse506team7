@@ -1,5 +1,5 @@
 #pragma once
-#include "kernel/types.h"
+#include "types.h"
 
 // struct to store trap-related data
 typedef struct trap_frame {

@@ -1,5 +1,5 @@
-#pragma once
 
+#pragma once
 #include "types.h"
 
 // Virtual Memory Manager (VMM)
@@ -42,3 +42,6 @@ int vmm_map_range(pagetable_t pagetable, uintptr_t va, uintptr_t pa, size_t size
 
 // Unmap a range of pages
 void vmm_unmap_range(pagetable_t pagetable, uintptr_t va, size_t size);
+
+// Copy pagetable
+pagetable_t vmm_copy_pagetable(pagetable_t parent);

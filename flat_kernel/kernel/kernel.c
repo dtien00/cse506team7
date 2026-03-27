@@ -6,11 +6,12 @@
 #include "process.h"
 #include "syscall.h"
 #include "riscv.h"
-#include "test.h"
 #include "vfs.h"
 #include "tarfs.h"
 #include "tmpfs.h"
+#include "types.h"
 
+#include "test.h"
 
 // External symbols from linker script
 extern char _kernel_end[];
@@ -19,6 +20,15 @@ void run_all_tests(void) {
     mem_test_run();
     // trap_test_run();
     fs_test_run();
+    
+    sched_test_run();
+    sched_timeslice_test_run();
+    sched_priority_test_run();
+    sched_fairness_test_run();
+    sched_idle_test_run();
+    proc_test_run();
+
+    // printk("%d passed, %d failed\n", passed, failed);
 }
 
 void boot(uint64_t hart_id, uint64_t dtb) {
@@ -41,7 +51,6 @@ void boot(uint64_t hart_id, uint64_t dtb) {
     uintptr_t mem_start = PGROUNDUP(kernel_end);
     size_t mem_size = 0x88000000 - mem_start;  // Up to 128MB total
 
-
     pmm_init(mem_start, mem_size);
 
     // Initialize trap handling
@@ -53,11 +62,19 @@ void boot(uint64_t hart_id, uint64_t dtb) {
     // Initialize kernel heap
     kmalloc_init();
 
-    // Initialize process management
-    proc_init();
 
-    // // Initialize system calls
+    // VFS and filesystems must be ready before proc_init because
+    // proc_init calls exec(), which calls vfs_open().
+    vfs_init();
+    tarfs_init();
+    tmpfs_init();
+    vfs_mount(NULL, "/", "tarfs");
+    vfs_mount(NULL, "/tmp", "tmpfs");
+
     syscall_init();
+
+    // proc_init sets up the init process and loads its ELF via exec().
+    proc_init();
 
     interrupts_on();
     printk("Turned on global interrupts. Now waiting for interrupts...\n");
@@ -81,10 +98,11 @@ void boot(uint64_t hart_id, uint64_t dtb) {
 
     #ifdef RUN_TESTS
         run_all_tests();
+    #else
+        // Hand off to the scheduler; runs the init process (pid 1).
+        schedule();
+        while (1)
+            asm volatile("wfi");
     #endif
-
-    while (1)
-        asm volatile("wfi");
-    
 }
 

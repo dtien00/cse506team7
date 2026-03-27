@@ -101,3 +101,21 @@ void proc_unblock(struct proc *p) {
     p->next = NULL;
     proc_ready(p);
 }
+
+void proc_sleep(void *chan){
+    current->chan = chan;
+    proc_block(current);
+    schedule(); // Switches away to yield CPU; returns here when woken
+    current->chan = NULL; // After wakeup, clear channel
+}
+
+void proc_wakeup(void *chan){
+    struct proc *p = blocked_queue;
+    while (p) {
+        struct proc *next = p->next; // save next before unblock mutates it
+        if (p->chan == chan) {
+            proc_unblock(p); // moves process to ready queue
+        }
+        p = next;
+    }
+}
