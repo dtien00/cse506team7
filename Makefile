@@ -22,7 +22,8 @@ USER_BIN := $(C_BIN) $(RS_BIN)
 
 # Language-specific kernel object/library
 ifeq ($(KLANG_NORM),c)
-	KERN_C   := $(patsubst %,build/%.o,$(shell find kernel -name '*.c'))
+	# Exclude kernel/tests/*.c from KERN_C to avoid duplicate objects
+	KERN_C   := $(patsubst %,build/%.o,$(shell find kernel -name '*.c' ! -path 'kernel/tests/*'))
 	KERN_TESTS := $(patsubst %,build/%.o,$(wildcard kernel/tests/*.c))
 	KERN_ALL := $(KERN_ASM) $(KERN_C) $(KERN_TESTS)
 else ifeq ($(KLANG_NORM),rust)
