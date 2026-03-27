@@ -3,6 +3,7 @@
 #include "arch/sbi.h"
 #include "kernel/printk.h"
 #include "process/process.h"
+#include "trap/syscall.h"
 
 #define TIMER_INTERVAL 1000000ULL // ~0.1 second at 10 MHz clock
 
@@ -12,6 +13,7 @@ extern void trap_entry(void);
 void trap_init(void) {
 
     // Install trap entry point
+    write_csr(sscratch, 0);
     write_csr(stvec, (uint64_t) trap_entry);
     printk("Trap entry point (stvec) set to: %p\n", read_csr(stvec));
     sbi_set_timer(read_csr(time) + TIMER_INTERVAL);
@@ -47,6 +49,13 @@ static void handle_interrupt(trap_frame *frame) {
 }
 
 void handle_exception(trap_frame *frame) {
+    // Handle U-mode syscalls silently — they are normal, not errors.
+    if (frame->scause == SCAUSE_ECALL_FROM_U) {
+        syscall_handler(frame);
+        frame->sepc += 4;
+        return;
+    }
+
     printk("\nEXCEPTION: scause=0x%p stval=0x%p sepc=0x%p\n", frame->scause, frame->stval, frame->sepc);
 
     switch (frame->scause) {
@@ -75,11 +84,7 @@ void handle_exception(trap_frame *frame) {
             printk("  Store access fault\n");
             break;
         case SCAUSE_ECALL_FROM_U:
-            // Handle system call
-            // syscall_handler(frame);
-            // Advance PC past ecall instruction
-            write_csr(sepc, frame->sepc + 4);
-            return; // Don't panic, return normally
+            // Handled above; unreachable.
         case SCAUSE_ECALL_FROM_S:
             printk("  System call from supervisor mode\n");
             break;
@@ -113,8 +118,8 @@ void handle_exception(trap_frame *frame) {
 }
 
 void trap_handler(trap_frame *frame) {
-    printk("TRAP: Register info scause=%p sip=%p sie=%p\n", (void *) frame->scause, (void *) read_csr(sip),
-           (void *) read_csr(sie));
+    // printk("TRAP: Register info scause=%p sip=%p sie=%p\n", (void *) frame->scause, (void *) read_csr(sip),
+    //        (void *) read_csr(sie));
     if (frame->scause & SCAUSE_INTERRUPT) {
         // Interrupt
         handle_interrupt(frame);

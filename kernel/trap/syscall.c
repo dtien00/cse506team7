@@ -2,10 +2,17 @@
 #include "kernel/printk.h"
 #include "process/process.h"
 #include "trap/trap.h"
+#include "mm/vmm.h"
+#include "mm/kmalloc.h"
+#include "lib/string.h"
+#include "arch/riscv.h"
 
 void syscall_init(void) { printk("Syscall: Initialized\n"); }
 
 void syscall_handler(trap_frame *frame) {
+    // Make live trapframe accessible to exec() and sys_fork()
+    if (current) current->trapframe = frame;
+
     // System call number is in a7
     const uint64_t syscall_num = frame->a7;
 
@@ -16,6 +23,14 @@ void syscall_handler(trap_frame *frame) {
     // uint64_t arg3 = frame->a3;
     // uint64_t arg4 = frame->a4;
     // uint64_t arg5 = frame->a5;
+
+    // exec rewrites the entire trapframe on success; handle before the
+    // generic ret path so frame->a0 is not overwritten afterwards.
+    if (syscall_num == SYS_exec) {
+        if (exec((const char *)arg0, (char **)arg1) < 0)
+            frame->a0 = (uint64_t)-1LL;
+        return;
+    }
 
     uint64_t ret = 0;
 
@@ -85,19 +100,45 @@ void syscall_handler(trap_frame *frame) {
 // System call implementations (stubs for now)
 
 void sys_exit(int status) {
-    // Implement when processes are up
-    // process_t *p = proc_current();
-    // if (p != NULL) {
-    //     printk("Process %d exiting with status %d\n", p->pid, status);
-    //     p->state = PROC_ZOMBIE;
-    //     p->exit_status = status;
-    //     // Wake up parent, schedule next process
-    // }
+    proc_exit(status);
 }
 
 pid_t sys_fork(void) {
-    printk("sys_fork() not implemented\n");
-    return -1;
+    // Allocate and initialize new process (assigns pid, stack, context)
+    struct proc *child = proc_create(current->name);
+    if (!child) return -1;
+
+    // Copy parent's address space
+    child->pagetable = vmm_copy_pagetable(current->pagetable);
+    if (!child->pagetable) {
+        proc_free(child);
+        return -1; // Unable to create child address space as copy of the parent
+    }
+
+    // Copy parent's trap frame and register state to the child
+    if (current->trapframe) {
+        child->trapframe = (trap_frame *)kmalloc(sizeof(trap_frame));
+        if (!child->trapframe) {
+            vmm_free_pagetable(child->pagetable);
+            proc_free(child);
+            return -1;
+        }
+        memcpy(child->trapframe, current->trapframe, sizeof(trap_frame));
+    } else {
+        child->trapframe = NULL;
+    }
+    child->pc = current->pc;
+    child->sp = current->sp;
+    memcpy(child->regs, current->regs, sizeof(current->regs));
+    child->satp = current->satp;
+
+    // Parent-child linking
+    child->parent = current;
+    child->sibling = current->first_child;
+    current->first_child = child;
+
+    // Return child pid to parent that called fork syscall
+    return child->pid;
 }
 
 ssize_t sys_read(int fd, void *buf, size_t count) {
@@ -109,10 +150,15 @@ ssize_t sys_write(int fd, const void *buf, size_t count) {
     // For now, just print to console if fd is 1 (stdout)
     if (fd == 1 || fd == 2) {
         const char *str = (const char *) buf;
+        // buf is a user-space pointer (PTE_U set).  S-mode cannot load from
+        // user pages unless sstatus.SUM=1.  Set it for the duration of the
+        // copy, then clear it to restore the default deny policy.
+        set_csr_bit(sstatus, SSTATUS_SUM);
         for (size_t i = 0; i < count; i++) {
             printk("%c", str[i]);
         }
-        return count;
+        clear_csr_bit(sstatus, SSTATUS_SUM);
+        return (ssize_t)count;
     }
 
     printk("sys_write(%d, %p, %d) not implemented\n", fd, buf, count);
@@ -130,21 +176,20 @@ int sys_close(int fd) {
 }
 
 pid_t sys_wait(int *status) {
-    printk("sys_wait(%p) not implemented\n", status);
-    return -1;
+    // Use the new proc_wait implementation for process reaping and blocking
+    return proc_wait(status);
 }
 
 int sys_exec(const char *path, char **argv) {
-    printk("sys_exec(%s) not implemented\n", path);
-    return -1;
+    return exec(path, argv);
 }
 
+
 pid_t sys_getpid(void) {
-    // implement when processes are up
-    // process_t *p = proc_current();
-    // if (p != NULL) {
-    //     return p->pid;
-    // }
+    struct proc *p = proc_current();
+    if (p != NULL) {
+        return p->pid;
+    }
     return -1;
 }
 

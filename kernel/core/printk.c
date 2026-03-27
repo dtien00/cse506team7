@@ -1,4 +1,4 @@
-#include "lib/stdarg.h"
+#include <stdarg.h>
 #include "kernel/console.h"
 #include "kernel/printk.h"
 #include "kernel/types.h"

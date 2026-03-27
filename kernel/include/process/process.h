@@ -3,12 +3,13 @@
 #include "kernel/types.h"
 #include "mm/vmm.h"
 #include "trap/trap.h"
-#include "lib/string.h"
 
 #define MAX_PROCS 64
 #define MAX_NAME 16
+#define KSTACK_SIZE 4096
 
 extern struct proc *current;
+extern uint8_t kstacks[][KSTACK_SIZE];
 
 // Saved context for kernel-to-kernel context switch (callee-saved regs only).
 // Field order must match register save/load order in swtch.S.
@@ -54,6 +55,7 @@ struct proc {
 
     proc_state_t state;
     int exit_code;
+    void *chan; // Sleep/wakeup channel support
 
     uint64_t time_slice;
     uint64_t total_time;
@@ -69,7 +71,10 @@ struct proc {
     struct proc *parent;
     struct proc *first_child;
     struct proc *sibling;
+
 };
+
+extern struct proc proctab[];
 
 // Core process management
 struct proc* proc_alloc(void);
@@ -81,7 +86,7 @@ struct proc* proc_find(pid_t pid);
 struct proc* proc_create(const char *name);
 void proc_exit(int code);
 void proc_kill(struct proc *p);
-void proc_wait(struct proc *p);
+int proc_wait(int *exit_code_out);
 
 // Scheduling
 struct proc* proc_current(void);
@@ -97,3 +102,10 @@ void context_switch(struct proc *next);
 
 // Debug
 void proc_dump(void);
+
+// Sleep/wakeup channel support
+void proc_sleep(void *chan);
+void proc_wakeup(void *chan);
+
+// Utilities
+int exec(const char *path, char *const argv[]);
