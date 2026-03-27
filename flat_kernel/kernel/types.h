@@ -14,6 +14,7 @@ typedef int64_t   intptr_t;
 typedef uint64_t  size_t;
 typedef int64_t   ssize_t;
 typedef int32_t   pid_t;
+typedef int64_t   off_t;
 
 #define NULL ((void *)0)
 // typedef enum { false, true } bool; // apparently is now standard

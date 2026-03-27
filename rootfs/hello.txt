@@ -1,0 +1,2 @@
+Hello from tarfs! This is a test file for the sbunix VFS layer.
+More data here to ensure reads work correctly across multiple calls.

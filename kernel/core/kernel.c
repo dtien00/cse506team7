@@ -81,9 +81,10 @@ void boot(uint64_t hart_id, uint64_t dtb) {
 
     #ifdef RUN_TESTS
         run_all_tests();
-    #else
-        while (1)
-            asm volatile("wfi");
     #endif
+
+    while (1)
+        asm volatile("wfi");
+    
 }
 

@@ -42,4 +42,7 @@ int isatty(int fd);
 
 void _exit(int status);
 
+void* sbrk(intptr_t increment);
+int brk(void* addr);
+
 #endif
