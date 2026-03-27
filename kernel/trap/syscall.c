@@ -5,6 +5,7 @@
 #include "mm/vmm.h"
 #include "mm/kmalloc.h"
 #include "lib/string.h"
+#include "arch/riscv.h"
 
 void syscall_init(void) { printk("Syscall: Initialized\n"); }
 
@@ -149,10 +150,15 @@ ssize_t sys_write(int fd, const void *buf, size_t count) {
     // For now, just print to console if fd is 1 (stdout)
     if (fd == 1 || fd == 2) {
         const char *str = (const char *) buf;
+        // buf is a user-space pointer (PTE_U set).  S-mode cannot load from
+        // user pages unless sstatus.SUM=1.  Set it for the duration of the
+        // copy, then clear it to restore the default deny policy.
+        set_csr_bit(sstatus, SSTATUS_SUM);
         for (size_t i = 0; i < count; i++) {
             printk("%c", str[i]);
         }
-        return count;
+        clear_csr_bit(sstatus, SSTATUS_SUM);
+        return (ssize_t)count;
     }
 
     printk("sys_write(%d, %p, %d) not implemented\n", fd, buf, count);
