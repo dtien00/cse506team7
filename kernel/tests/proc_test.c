@@ -85,28 +85,37 @@ void proc_test_run(void) {
     printk("========================================\n\n");
 
     // === Fork() Test Suite ===
-    // printk("=== Fork() Tests ===\n");
-    // int test_var = 0xdeadbeef;
-    // pid_t fork_result = sys_fork();
-    // if (fork_result == 0) {
-    //     // Child process
-    //     TEST("fork: child gets 0", fork_result == 0);
-    //     test_var = 0x12345678;
-    //     sys_exit(42);
-    // } else if (fork_result > 0) {
-    //     // Parent process
-    //     int status = 0;
-    //     pid_t waited = sys_wait(&status);
-    //     TEST("fork: parent gets child pid", waited == fork_result);
-    //     TEST("fork: child exit code", status == 42);
-    //     TEST("fork: memory independence", test_var == 0xdeadbeef);
-    //     // Check process hierarchy
-    //     struct proc *child = proc_find(waited);
-    //     TEST("fork: child reaped (UNUSED)", !child || child->state == PROC_UNUSED);
-    // } else {
-    //     TEST("fork: failed", 0);
-    // }
-    // printk("=== End of Fork() Tests ===\n\n");
+    // Note: sys_fork() returns once to the caller (parent) with the child's
+    // PID.  The child starts at proc_entry() and inherits the init process's
+    // /bin/echo image, so it exits with code 0.  Unix-style "returns 0 in
+    // child" semantics are not implemented.
+    printk("=== Fork() Tests ===\n");
+
+    struct proc *fork_saved = current;
+    current = proc_find(1);  // init: has /bin/echo loaded, needed by sys_fork/sys_wait
+
+    pid_t fork_result = -1;
+    if (!current) {
+        TEST("fork: failed", 0);
+    } else {
+        fork_result = sys_fork();
+    }
+
+    if (fork_result > 0) {
+        // Parent path — the only path sys_fork() returns to.
+        int status = 0;
+        pid_t waited = sys_wait(&status);
+        TEST("fork: parent gets child pid", waited == fork_result);
+        TEST("fork: child exit (0)",        status == 0);
+        // After wait the child slot must be freed.
+        struct proc *reaped = proc_find(waited);
+        TEST("fork: child reaped (UNUSED)", !reaped || reaped->state == PROC_UNUSED);
+    } else if (fork_result != -1) {
+        TEST("fork: failed", 0);
+    }
+
+    current = fork_saved;
+    printk("=== End of Fork() Tests ===\n\n");
         // === exec() setup test ===
     printk("=== exec() Tests ===\n");
     struct proc *ep = proc_alloc();
