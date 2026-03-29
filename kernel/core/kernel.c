@@ -21,12 +21,12 @@ void run_all_tests(void) {
     // trap_test_run();
     fs_test_run();
     
-    // sched_test_run();
-    // sched_timeslice_test_run();
-    // sched_priority_test_run();
-    // sched_fairness_test_run();
-    // sched_idle_test_run();
-    // proc_test_run();
+    sched_test_run();
+    sched_timeslice_test_run();
+    sched_priority_test_run();
+    sched_fairness_test_run();
+    sched_idle_test_run();
+    proc_test_run();
 }
 
 void boot(uint64_t hart_id, uint64_t dtb) {
