@@ -41,6 +41,11 @@ DISK_IMG  := build/disk.img
 
 -include Makefile.local
 
+# Sanity check: abort early if no kernel sources were found
+ifeq ($(strip $(KERN_ALL)),)
+  $(error No kernel object files found. Ensure kernel/ contains .c and .S source files.)
+endif
+
 all: build/kernel.elf
 
 build/kernel/%.c.o: kernel/%.c
