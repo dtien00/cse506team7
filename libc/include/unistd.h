@@ -45,4 +45,8 @@ void _exit(int status);
 void* sbrk(intptr_t increment);
 int brk(void* addr);
 
+int unlink(const char *pathname);
+int mkdir(const char *pathname, mode_t mode);
+void sync(void);
+
 #endif

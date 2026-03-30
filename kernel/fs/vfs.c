@@ -266,7 +266,7 @@ int vfs_mkdir(const char *path, uint32_t mode) {
 // File operations (backward compatible with existing code)
 // -----------------------------------------------------------------------------
 
-file_t *vfs_open(const char *path) {
+file_t *vfs_open(const char *path, int flags) {
     vnode_t *vnode = vfs_lookup(path);
     if (!vnode) {
         printk("vfs: file not found: %s\n", path);
@@ -285,6 +285,8 @@ file_t *vfs_open(const char *path) {
         f->type = FILE_TMPFS;
     } else if (strcmp(vnode->fs_type->name, "tarfs") == 0) {
         f->type = FILE_TARFS;
+    } else if (strcmp(vnode->fs_type->name, "ext2") == 0) {
+        f->type = FILE_TMPFS;  // Treat ext2 like tmpfs for read/write
     } else {
         f->type = FILE_TARFS;  // Default fallback
     }
@@ -292,6 +294,7 @@ file_t *vfs_open(const char *path) {
     f->vnode = vnode;
     f->offset = 0;
     f->ref_count = 1;
+    f->flags = flags;
     vnode->ref_count++;
 
     return f;
@@ -368,4 +371,43 @@ int vfs_write(file_t *f, const void *buf, size_t len) {
         default:
             return -1;
     }
+<<<<<<< Updated upstream
+=======
+}
+
+// Seek to a new offset in the file
+off_t vfs_lseek(file_t *f, off_t offset, int whence) {
+	if (!f) return -1;
+	
+	off_t new_offset = 0;
+	
+	switch (whence) {
+		case SEEK_SET:
+			new_offset = offset;
+			break;
+			
+		case SEEK_CUR:
+			new_offset = (off_t)f->offset + offset;
+			break;
+			
+		case SEEK_END:
+			if (f->vnode) {
+				new_offset = (off_t)f->vnode->size + offset;
+			} else {
+				return -1;
+			}
+			break;
+			
+		default:
+			return -1;
+	}
+	
+	// Don't allow seeking to negative positions
+	if (new_offset < 0) {
+		return -1;
+	}
+	
+	f->offset = (size_t)new_offset;
+	return new_offset;
+>>>>>>> Stashed changes
 }

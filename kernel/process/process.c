@@ -2,6 +2,24 @@
 #include "process/swtch.h"
 #include "kernel/printk.h"
 #include "trap/trap.h"
+#include "arch/riscv.h"
+#include "fs/vfs.h"
+#include "fs/file.h"
+#include "mm/vmm.h"
+#include "mm/pmm.h"
+#include "mm/kmalloc.h"   // needed for kmalloc/kfree in exec()
+#include "types.h"
+#include "string.h"
+#include "elf/elf.h"
+#include "trap/syscall.h"
+
+#ifndef SEEK_SET
+#define SEEK_SET 0
+#endif
+
+
+/* Forward declaration — defined later in this file. */
+void proc_start_user(struct proc *p, uint64_t entry, uint64_t user_sp);
 
 /**
  * Default entry point for new kernel threads.
@@ -38,6 +56,17 @@ void proc_init(void) {
     init->context.sp = (uint64_t)&kstacks[idx][KSTACK_SIZE];
     init->context.ra = (uint64_t)proc_entry;
 
+    // Initialize file descriptor table with stdin/stdout/stderr
+    fd_init(&init->fd_table);
+
+    // Prepare argv for /bin/echo
+    static char *argv[] = { "echo", "Hello, world!", NULL };
+    // Set current to init so exec uses the right process
+    current = init;
+    if (exec("/bin/echo", argv) < 0) {
+        printk("[init] exec failed for /bin/echo\n");
+    }
+
     proc_ready(init);
     current = NULL;
 }
@@ -65,12 +94,30 @@ struct proc* proc_create(const char *name) {
     p->context.sp = (uint64_t)&kstacks[idx][KSTACK_SIZE];
     p->context.ra = (uint64_t)proc_entry;
 
+    // Initialize VMA list
+    vma_init(&p->vma_list);
+
+    // Initialize file descriptor table with stdin/stdout/stderr
+    fd_init(&p->fd_table);
+
+    // User-mode processes allocates a trap_frame to save/restore user registers
+    // p->trapframe = (trap_frame *)kmalloc(sizeof(trap_frame));
+    // memset(p->trapframe, 0, sizeof(trap_frame));
+
     proc_ready(p);
     return p;
 }
 
 void proc_free(struct proc *p) {
     if (!p) return;
+    
+    // Close all file descriptors
+    fd_cleanup(&p->fd_table);
+    
+    // Free VMA list
+    vma_free_all(p->vma_list);
+    p->vma_list = NULL;
+    
     p->pid = 0;
     p->state = PROC_UNUSED;
     p->next = NULL;

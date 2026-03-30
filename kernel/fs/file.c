@@ -22,6 +22,7 @@ void fd_init(fd_table_t *table) {
         stdin_file->vnode = NULL;
         stdin_file->offset = 0;
         stdin_file->ref_count = 1;
+        stdin_file->flags = 0;
         table->files[0] = stdin_file;
     }
 
@@ -32,6 +33,7 @@ void fd_init(fd_table_t *table) {
         stdout_file->vnode = NULL;
         stdout_file->offset = 0;
         stdout_file->ref_count = 1;
+        stdout_file->flags = 1;
         table->files[1] = stdout_file;
     }
 
@@ -42,6 +44,7 @@ void fd_init(fd_table_t *table) {
         stderr_file->vnode = NULL;
         stderr_file->offset = 0;
         stderr_file->ref_count = 1;
+        stderr_file->flags = 1;
         table->files[2] = stderr_file;
     }
 }
@@ -88,5 +91,43 @@ void fd_close(fd_table_t *table, int fd) {
     if (f) {
         vfs_close(f);
         table->files[fd] = NULL;
+    }
+}
+
+// -----------------------------------------------------------------------------
+// fd_copy
+// Copies the file descriptor table from src to dst, incrementing ref counts.
+// Used by fork() to duplicate parent's open files.
+// Returns 0 on success, -1 on failure.
+// -----------------------------------------------------------------------------
+int fd_copy(fd_table_t *dst, fd_table_t *src) {
+    if (!dst || !src) return -1;
+
+    for (int i = 0; i < MAX_FDS; i++) {
+        dst->files[i] = NULL;
+    }
+
+    for (int i = 0; i < MAX_FDS; i++) {
+        if (src->files[i]) {
+            dst->files[i] = src->files[i];
+            src->files[i]->ref_count++;
+        }
+    }
+
+    return 0;
+}
+
+// -----------------------------------------------------------------------------
+// fd_cleanup
+// Closes all open file descriptors in the table and frees resources.
+// Used when a process exits.
+// -----------------------------------------------------------------------------
+void fd_cleanup(fd_table_t *table) {
+    if (!table) return;
+
+    for (int i = 0; i < MAX_FDS; i++) {
+        if (table->files[i]) {
+            fd_close(table, i);
+        }
     }
 }

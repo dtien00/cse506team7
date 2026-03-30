@@ -15,3 +15,5 @@ int   fd_alloc(fd_table_t *table, file_t *f);  // returns fd number
 file_t *fd_get(fd_table_t *table, int fd);
 void  fd_close(fd_table_t *table, int fd);
 void  fd_init(fd_table_t *table);  // sets up stdin/stdout/stderr
+int   fd_copy(fd_table_t *dst, fd_table_t *src);  // copy fd table for fork
+void  fd_cleanup(fd_table_t *table);  // close all fds and free resources

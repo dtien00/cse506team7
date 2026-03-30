@@ -10,6 +10,10 @@
 #include "fs/vfs.h"
 #include "fs/tarfs.h"
 #include "fs/tmpfs.h"
+#include "fs/ext2.h"
+#include "fs/block_cache.h"
+#include "drivers/virtio.h"
+#include "kernel/types.h"
 
 
 // External symbols from linker script
@@ -53,7 +57,44 @@ void boot(uint64_t hart_id, uint64_t dtb) {
     // Initialize kernel heap
     kmalloc_init();
 
-    // Initialize process management
+
+    // Initialize block device and cache
+    // Note: VirtIO MMIO base address is typically 0x10001000 in QEMU
+    // You may need to adjust this based on your device tree or QEMU config
+    printk("Initializing block device...\n");
+    if (virtio_blk_init(0x10001000) == 0) {
+        block_cache_init();
+        ext2_init();
+        printk("Block device and ext2 filesystem ready\n");
+    } else {
+        printk("Warning: Block device not available, ext2 disabled\n");
+    }
+
+    // VFS and filesystems must be ready before proc_init because
+    // proc_init calls exec(), which calls vfs_open().
+    vfs_init();
+    tarfs_init();
+    tmpfs_init();
+    
+    // Mount root filesystem (tarfs for boot)
+    vfs_mount(NULL, "/", "tarfs");
+    
+    // Mount tmpfs at /tmp
+    vfs_mount(NULL, "/tmp", "tmpfs");
+    
+    // Mount ext2 at /mnt if available (persistent storage)
+    if (virtio_blk_get_capacity() > 0) {
+        printk("Mounting ext2 filesystem at /mnt...\n");
+        if (vfs_mount(NULL, "/mnt", "ext2") == 0) {
+            printk("Persistent storage available at /mnt\n");
+        } else {
+            printk("Warning: Failed to mount ext2, check disk format\n");
+        }
+    }
+
+    syscall_init();
+
+    // proc_init sets up the init process and loads its ELF via exec().
     proc_init();
 
     // // Initialize system calls
@@ -61,17 +102,6 @@ void boot(uint64_t hart_id, uint64_t dtb) {
 
     interrupts_on();
     printk("Turned on global interrupts. Now waiting for interrupts...\n");
-
-    // Initialize VFS and filesystems
-    vfs_init();
-    tarfs_init();   // Parses TAR and registers with VFS
-    tmpfs_init();   // Registers tmpfs with VFS
-
-    // Mount root filesystem (tarfs)
-    vfs_mount(NULL, "/", "tarfs");
-
-    // Mount tmpfs at /tmp
-    vfs_mount(NULL, "/tmp", "tmpfs");
 
     printk("\n");
     printk("========================================\n");

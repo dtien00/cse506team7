@@ -5,6 +5,24 @@
 #include "mm/pmm.h"
 #include "mm/vmm.h"
 #include "arch/riscv.h"
+#include "fs/file.h"
+#include "fs/vfs.h"
+#include "fs/tmpfs.h"
+#include "fs/block_cache.h"
+
+// File open flags
+#define O_RDONLY    0x0000
+#define O_WRONLY    0x0001
+#define O_RDWR      0x0002
+#define O_CREAT     0x0040
+#define O_EXCL      0x0080
+#define O_TRUNC     0x0200
+#define O_APPEND    0x0400
+
+// Seek whence values
+#define SEEK_SET 0
+#define SEEK_CUR 1
+#define SEEK_END 2
 
 #define MAP_FAILED ((void *) -1)
 #define PROT_READ  0x1
@@ -98,6 +116,22 @@ void syscall_handler(trap_frame *frame) {
             ret = sys_brk((void *) arg0);
             break;
 
+        case SYS_lseek:
+            ret = sys_lseek((int) arg0, (off_t) arg1, (int) arg2);
+            break;
+
+        case SYS_unlink:
+            ret = sys_unlink((const char *) arg0);
+            break;
+
+        case SYS_mkdir:
+            ret = sys_mkdir((const char *) arg0, (mode_t) arg1);
+            break;
+
+        case SYS_sync:
+            ret = sys_sync();
+            break;
+
         default:
             printk("Unknown system call: %d\n", syscall_num);
             ret = -1;
@@ -122,18 +156,97 @@ void sys_exit(int status) {
 }
 
 pid_t sys_fork(void) {
-    printk("sys_fork() not implemented\n");
-    return -1;
+    // Allocate and initialize new process (assigns pid, stack, context)
+    struct proc *child = proc_create(current->name);
+    if (!child) return -1;
+
+    // Copy parent's address space
+    child->pagetable = vmm_copy_pagetable(current->pagetable);
+    if (!child->pagetable) {
+        proc_free(child);
+        return -1;
+    }
+    
+    // Copy parent's VMA list
+    if (vma_copy_all(&child->vma_list, current->vma_list) != 0) {
+        vmm_free_pagetable(child->pagetable);
+        proc_free(child);
+        return -1;
+    }
+    
+    // Copy sz field
+    child->sz = current->sz;
+
+    // Copy parent's file descriptor table (shares open files)
+    if (fd_copy(&child->fd_table, &current->fd_table) != 0) {
+        vmm_free_pagetable(child->pagetable);
+        proc_free(child);
+        return -1;
+    }
+
+    // Copy parent's trap frame and register state to the child
+    if (current->trapframe) {
+        child->trapframe = (trap_frame *)kmalloc(sizeof(trap_frame));
+        if (!child->trapframe) {
+            vmm_free_pagetable(child->pagetable);
+            proc_free(child);
+            return -1;
+        }
+        memcpy(child->trapframe, current->trapframe, sizeof(trap_frame));
+    } else {
+        child->trapframe = NULL;
+    }
+    child->pc = current->pc;
+    child->sp = current->sp;
+    memcpy(child->regs, current->regs, sizeof(current->regs));
+    child->satp = current->satp;
+
+    // Parent-child linking
+    child->parent = current;
+    child->sibling = current->first_child;
+    current->first_child = child;
+
+    // Return child pid to parent that called fork syscall
+    return child->pid;
 }
 
 ssize_t sys_read(int fd, void *buf, size_t count) {
-    printk("sys_read(%d, %p, %d) not implemented\n", fd, buf, count);
-    return -1;
+    if (!current) return -1;
+
+    // Get the file from the fd table
+    file_t *f = fd_get(&current->fd_table, fd);
+    if (!f) {
+        printk("sys_read: invalid fd %d\n", fd);
+        return -1;
+    }
+
+    // Handle stdin (not implemented yet)
+    if (f->type == FILE_STDIN) {
+        printk("sys_read: stdin not implemented\n");
+        return -1;
+    }
+
+    // For regular files, use vfs_read
+    // buf is a user-space pointer, enable SUM bit to access it
+    set_csr_bit(sstatus, SSTATUS_SUM);
+    int bytes_read = vfs_read(f, buf, count);
+    clear_csr_bit(sstatus, SSTATUS_SUM);
+
+    return bytes_read;
 }
 
 ssize_t sys_write(int fd, const void *buf, size_t count) {
-    // For now, just print to console if fd is 1 (stdout)
-    if (fd == 1 || fd == 2) {
+    if (!current) return -1;
+
+    // Get the file from the fd table
+    file_t *f = fd_get(&current->fd_table, fd);
+    if (!f) {
+        printk("sys_write: invalid fd %d\n", fd);
+        return -1;
+    }
+
+    // Handle stdout/stderr - print to console
+    if (f->type == FILE_STDOUT) {
         const char *str = (const char *) buf;
         for (size_t i = 0; i < count; i++) {
             printk("%c", str[i]);
@@ -141,18 +254,82 @@ ssize_t sys_write(int fd, const void *buf, size_t count) {
         return count;
     }
 
-    printk("sys_write(%d, %p, %d) not implemented\n", fd, buf, count);
-    return -1;
+    // For regular files, use vfs_write
+    // buf is a user-space pointer, enable SUM bit to access it
+    set_csr_bit(sstatus, SSTATUS_SUM);
+    int bytes_written = vfs_write(f, buf, count);
+    clear_csr_bit(sstatus, SSTATUS_SUM);
+
+    return bytes_written;
 }
 
 int sys_open(const char *path, int flags) {
-    printk("sys_open(%s, %d) not implemented\n", path, flags);
-    return -1;
+    if (!current) return -1;
+
+    // path is a user-space pointer, enable SUM bit to access it
+    set_csr_bit(sstatus, SSTATUS_SUM);
+    
+    // Try to open existing file
+    file_t *f = vfs_open(path, flags);
+    
+    // If file doesn't exist and O_CREAT is set, create it
+    if (!f && (flags & O_CREAT)) {
+        mode_t mode = 0644;  // Default permissions (rw-r--r--)
+        if (vfs_create(path, mode) == 0) {
+            // Try to open again after creation
+            f = vfs_open(path, flags);
+        }
+    }
+    
+    clear_csr_bit(sstatus, SSTATUS_SUM);
+
+    if (!f) {
+        printk("sys_open: failed to open %s\n", path);
+        return -1;
+    }
+
+    // Handle O_TRUNC - truncate file to zero length
+    if ((flags & O_TRUNC) && (flags & (O_WRONLY | O_RDWR))) {
+        if (f->type == FILE_TMPFS && f->vnode && f->vnode->fs_data) {
+            tmpfs_inode_t *inode = (tmpfs_inode_t *)f->vnode->fs_data;
+            inode->size = 0;
+            f->vnode->size = 0;
+        }
+        // TODO: Add truncate support for ext2
+    }
+    
+    // Handle O_APPEND - set offset to end of file
+    if (flags & O_APPEND) {
+        f->offset = f->vnode->size;
+    }
+
+    // Allocate a file descriptor
+    int fd = fd_alloc(&current->fd_table, f);
+    if (fd < 0) {
+        vfs_close(f);
+        return -1;
+    }
+
+    return fd;
 }
 
 int sys_close(int fd) {
-    printk("sys_close(%d) not implemented\n", fd);
-    return -1;
+    if (!current) return -1;
+
+    // Validate fd
+    if (fd < 0 || fd >= MAX_FDS) {
+        return -1;
+    }
+
+    // Get the file to check if it exists
+    file_t *f = fd_get(&current->fd_table, fd);
+    if (!f) {
+        return -1;
+    }
+
+    // Close the file descriptor
+    fd_close(&current->fd_table, fd);
+    return 0;
 }
 
 pid_t sys_wait(int *status) {
@@ -422,4 +599,45 @@ void *sys_sbrk(intptr_t increment) {
     }
     
     return old_break;
+}
+
+off_t sys_lseek(int fd, off_t offset, int whence) {
+    if (!current) return -1;
+    
+    file_t *f = fd_get(&current->fd_table, fd);
+    if (!f) {
+        printk("sys_lseek: invalid fd %d\n", fd);
+        return -1;
+    }
+    
+    // Don't allow seeking on stdin/stdout/stderr
+    if (f->type == FILE_STDIN || f->type == FILE_STDOUT) {
+        return -1;
+    }
+    
+    return vfs_lseek(f, offset, whence);
+}
+
+int sys_unlink(const char *path) {
+    if (!current) return -1;
+    
+    set_csr_bit(sstatus, SSTATUS_SUM);
+    int ret = vfs_unlink(path);
+    clear_csr_bit(sstatus, SSTATUS_SUM);
+    
+    return ret;
+}
+
+int sys_mkdir(const char *path, mode_t mode) {
+    if (!current) return -1;
+    
+    set_csr_bit(sstatus, SSTATUS_SUM);
+    int ret = vfs_mkdir(path, mode);
+    clear_csr_bit(sstatus, SSTATUS_SUM);
+    
+    return ret;
+}
+
+int sys_sync(void) {
+    return block_cache_flush();
 }

@@ -20,6 +20,10 @@
 #define SYS_mmap     14
 #define SYS_munmap   15
 #define SYS_brk      16
+#define SYS_lseek    17
+#define SYS_unlink   18
+#define SYS_mkdir    19
+#define SYS_sync     20
 
 // Initialize syscall subsystem
 void syscall_init(void);
@@ -44,3 +48,7 @@ int sys_kill(pid_t pid);
 void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset);
 int sys_munmap(void *addr, size_t length);
 int sys_brk(void *addr);
+off_t sys_lseek(int fd, off_t offset, int whence);
+int sys_unlink(const char *path);
+int sys_mkdir(const char *path, mode_t mode);
+int sys_sync(void);
