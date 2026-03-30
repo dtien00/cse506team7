@@ -167,8 +167,12 @@ pid_t sys_fork(void) {
 }
 
 ssize_t sys_read(int fd, void *buf, size_t count) {
-    printk("sys_read(%d, %p, %d) not implemented\n", fd, buf, count);
-    return -1;
+    file_t *f = fd_get(&current->fds, fd);
+    if (!f) return -1;
+    set_csr_bit(sstatus, SSTATUS_SUM);
+    int n = vfs_read(f, buf, count);
+    clear_csr_bit(sstatus, SSTATUS_SUM);
+    return n;
 }
 
 ssize_t sys_write(int fd, const void *buf, size_t count) {
@@ -191,13 +195,18 @@ ssize_t sys_write(int fd, const void *buf, size_t count) {
 }
 
 int sys_open(const char *path, int flags) {
-    printk("sys_open(%s, %d) not implemented\n", path, flags);
-    return -1;
+    set_csr_bit(sstatus, SSTATUS_SUM);
+    file_t *f = vfs_open(path);
+    clear_csr_bit(sstatus, SSTATUS_SUM);
+    if (!f) return -1;
+    return fd_alloc(&current->fds, f);
 }
 
 int sys_close(int fd) {
-    printk("sys_close(%d) not implemented\n", fd);
-    return -1;
+    file_t *f = fd_get(&current->fds, fd);
+    if (!f) return -1;
+    fd_close(&current->fds, fd);
+    return 0;
 }
 
 pid_t sys_wait(int *status) {

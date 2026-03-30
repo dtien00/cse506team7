@@ -12,6 +12,7 @@
 #include "string.h"
 #include "elf/elf.h"
 #include "trap/syscall.h"
+#include "fs/file.h"
 
 #ifndef SEEK_SET
 #define SEEK_SET 0
@@ -60,13 +61,25 @@ void proc_init(void) {
     init->context.sp = (uint64_t)&kstacks[idx][KSTACK_SIZE];
     init->context.ra = (uint64_t)proc_entry;
 
+    // ---- /bin/echo ----- //
     // Prepare argv for /bin/echo
-    static char *argv[] = { "echo", "Hello, world!", NULL };
+    // static char *argv[] = { "echo", "Hello, world!", NULL };
+    // // Set current to init so exec uses the right process
+    // current = init;
+    // if (exec("/bin/echo", argv) < 0) {
+    //     printk("[init] exec failed for /bin/echo\n");
+    // }
+    // ---- /bin/echo END ----- //
+
+    // ---- /bin/cat ----- //
+    // Prepare argv for /bin/echo
+    static char *argv[] = { "cat", "/hello.txt", NULL };
     // Set current to init so exec uses the right process
     current = init;
-    if (exec("/bin/echo", argv) < 0) {
-        printk("[init] exec failed for /bin/echo\n");
+    if (exec("/bin/cat", argv) < 0) {
+        printk("[init] exec failed for /bin/cat\n");
     }
+    // ---- /bin/cat END ----- //    
 
     proc_ready(init);
     current = NULL;
@@ -98,6 +111,9 @@ struct proc* proc_create(const char *name) {
     // User-mode processes allocates a trap_frame to save/restore user registers
     // p->trapframe = (trap_frame *)kmalloc(sizeof(trap_frame));
     // memset(p->trapframe, 0, sizeof(trap_frame));
+
+    // Initialize process' file descriptor
+    fd_init(&p->fds);
 
     proc_ready(p);
     return p;

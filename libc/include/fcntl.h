@@ -1,7 +1,7 @@
 #ifndef _FCNTL_H
 #define _FCNTL_H
 
-#include "types.h"
+#include "sys/types.h"
 
 #define O_RDONLY    0x0000
 #define O_WRONLY    0x0001
@@ -23,7 +23,7 @@
 #define FD_CLOEXEC 1
 
 int open(const char *pathname, int flags, ...);
-int creat(const char *pathname, mode_t mode);
+int create(const char *pathname, mode_t mode);
 int fcntl(int fd, int cmd, ...);
 
 #endif

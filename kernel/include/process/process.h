@@ -3,6 +3,7 @@
 #include "kernel/types.h"
 #include "mm/vmm.h"
 #include "trap/trap.h"
+#include "fs/file.h"
 
 #define MAX_PROCS 64
 #define MAX_NAME 16
@@ -72,6 +73,8 @@ struct proc {
     struct proc *first_child;
     struct proc *sibling;
 
+    // File Descriptor table
+    fd_table_t fds;
 };
 
 extern struct proc proctab[];
