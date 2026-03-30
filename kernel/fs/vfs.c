@@ -371,8 +371,6 @@ int vfs_write(file_t *f, const void *buf, size_t len) {
         default:
             return -1;
     }
-<<<<<<< Updated upstream
-=======
 }
 
 // Seek to a new offset in the file
@@ -409,5 +407,4 @@ off_t vfs_lseek(file_t *f, off_t offset, int whence) {
 	
 	f->offset = (size_t)new_offset;
 	return new_offset;
->>>>>>> Stashed changes
 }

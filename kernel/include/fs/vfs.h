@@ -27,10 +27,7 @@ typedef struct vnode {
 
 // A generic open file
 typedef struct file {
-<<<<<<< Updated upstream
-=======
     tarfs_entry_t *entry;  // for FILE_TARFS (legacy, may be removed)
->>>>>>> Stashed changes
     file_type_t type;
     vnode_t *vnode;
     size_t offset;
@@ -82,9 +79,5 @@ int     vfs_write(file_t *f, const void *buf, size_t len);
 vnode_t *vfs_lookup(const char *path);
 int vfs_create(const char *path, uint32_t mode);
 int vfs_unlink(const char *path);
-<<<<<<< Updated upstream
-int vfs_mkdir(const char *path, uint32_t mode);
-=======
 int vfs_mkdir(const char *path, uint32_t mode);
 off_t vfs_lseek(file_t *f, off_t offset, int whence);
->>>>>>> Stashed changes
