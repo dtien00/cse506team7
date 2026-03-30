@@ -6,7 +6,7 @@
 typedef int pid_t;
 typedef int uid_t;
 typedef int gid_t;
-typedef long off_t;
+typedef int64_t off_t;
 
 #define STDIN_FILENO  0
 #define STDOUT_FILENO 1
@@ -44,5 +44,7 @@ void _exit(int status);
 
 void* sbrk(intptr_t increment);
 int brk(void* addr);
+
+int unlink(const char *pathname);
 
 #endif

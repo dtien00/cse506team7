@@ -6,6 +6,31 @@
 .global read
 .global write
 .global close
+.global fork
+.global execve
+.global getpid
+.global getppid
+.global getuid
+.global getgid
+.global wait4
+.global lseek
+.global pipe
+.global dup
+.global dup2
+.global chdir
+.global getcwd
+.global isatty
+.global stat
+.global fstat
+.global mkdir
+.global chmod
+.global fchmod
+.global getdents64
+.global unlink
+.global kill
+.global link
+.global symlink
+.global readlink
 
 mmap:
     li a7, 14
@@ -44,6 +69,131 @@ write:
 
 close:
     li a7, 6
+    ecall
+    ret
+
+fork:
+    li a7, 2
+    ecall
+    ret
+
+execve:
+    li a7, 11
+    ecall
+    ret
+
+getpid:
+    li a7, 20
+    ecall
+    ret
+
+getppid:
+    li a7, 39
+    ecall
+    ret
+
+getuid:
+    li a7, 24
+    ecall
+    ret
+
+getgid:
+    li a7, 47
+    ecall
+    ret
+
+wait4:
+    li a7, 61
+    ecall
+    ret
+
+lseek:
+    li a7, 8
+    ecall
+    ret
+
+pipe:
+    li a7, 22
+    ecall
+    ret
+
+dup:
+    li a7, 23
+    ecall
+    ret
+
+dup2:
+    li a7, 33
+    ecall
+    ret
+
+chdir:
+    li a7, 49
+    ecall
+    ret
+
+getcwd:
+    li a7, 17
+    ecall
+    ret
+
+isatty:
+    li a7, 29
+    ecall
+    ret
+
+stat:
+    li a7, 79
+    ecall
+    ret
+
+fstat:
+    li a7, 80
+    ecall
+    ret
+
+mkdir:
+    li a7, 83
+    ecall
+    ret
+
+chmod:
+    li a7, 90
+    ecall
+    ret
+
+fchmod:
+    li a7, 91
+    ecall
+    ret
+
+getdents64:
+    li a7, 61
+    ecall
+    ret
+
+unlink:
+    li a7, 87
+    ecall
+    ret
+
+kill:
+    li a7, 62
+    ecall
+    ret
+
+link:
+    li a7, 86
+    ecall
+    ret
+
+symlink:
+    li a7, 88
+    ecall
+    ret
+
+readlink:
+    li a7, 89
     ecall
     ret
 
