@@ -7,19 +7,17 @@
 .global write
 .global close
 .global fork
+.global wait
 .global execve
 .global getpid
-.global getppid
 .global getuid
 .global getgid
-.global wait4
 .global lseek
 .global pipe
 .global dup
 .global dup2
 .global chdir
 .global getcwd
-.global isatty
 .global stat
 .global fstat
 .global mkdir
@@ -77,18 +75,18 @@ fork:
     ecall
     ret
 
+wait:
+    li a7, 7
+    ecall
+    ret
+
 execve:
-    li a7, 11
+    li a7, 8
     ecall
     ret
 
 getpid:
-    li a7, 20
-    ecall
-    ret
-
-getppid:
-    li a7, 39
+    li a7, 9
     ecall
     ret
 
@@ -99,11 +97,6 @@ getuid:
 
 getgid:
     li a7, 47
-    ecall
-    ret
-
-wait4:
-    li a7, 61
     ecall
     ret
 
@@ -134,11 +127,6 @@ chdir:
 
 getcwd:
     li a7, 17
-    ecall
-    ret
-
-isatty:
-    li a7, 29
     ecall
     ret
 
@@ -178,7 +166,7 @@ unlink:
     ret
 
 kill:
-    li a7, 62
+    li a7, 13
     ecall
     ret
 

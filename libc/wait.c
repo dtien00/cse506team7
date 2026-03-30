@@ -2,12 +2,13 @@
 #include "unistd.h"
 #include "stddef.h"
 
-pid_t wait4(pid_t pid, int *wstatus, int options, void *rusage);
+/* wait() is provided by the assembly wrapper in syscall.S (SYS_wait = 7).
+   The kernel's sys_wait takes a single argument: int *wstatus in a0. */
+pid_t wait(int *wstatus);
 
-pid_t wait(int *wstatus) {
-    return wait4(-1, wstatus, 0, NULL);
-}
-
+/* The kernel only supports wait-for-any-child, so waitpid always calls wait(). */
 pid_t waitpid(pid_t pid, int *wstatus, int options) {
-    return wait4(pid, wstatus, options, NULL);
+    (void)pid;
+    (void)options;
+    return wait(wstatus);
 }
