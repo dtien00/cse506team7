@@ -65,10 +65,13 @@ void boot(uint64_t hart_id, uint64_t dtb) {
 
     // VFS and filesystems must be ready before proc_init because
     // proc_init calls exec(), which calls vfs_open().
+    // Initialize VFS and filesystems
     vfs_init();
     tarfs_init();
     tmpfs_init();
+    // Mount root filesystem (tarfs)
     vfs_mount(NULL, "/", "tarfs");
+    // Mount tmpfs at /tmp
     vfs_mount(NULL, "/tmp", "tmpfs");
 
     syscall_init();
@@ -78,17 +81,6 @@ void boot(uint64_t hart_id, uint64_t dtb) {
 
     interrupts_on();
     printk("Turned on global interrupts. Now waiting for interrupts...\n");
-
-    // Initialize VFS and filesystems
-    // vfs_init();
-    // tarfs_init();   // Parses TAR and registers with VFS
-    // tmpfs_init();   // Registers tmpfs with VFS
-
-    // Mount root filesystem (tarfs)
-    vfs_mount(NULL, "/", "tarfs");
-
-    // Mount tmpfs at /tmp
-    vfs_mount(NULL, "/tmp", "tmpfs");
 
     printk("\n");
     printk("========================================\n");
