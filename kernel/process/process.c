@@ -73,11 +73,11 @@ void proc_init(void) {
 
     // ---- /bin/cat ----- //
     // Prepare argv for /bin/echo
-    static char *argv[] = { "cat", "/hello.txt", NULL };
+    static char *argv[] = { "sh", NULL };
     // Set current to init so exec uses the right process
     current = init;
-    if (exec("/bin/cat", argv) < 0) {
-        printk("[init] exec failed for /bin/cat\n");
+    if (exec("/bin/sh", argv) < 0) {
+        printk("[sh] exec failed for /bin/sh\n");
     }
     // ---- /bin/cat END ----- //    
 
