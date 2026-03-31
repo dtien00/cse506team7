@@ -52,6 +52,7 @@ struct stat {
 };
 
 int stat(const char *pathname, struct stat *statbuf);
+int lstat(const char *pathname, struct stat *statbuf);
 int fstat(int fd, struct stat *statbuf);
 int mkdir(const char *pathname, mode_t mode);
 int chmod(const char *pathname, mode_t mode);

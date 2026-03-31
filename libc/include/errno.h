@@ -38,6 +38,20 @@ extern int errno;
 #define EDOM            33
 #define ERANGE          34
 
+#define EDEADLK         35
+#define ENAMETOOLONG    36
+#define ENOLCK          37
+#define ENOSYS          38
+#define ENOTEMPTY       39
+#define ELOOP           40
+#define ENOMSG          42
+#define EOVERFLOW       75
+#define EILSEQ          84
+#define ENOTSOCK        88
+#define EADDRINUSE      98
+#define ETIMEDOUT       110
+#define ECONNREFUSED    111
+
 #define EWOULDBLOCK EAGAIN
 
 #endif
