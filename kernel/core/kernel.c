@@ -27,6 +27,7 @@ void run_all_tests(void) {
     sched_fairness_test_run();
     sched_idle_test_run();
     proc_test_run();
+    libc_syscall_test_run();
 
     // printk("%d passed, %d failed\n", passed, failed);
 }

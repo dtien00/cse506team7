@@ -71,15 +71,24 @@ void proc_init(void) {
     // }
     // ---- /bin/echo END ----- //
 
-    // ---- /bin/cat ----- //
-    // Prepare argv for /bin/echo
+    // ---- /bin/sh ----- //
+    Prepare argv for /bin/echo
     static char *argv[] = { "sh", NULL };
     // Set current to init so exec uses the right process
     current = init;
     if (exec("/bin/sh", argv) < 0) {
         printk("[sh] exec failed for /bin/sh\n");
     }
-    // ---- /bin/cat END ----- //    
+    // ---- /bin/sh END ----- //    
+
+    // ---- /bin/libc_test END ----- //   
+    // static char *argv[] = { "libc_test", NULL };
+    // // Set current to init so exec uses the right process
+    // current = init;
+    // if (exec("/bin/libc_test", argv) < 0) {
+    //     printk("[libc_test] exec failed for /bin/libc_test\n");
+    // }
+    // ---- /bin/libc_test END ----- //   
 
     proc_ready(init);
     current = NULL;
