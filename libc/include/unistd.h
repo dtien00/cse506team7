@@ -1,12 +1,7 @@
 #ifndef _UNISTD_H
 #define _UNISTD_H
 
-#include "types.h"
-
-typedef int pid_t;
-typedef int uid_t;
-typedef int gid_t;
-typedef int64_t off_t;
+#include "sys/types.h"
 
 #define STDIN_FILENO  0
 #define STDOUT_FILENO 1
