@@ -4,6 +4,8 @@
 #include "kernel/printk.h"
 #include "process/process.h"
 #include "trap/syscall.h"
+#include "drivers/plic.h"
+#include "drivers/uart.h"
 
 #define TIMER_INTERVAL 1000000ULL // ~0.1 second at 10 MHz clock
 
@@ -11,7 +13,6 @@
 extern void trap_entry(void);
 
 void trap_init(void) {
-
     // Install trap entry point
     write_csr(sscratch, 0);
     write_csr(stvec, (uint64_t) trap_entry);
@@ -20,7 +21,7 @@ void trap_init(void) {
     // Enable interrupts
     interrupts_enable(SIE_SOFTWARE);
     interrupts_enable(SIE_TIMER);
-    interrupts_enable(SIE_EXTERNAL);
+    // interrupts_enable(SIE_EXTERNAL);
 }
 
 static void handle_interrupt(trap_frame *frame) {
@@ -40,6 +41,15 @@ static void handle_interrupt(trap_frame *frame) {
         case SCAUSE_S_EXTERNAL_INT:
             printk("External interrupt\n");
             // TODO: Handle external interrupts (UART, disk, etc.)
+            uint32_t irq = plic_claim();
+            if (irq == PLIC_UART_IRQ) {
+                // handle the interrupt - adds to the driver's char buffer which a waiting read() can query later
+                uart_handle_interrupt();
+            }
+            // complete the interrupt
+            if (irq != 0) {
+                plic_complete(irq);
+            }
             break;
 
         default:
@@ -84,7 +94,7 @@ void handle_exception(trap_frame *frame) {
             printk("  Store access fault\n");
             break;
         case SCAUSE_ECALL_FROM_U:
-            // Handled above; unreachable.
+        // Handled above; unreachable.
         case SCAUSE_ECALL_FROM_S:
             printk("  System call from supervisor mode\n");
             break;
