@@ -1,7 +1,7 @@
 #ifndef _SIGNAL_H
 #define _SIGNAL_H
 
-#include "types.h"
+#include "sys/types.h"
 
 typedef int sig_atomic_t;
 typedef void (*sighandler_t)(int);

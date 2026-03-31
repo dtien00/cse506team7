@@ -1,7 +1,7 @@
 #ifndef _SYS_STAT_H
 #define _SYS_STAT_H
 
-#include "types.h"
+#include "sys/types.h"
 
 #define S_IFMT   0170000
 #define S_IFSOCK 0140000
