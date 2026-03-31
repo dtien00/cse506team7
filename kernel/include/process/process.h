@@ -2,6 +2,7 @@
 
 #include "kernel/types.h"
 #include "mm/vmm.h"
+#include "mm/vma.h"
 #include "trap/trap.h"
 #include "fs/file.h"
 
@@ -47,6 +48,7 @@ struct proc {
     // Memory management
     pagetable_t pagetable;
     uint64_t sz;
+    struct vm_area *vma_list;  // List of memory regions
 
     // User-mode state (saved/restored by trap_entry/sret in trap.S)
     uint64_t pc;

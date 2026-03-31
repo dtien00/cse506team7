@@ -45,6 +45,8 @@ typedef struct trap_frame {
 // called to initialize trap handler
 void trap_init(void);
 
+void page_fault_handler(struct trap_frame *);
+
 // called to handle all traps
 void trap_handler(struct trap_frame *);
 
