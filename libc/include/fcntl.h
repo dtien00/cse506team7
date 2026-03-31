@@ -23,7 +23,7 @@
 #define FD_CLOEXEC 1
 
 int open(const char *pathname, int flags, ...);
-int create(const char *pathname, mode_t mode);
+int creat(const char *pathname, mode_t mode);
 int fcntl(int fd, int cmd, ...);
 
 #endif

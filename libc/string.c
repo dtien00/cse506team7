@@ -20,9 +20,11 @@ size_t strlen(const char *s) {
     return len;
 }
 
-int strncpy(char *dest, const char *src, size_t n) {
-    while (n-- && (*dest++ = *src++));
-    return 0;
+char* strncpy(char *dest, const char *src, size_t n) {
+    char *d = dest;
+    while (n-- && (*d++ = *src++));
+    while (n-- != (size_t)-1) *d++ = '\0';
+    return dest;
 }
 
 void* memmove(void *dest, const void *src, size_t n) {

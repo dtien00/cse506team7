@@ -24,31 +24,31 @@ int sigaction(int signum, const struct sigaction *act, struct sigaction *oldact)
 
 int sigemptyset(sigset_t *set) {
     if (!set) return -1;
-    set->sig[0] = 0;
+    *set = 0;
     return 0;
 }
 
 int sigfillset(sigset_t *set) {
     if (!set) return -1;
-    set->sig[0] = ~0UL;
+    *set = ~0UL;
     return 0;
 }
 
 int sigaddset(sigset_t *set, int signum) {
     if (!set || signum < 1 || signum > 31) return -1;
-    set->sig[0] |= (1UL << signum);
+    *set |= (1UL << signum);
     return 0;
 }
 
 int sigdelset(sigset_t *set, int signum) {
     if (!set || signum < 1 || signum > 31) return -1;
-    set->sig[0] &= ~(1UL << signum);
+    *set &= ~(1UL << signum);
     return 0;
 }
 
 int sigismember(const sigset_t *set, int signum) {
     if (!set || signum < 1 || signum > 31) return -1;
-    return (set->sig[0] & (1UL << signum)) ? 1 : 0;
+    return (*set & (1UL << signum)) ? 1 : 0;
 }
 
 int sigprocmask(int how, const sigset_t *set, sigset_t *oldset) {

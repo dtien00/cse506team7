@@ -48,9 +48,7 @@ typedef void (*sighandler_t)(int);
 #define SIG_UNBLOCK 1
 #define SIG_SETMASK 2
 
-typedef struct {
-    unsigned long sig[1];
-} sigset_t;
+typedef unsigned long sigset_t;
 
 struct sigaction {
     sighandler_t sa_handler;
