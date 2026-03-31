@@ -122,7 +122,7 @@ char* strdup(const char *s) {
 
 char* strstr(const char *haystack, const char *needle) {
     if (!*needle) return (char*)haystack;
-    
+
     size_t needle_len = strlen(needle);
     while (*haystack) {
         if (*haystack == *needle && strncmp(haystack, needle, needle_len) == 0) {
@@ -131,4 +131,44 @@ char* strstr(const char *haystack, const char *needle) {
         haystack++;
     }
     return NULL;
+}
+
+void* memchr(const void *s, int c, size_t n) {
+    const uint8_t *p = s;
+    while (n--) {
+        if (*p == (uint8_t)c) return (void*)p;
+        p++;
+    }
+    return NULL;
+}
+
+size_t strnlen(const char *s, size_t maxlen) {
+    size_t len = 0;
+    while (len < maxlen && s[len]) len++;
+    return len;
+}
+
+char* strtok(char *str, const char *delim) {
+    static char *saved = NULL;
+    if (str) saved = str;
+    if (!saved || !*saved) return NULL;
+
+    /* skip leading delimiters */
+    while (*saved && strchr(delim, *saved)) saved++;
+    if (!*saved) return NULL;
+
+    char *start = saved;
+    while (*saved && !strchr(delim, *saved)) saved++;
+    if (*saved) {
+        *saved = '\0';
+        saved++;
+    } else {
+        saved = NULL;
+    }
+    return start;
+}
+
+char* strerror(int errnum) {
+    (void)errnum;
+    return "error";
 }

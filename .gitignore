@@ -7,3 +7,4 @@ tools/run-remote-qemu.sh
 compile.sh
 flat_kernel/
 .DS_Store
+.claude/
