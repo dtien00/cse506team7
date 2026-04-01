@@ -253,10 +253,9 @@ int term_read(terminal_t *t, char *buf, uint32_t n)
 
         // Sleep until the ISR sets line_ready or sig_pending
         while (!t->line_ready && t->sig_pending == TERM_SIG_NONE)
-            asm volatile("wfi");
-            // proc_sleep(t);     // sleeps on (t) as channel
+            proc_sleep(t);     // sleeps on (t) as channel
 
-        // t->reader = NULL;
+        t->reader = NULL;
 
         // A signal arrived while we were sleeping (e.g. ^C)
         if (t->sig_pending != TERM_SIG_NONE) {
@@ -264,15 +263,15 @@ int term_read(terminal_t *t, char *buf, uint32_t n)
             t->sig_pending = TERM_SIG_NONE;
             // Terminate the current process.
             // proc_exit() calls schedule() and does not return.
-            // proc_exit(-1);
+            proc_exit(-1);
             return -1;   // unreachable; keeps the compiler happy
         }
 
         // EOF: ^D on an empty line — return 0 to signal EOF to the caller
-        // if (t->llen == 0) {
-        //     t->line_ready = 0;
-        //     return 0;
-        // }
+        if (t->llen == 0) {
+            t->line_ready = 0;
+            return 0;
+        }
 
         // Copy canonical line to the caller's buffer
         uint32_t tocopy = (t->llen < n) ? t->llen : n;
@@ -299,13 +298,12 @@ int term_read(terminal_t *t, char *buf, uint32_t n)
         // Blocking: sleep until VMIN bytes are available
         t->reader = current;
         while (ibuf_count(t) < (uint32_t)vmin && t->sig_pending == TERM_SIG_NONE)
-            asm volatile("wfi");
-            // proc_sleep(t);
+            proc_sleep(t);
         t->reader = NULL;
 
         if (t->sig_pending != TERM_SIG_NONE) {
             t->sig_pending = TERM_SIG_NONE;
-            // proc_exit(-1);
+            proc_exit(-1);
             return -1;
         }
 

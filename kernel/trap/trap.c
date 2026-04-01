@@ -146,23 +146,23 @@ void timer_handler(void) {
     sbi_set_timer(read_csr(time) + TIMER_INTERVAL);
 
     // Enforce per-process tick budget if configured (time_slice > 0)
-    if (current != NULL && current->time_slice > 0) {
-        current->total_time++;
-        if (current->total_time >= current->time_slice) {
-            printk("Timer: pid %d exceeded tick budget (%llu ticks), killing\n",
-                   current->pid, current->time_slice);
-            current->state = PROC_ZOMBIE;
-            current->exit_code = -1;
-            if (current->parent)
-                proc_wakeup(current->parent);
-            // proc_yield() below will NOT re-queue a ZOMBIE
-            // (context_switch checks state == PROC_RUNNING before re-queuing)
+    if (current != NULL) {
+        if (current->time_slice > 0) {
+            current->total_time++;
+            if (current->total_time >= current->time_slice) {
+                printk("Timer: pid %d exceeded tick budget (%llu ticks), killing\n",
+                       current->pid, current->time_slice);
+                current->state = PROC_ZOMBIE;
+                current->exit_code = -1;
+                if (current->parent)
+                    proc_wakeup(current->parent);
+                // proc_yield() below will NOT re-queue a ZOMBIE
+                // (context_switch checks state == PROC_RUNNING before re-queuing)
+            }
         }
+        proc_yield();
     }
-
-    proc_yield();
 }
-
 
 // Set/clear the SIE (supervisor interrupt enable) bit in sstatus
 void interrupts_on(void) { set_csr_bit(sstatus, SSTATUS_SIE); }

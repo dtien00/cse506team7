@@ -14,6 +14,7 @@
 #include "kernel/console.h"
 
 #include "tests/test.h"
+#include "tty/term.h"
 
 // External symbols from linker script
 extern char _kernel_end[];
@@ -72,6 +73,9 @@ void boot(uint64_t hart_id, uint64_t dtb) {
     // initialize drivers once memory is mapped
     drivers_init();
 
+    //initialize the terminal
+    term_global_init();
+
     // switch to uart once drivers are initialized
     if (console_set_driver("uart") == 0)
         printk("console: switched to uart\n");
@@ -89,6 +93,8 @@ void boot(uint64_t hart_id, uint64_t dtb) {
 
     syscall_init();
 
+    // set up process 0 aka swapper as idle loop
+    scheduler_init();
     // proc_init sets up the init process and loads its ELF via exec().
     proc_init();
 
@@ -106,6 +112,7 @@ void boot(uint64_t hart_id, uint64_t dtb) {
     #else
         // Hand off to the scheduler; runs the init process (pid 1).
         schedule();
+        printk("Kernel panic.\n"); // should never reach here as schedule will always default to its own idle loop
         while (1)
             asm volatile("wfi");
     #endif

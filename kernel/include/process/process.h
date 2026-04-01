@@ -92,6 +92,7 @@ void proc_kill(struct proc *p);
 int proc_wait(int *exit_code_out);
 
 // Scheduling
+void scheduler_init(void);
 struct proc* proc_current(void);
 void proc_yield(void);
 void schedule(void);
@@ -101,7 +102,6 @@ struct proc* proc_next_ready(void);
 void proc_ready(struct proc *p);
 void proc_block(struct proc *p);
 void proc_unblock(struct proc *p);
-void context_switch(struct proc *next);
 
 // Debug
 void proc_dump(void);

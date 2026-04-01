@@ -27,6 +27,11 @@ trap_entry:
     // which is the correct sp value to record for an S-mode trap.
     csrr t0, sscratch
     sd t0, 8(sp)
+
+    // clear sscratch — kernel is running in S-mode
+    csrw  sscratch, zero
+
+    // Save remaining GPRs
     sd gp, 16(sp) //global pointer for C compiler use
     sd tp, 24(sp) //thread pointer for C compiler use
 
@@ -94,10 +99,6 @@ trap_entry:
     addi t0, sp, 280
     csrw sscratch, t0
 
-    // Save user sp (from trapframe) in sscratch temporarily via t0
-    // We'll restore it last
-    ld t0, 8(sp)               // user sp saved at offset 8
-
     // Restore all GPRs except sp and t0
     ld ra, 0(sp)
     ld gp, 16(sp)
@@ -122,6 +123,7 @@ trap_entry:
     ld s9, 168(sp)
     ld s10, 176(sp)
     ld s11, 184(sp)
+    ld t0, 192(sp)
     ld t1, 200(sp)
     ld t2, 208(sp)
     ld t3, 216(sp)
@@ -129,11 +131,14 @@ trap_entry:
     ld t5, 232(sp)
     ld t6, 240(sp)
 
-    // Set sp to user sp, then return to U-mode
-    mv sp, t0
+    // Load user sp last — after this instruction sp no longer addresses the
+    // trapframe, but all other registers are already fully restored.e
+    ld sp, 8(sp)
     sret
 
 .Lkernel_return:
+    // Explicitly re-enforce the sscratch==0 invariant before we hand control
+    csrw  sscratch, zero
     // S-mode return: restore all GPRs, keep sscratch=0
     ld ra, 0(sp)
     ld gp, 16(sp)
