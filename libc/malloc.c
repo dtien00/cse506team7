@@ -23,15 +23,15 @@ static void    *arena_end    = NULL;
 static void    *arena_current = NULL;
 
 
-#define SYS_write 4
-static void do_write(const char *buf, int len) {
-    if (len <= 0) return;
-    register long a0 asm("a0") = 1;           /* fd = stdout */
-    register long a1 asm("a1") = (long)buf;
-    register long a2 asm("a2") = len;
-    register long a7 asm("a7") = SYS_write;
-    asm volatile("ecall" :: "r"(a0), "r"(a1), "r"(a2), "r"(a7) : "memory");
-}
+// #define SYS_write 4
+// static void do_write(const char *buf, int len) {
+//     if (len <= 0) return;
+//     register long a0 asm("a0") = 1;           /* fd = stdout */
+//     register long a1 asm("a1") = (long)buf;
+//     register long a2 asm("a2") = len;
+//     register long a7 asm("a7") = SYS_write;
+//     asm volatile("ecall" :: "r"(a0), "r"(a1), "r"(a2), "r"(a7) : "memory");
+// }
 
 
 /* ── internal helpers ───────────────────────────────────────────────────── */
