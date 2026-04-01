@@ -4,6 +4,7 @@
 #include "kernel/printk.h"
 #include "mm/kmalloc.h"
 #include "lib/string.h"
+#include "tty/term.h"
 
 #define SEEK_SET 0
 #define SEEK_CUR 1
@@ -115,7 +116,7 @@ int vfs_mount(const char *source, const char *target, const char *fstype) {
     mnt->next = mounts;
     mounts = mnt;
 
-    printk("vfs: mounted '%s' at '%s' (type: %s)\n", 
+    printk("vfs: mounted '%s' at '%s' (type: %s)\n",
            source ? source : "none", target, fstype);
     return 0;
 }
@@ -201,7 +202,7 @@ vnode_t *vfs_lookup(const char *path) {
     // Get relative path within the mount
     const char *rel_path = path;
     size_t mnt_len = strlen(mnt->mountpoint);
-    
+
     // Skip past mount point
     if (mnt_len > 1) {  // Not root mount
         rel_path += mnt_len;
@@ -332,11 +333,7 @@ int vfs_read(file_t *f, void *buf, size_t len) {
         }
 
         case FILE_STDIN:
-            printk("vfs: vfs_read on stdin not supported\n");
-            return -1;
-
-        case FILE_STDOUT:
-            return -1;
+            return term_read(&console_term, buf, (uint32_t)len);
 
         default:
             return -1;
@@ -348,8 +345,7 @@ int vfs_write(file_t *f, const void *buf, size_t len) {
 
     switch (f->type) {
         case FILE_STDOUT: {
-            printk("%.*s", (int)len, (const char *)buf);
-            return (int)len;
+            return term_write(&console_term, buf, (uint32_t)len);
         }
 
         case FILE_TMPFS: {
@@ -364,9 +360,6 @@ int vfs_write(file_t *f, const void *buf, size_t len) {
 
         case FILE_TARFS:
             printk("vfs: write to read-only tarfs file\n");
-            return -1;
-
-        case FILE_STDIN:
             return -1;
 
         default:
