@@ -60,18 +60,7 @@ void proc_init(void) {
     init->state = PROC_READY;
     init->context.sp = (uint64_t)&kstacks[idx][KSTACK_SIZE];
     init->context.ra = (uint64_t)proc_entry;
-
-    // ---- /bin/echo ----- //
-    // Prepare argv for /bin/echo
-    // static char *argv[] = { "echo", "Hello, world!", NULL };
-    // // Set current to init so exec uses the right process
-    // current = init;
-    // if (exec("/bin/echo", argv) < 0) {
-    //     printk("[init] exec failed for /bin/echo\n");
-    // }
-    // ---- /bin/echo END ----- //
-
-    // ---- /bin/cat ----- //
+    
     // Prepare argv for /bin/echo
     static char *argv[] = { "sh", NULL };
     // Set current to init so exec uses the right process
@@ -79,7 +68,13 @@ void proc_init(void) {
     if (exec("/bin/sh", argv) < 0) {
         printk("[sh] exec failed for /bin/sh\n");
     }
-    // ---- /bin/cat END ----- //    
+
+    // static char *argv[] = { "forktest", NULL };
+    // current = init;
+    // if (exec("/bin/forktest", argv) < 0) {
+    //     printk("[forktest] exec failed\n");
+    // }
+
 
     proc_ready(init);
     current = NULL;
@@ -171,12 +166,18 @@ int proc_wait(int *exit_code_out) {
             have_children = 1;
             if (child->state == PROC_ZOMBIE) {
                 int pid = child->pid;
-                if (exit_code_out) *exit_code_out = child->exit_code;
                 // Remove child from parent's child list
                 struct proc **link = &current->first_child;
                 while (*link && *link != child) link = &(*link)->sibling;
                 if (*link == child) *link = child->sibling;
-                // Free child resources
+                // Write exit code to user-space pointer with SUM so S-mode
+                // can access user pages.
+                if (exit_code_out) {
+                    set_csr_bit(sstatus, SSTATUS_SUM);
+                    *exit_code_out = child->exit_code;
+                    clear_csr_bit(sstatus, SSTATUS_SUM);
+                }
+
                 proc_free(child);
                 return pid;
             }
@@ -212,6 +213,59 @@ void proc_dump(void) {
         }
     }
 }
+
+void fork_ret(void) {
+    struct proc *p = current;
+    trap_frame *tf = p->trapframe;
+
+    // Mirror proc_start_user: kernel stack in sscratch, U-mode sstatus, switch pagetable
+    int idx = p - proctab;
+    write_csr(sscratch, (uint64_t)&kstacks[idx][KSTACK_SIZE]);
+    write_csr(sepc, tf->sepc);
+    write_csr(sstatus, (tf->sstatus & ~SSTATUS_SPP) | SSTATUS_SPIE);
+    vmm_switch(p->pagetable);
+
+    // Restore all 31 GPRs from the trapframe and sret.
+    // t6 is used as the pointer, so it must be loaded last.
+    register uint64_t tf_r asm("t6") = (uint64_t)tf;
+    asm volatile(
+        "ld ra,    0(t6)\n"
+        "ld sp,    8(t6)\n"
+        "ld gp,   16(t6)\n"
+        "ld tp,   24(t6)\n"
+        "ld a0,   32(t6)\n"
+        "ld a1,   40(t6)\n"
+        "ld a2,   48(t6)\n"
+        "ld a3,   56(t6)\n"
+        "ld a4,   64(t6)\n"
+        "ld a5,   72(t6)\n"
+        "ld a6,   80(t6)\n"
+        "ld a7,   88(t6)\n"
+        "ld s0,   96(t6)\n"
+        "ld s1,  104(t6)\n"
+        "ld s2,  112(t6)\n"
+        "ld s3,  120(t6)\n"
+        "ld s4,  128(t6)\n"
+        "ld s5,  136(t6)\n"
+        "ld s6,  144(t6)\n"
+        "ld s7,  152(t6)\n"
+        "ld s8,  160(t6)\n"
+        "ld s9,  168(t6)\n"
+        "ld s10, 176(t6)\n"
+        "ld s11, 184(t6)\n"
+        "ld t0,  192(t6)\n"
+        "ld t1,  200(t6)\n"
+        "ld t2,  208(t6)\n"
+        "ld t3,  216(t6)\n"
+        "ld t4,  224(t6)\n"
+        "ld t5,  232(t6)\n"
+        "ld t6,  240(t6)\n"
+        "sret\n"
+        : : "r"(tf_r) : "memory"
+    );
+    __builtin_unreachable();
+}
+
 
 void proc_start_user(struct proc *p, uint64_t entry, uint64_t user_sp) {
     // SPP=0 → sret returns to U-mode; SPIE=1 → interrupts enabled after sret

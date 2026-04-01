@@ -112,3 +112,5 @@ void proc_wakeup(void *chan);
 
 // Utilities
 int exec(const char *path, char *const argv[]);
+
+void fork_ret(void);
