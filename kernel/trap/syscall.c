@@ -155,6 +155,8 @@ void sys_exit(int status) {
 }
 
 pid_t sys_fork(void) {
+    if (!current) return -1;
+
     // Allocate and initialize new process (assigns pid, stack, context)
     struct proc *child = proc_create(current->name);
     if (!child) return -1;

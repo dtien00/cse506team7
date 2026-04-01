@@ -159,8 +159,8 @@ void proc_kill(struct proc *p) {
 int proc_wait(int *exit_code_out) {
     if (!current) return -1;
     struct proc *child = current->first_child;
-    int have_children = 0;
     while (1) {
+        int have_children = 0;
         child = current->first_child;
         while (child) {
             have_children = 1;

@@ -29,7 +29,7 @@ static int builtin_cd(char **argv) {
         return 0;
     }
     if (chdir(argv[1]) < 0) {
-        printf("cd: cannot change directory to '%s'\n", argv[1]);
+        dprintf(STDERR_FILENO, "cd: cannot change directory to '%s'\n", argv[1]);
         return 1;
     }
     return 0;
@@ -56,7 +56,7 @@ static int execute(char **argv) {
 
     pid_t pid = fork();
     if (pid < 0) {
-        printf("fork failed\n");
+        write(STDERR_FILENO, "fork failed\n", 12);
         return 1;
     }
 
@@ -70,7 +70,7 @@ static int execute(char **argv) {
         }
 
         execve(path, argv, NULL);
-        printf("sh: %s: command not found\n", argv[0]);
+        dprintf(STDERR_FILENO, "sh: %s: command not found\n", argv[0]);
         exit(127);
     }
 
