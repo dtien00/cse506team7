@@ -153,7 +153,47 @@ pagetable_t vmm_create_pagetable(void) {
                     pagetable_t kl1 = (pagetable_t)PTE_TO_PA(kpt[i]);
                     pagetable_t pl1 = (pagetable_t)pmm_alloc_page();
                     if (!pl1) { vmm_free_pagetable(pt); return NULL; }
-                    for (int j = 0; j < 512; j++) pl1[j] = kl1[j];
+                    // Build a private L1 copy, dropping kernel-only device
+                    // mappings so they don't block user heap at 0x10000000.
+                    // Device pages are mapped 3 levels deep (L2→L1→L0→page),
+                    // so kl1[j] may be a non-leaf pointer to an L0 table that
+                    // holds the device leaf PTE.  We must deep-copy L0 tables
+                    // too and drop any kernel-only leaves found there.
+                    for (int j = 0; j < 512; j++) {
+                        uint64_t e = kl1[j];
+                        if (!(e & PTE_V)) {
+                            pl1[j] = 0;
+                        } else if (e & (PTE_R | PTE_W | PTE_X)) {
+                            // Leaf at L1 level (huge page).
+                            if (e & PTE_U)
+                                pl1[j] = e;   // user huge-page: keep
+                            else
+                                pl1[j] = 0;   // kernel-only huge-page: drop
+                        } else {
+                            // Non-leaf: points to an L0 table.
+                            // Make a private copy, dropping kernel-only leaves.
+                            pagetable_t kl0 = (pagetable_t)PTE_TO_PA(e);
+                            pagetable_t pl0 = (pagetable_t)pmm_alloc_page();
+                            if (!pl0) { vmm_free_pagetable(pt); return NULL; }
+                            int has_user = 0;
+                            for (int k = 0; k < 512; k++) {
+                                uint64_t le = kl0[k];
+                                if ((le & PTE_V) && !(le & PTE_U))
+                                    pl0[k] = 0;  // drop kernel/device leaf
+                                else {
+                                    pl0[k] = le;
+                                    if (le & PTE_V) has_user = 1;
+                                }
+                            }
+                            if (has_user) {
+                                pl1[j] = PA_TO_PTE((uintptr_t)pl0) | (e & 0x3FF);
+                            } else {
+                                // L0 table is empty after dropping device PTEs
+                                pmm_free_page(pl0);
+                                pl1[j] = 0;
+                            }
+                        }
+                    }
                     pt[i] = PA_TO_PTE((uintptr_t)pl1) | (kpt[i] & 0x3FF);
                 }
             } else {

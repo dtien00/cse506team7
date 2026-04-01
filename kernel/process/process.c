@@ -60,6 +60,8 @@ void proc_init(void) {
     init->state = PROC_READY;
     init->context.sp = (uint64_t)&kstacks[idx][KSTACK_SIZE];
     init->context.ra = (uint64_t)proc_entry;
+    vma_init(&init->vma_list);
+    fd_init(&init->fds);
 
     // ---- /bin/echo ----- //
     // Prepare argv for /bin/echo
@@ -73,21 +75,21 @@ void proc_init(void) {
 
     // ---- /bin/sh ----- //
     // Prepare argv for /bin/echo
-    static char *argv[] = { "sh", NULL };
-    // Set current to init so exec uses the right process
-    current = init;
-    if (exec("/bin/sh", argv) < 0) {
-        printk("[sh] exec failed for /bin/sh\n");
-    }
+    // static char *argv[] = { "sh", NULL };
+    // // Set current to init so exec uses the right process
+    // current = init;
+    // if (exec("/bin/sh", argv) < 0) {
+    //     printk("[sh] exec failed for /bin/sh\n");
+    // }
     // ---- /bin/sh END ----- //    
 
     // ---- /bin/libc_test END ----- //   
-    // static char *argv[] = { "libc_test", NULL };
-    // // Set current to init so exec uses the right process
-    // current = init;
-    // if (exec("/bin/libc_test", argv) < 0) {
-    //     printk("[libc_test] exec failed for /bin/libc_test\n");
-    // }
+    static char *argv[] = { "libc_test", NULL };
+    // Set current to init so exec uses the right process
+    current = init;
+    if (exec("/bin/libc_test", argv) < 0) {
+        printk("[libc_test] exec failed for /bin/libc_test\n");
+    }
     // ---- /bin/libc_test END ----- //   
 
     proc_ready(init);
@@ -338,6 +340,8 @@ int exec(const char *path, char *const argv[]) {
     
     struct vm_area *new_vma_list = NULL;
     vma_init(&new_vma_list);
+    
+    uintptr_t highest_seg_end = 0;
 
     // 4. Load each PT_LOAD segment into the new page table
     for (int i = 0; i < ehdr.e_phnum; i++) {
@@ -357,6 +361,10 @@ int exec(const char *path, char *const argv[]) {
 
         uintptr_t seg_start = PGROUNDDOWN(phdr.p_vaddr);
         uintptr_t seg_end   = PGROUNDUP(phdr.p_vaddr + phdr.p_memsz);
+        
+        if (seg_end > highest_seg_end) {
+            highest_seg_end = seg_end;
+        }
 
         // Allocate and map physical pages; zero them so BSS is handled
         for (uintptr_t va = seg_start; va < seg_end; va += PGSIZE) {
@@ -461,7 +469,7 @@ int exec(const char *path, char *const argv[]) {
     
     current->pagetable = new_pt;
     current->vma_list = new_vma_list;
-    current->sz        = stack_top;
+    current->sz        = highest_seg_end;
     current->satp      = MAKE_SATP((uintptr_t)new_pt);
 
     // 8. Write entry point and argument registers into the live trapframe

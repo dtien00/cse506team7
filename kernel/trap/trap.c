@@ -202,6 +202,9 @@ void page_fault_handler(trap_frame *frame) {
     /* ── 2. Look up the VMA containing the faulting address ────────────── */
     struct vm_area *vma = vma_find(current->vma_list, faulting_va);
     if (!vma) {
+        printk("  Faulting VA=0x%p  sp=0x%p  sepc=0x%p\n",
+               faulting_va, frame->sp, frame->sepc);
+        vma_dump(current->vma_list);
         kill_current(frame, "address not in any VMA");
         return;
     }

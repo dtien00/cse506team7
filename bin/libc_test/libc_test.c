@@ -61,16 +61,16 @@ static void test_printf(void) {
     /* Basic string printing — if this works, the whole I/O path is up */
     printf("  [INFO] stdout write path: printf -> ecall SYS_write(4) -> printk\n");
 
-    /* sprintf into a local buffer */
-    char buf[64];
-    int n = sprintf(buf, "hello %s %d", "world", 42);
-    TEST("sprintf basic", n == 14 && strcmp(buf, "hello world 42") == 0);
-
     /* snprintf truncation */
     char small[8];
     int ret = snprintf(small, sizeof(small), "abcdefghij");
     TEST("snprintf truncates and NUL-terminates", small[7] == '\0' && ret == 10);
     TEST("snprintf content is truncated prefix",  strcmp(small, "abcdefg") == 0);
+
+    /* sprintf into a local buffer */
+    char buf[64];
+    int n = sprintf(buf, "hello %s %d", "world", 42);
+    TEST("sprintf basic", n == 14 && strcmp(buf, "hello world 42") == 0);
 
     /* %d negatives */
     sprintf(buf, "%d", -999);

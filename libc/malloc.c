@@ -22,6 +22,18 @@ static void    *arena_start  = NULL;
 static void    *arena_end    = NULL;
 static void    *arena_current = NULL;
 
+
+#define SYS_write 4
+static void do_write(const char *buf, int len) {
+    if (len <= 0) return;
+    register long a0 asm("a0") = 1;           /* fd = stdout */
+    register long a1 asm("a1") = (long)buf;
+    register long a2 asm("a2") = len;
+    register long a7 asm("a7") = SYS_write;
+    asm volatile("ecall" :: "r"(a0), "r"(a1), "r"(a2), "r"(a7) : "memory");
+}
+
+
 /* ── internal helpers ───────────────────────────────────────────────────── */
 
 /* Walk the free list looking for a reusable small block >= size.
@@ -126,8 +138,10 @@ static block_t *request_space(block_t *last, size_t size) {
 /* ── public API ─────────────────────────────────────────────────────────── */
 
 void *malloc(size_t size) {
-    if (size == 0)
+    if (size == 0){
+        // do_write("0", 1);
         return NULL;
+    }
 
     size = ALIGN8(size);   /* always work with aligned sizes */
 
@@ -135,8 +149,10 @@ void *malloc(size_t size) {
 
     if (!head) {
         block = request_space(NULL, size);
-        if (!block)
+        if (!block){
+            // do_write("1", 1);
             return NULL;
+        }
         /* Large blocks are not on the list; only link small ones. */
         if (!block->is_large)
             head = block;
@@ -145,8 +161,10 @@ void *malloc(size_t size) {
         block = find_free_block(&last, size);
         if (!block) {
             block = request_space(last, size);
-            if (!block)
+            if (!block){
+                // do_write("2", 1);
                 return NULL;
+            }
             /* request_space already linked small blocks via last->next. */
         } else {
             split_block(block, size);
