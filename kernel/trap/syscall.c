@@ -4,6 +4,7 @@
 #include "trap/trap.h"
 #include "mm/pmm.h"
 #include "mm/vmm.h"
+#include "mm/vma.h"
 #include "mm/kmalloc.h"
 #include "lib/string.h"
 #include "arch/riscv.h"
@@ -137,8 +138,18 @@ pid_t sys_fork(void) {
     child->pagetable = vmm_copy_pagetable(current->pagetable);
     if (!child->pagetable) {
         proc_free(child);
-        return -1; // Unable to create child address space as copy of the parent
+        return -1;
     }
+    
+    // Copy parent's VMA list
+    if (vma_copy_all(&child->vma_list, current->vma_list) != 0) {
+        vmm_free_pagetable(child->pagetable);
+        proc_free(child);
+        return -1;
+    }
+    
+    // Copy sz field
+    child->sz = current->sz;
 
     // Copy parent's trap frame and register state to the child
     if (current->trapframe) {
@@ -286,18 +297,23 @@ void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t off
     uintptr_t va;
     
     if ((flags & MAP_FIXED) && addr != NULL) {
-        va = (uintptr_t)addr;
+        va = PGROUNDDOWN((uintptr_t)addr);
         if (va < USER_HEAP_START || va + alloc_size > USER_HEAP_END) {
             printk("sys_mmap: fixed address out of range\n");
             return MAP_FAILED;
         }
-    } else {
-        if (p->sz < USER_HEAP_START) {
-            p->sz = USER_HEAP_START;
-        }
-        va = PGROUNDUP(p->sz);
         
-        if (va + alloc_size > USER_HEAP_END) {
+        // Check for overlaps with existing VMAs
+        if (vma_find_overlap(p->vma_list, va, va + alloc_size)) {
+            printk("sys_mmap: fixed address overlaps existing mapping\n");
+            return MAP_FAILED;
+        }
+    } else {
+        // Find a free region in the address space
+        uintptr_t hint = (p->sz < USER_HEAP_START) ? USER_HEAP_START : PGROUNDUP(p->sz);
+        va = vma_find_free_region(p->vma_list, alloc_size, hint, USER_HEAP_START, USER_HEAP_END);
+        
+        if (va == 0) {
             printk("sys_mmap: out of virtual address space\n");
             return MAP_FAILED;
         }
@@ -307,6 +323,7 @@ void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t off
     if (prot & PROT_READ) perm |= PTE_R;
     if (prot & PROT_WRITE) perm |= PTE_W;
     
+    // Allocate and map physical pages
     for (size_t i = 0; i < pages; i++) {
         uintptr_t page_va = va + (i * PGSIZE);
         void* page_pa = pmm_alloc_page();
@@ -343,7 +360,47 @@ void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t off
         }
     }
     
-    if (!(flags & MAP_FIXED)) {
+    // Create VMA to track this mapping
+    uint32_t vma_prot = 0;
+    if (prot & PROT_READ) vma_prot |= VMA_PROT_READ;
+    if (prot & PROT_WRITE) vma_prot |= VMA_PROT_WRITE;
+    
+    uint32_t vma_flags = 0;
+    if (flags & MAP_PRIVATE) vma_flags |= VMA_PRIVATE;
+    if (flags & MAP_FIXED) vma_flags |= VMA_FIXED;
+    
+    struct vm_area *new_vma = vma_create(va, va + alloc_size, vma_prot, vma_flags, VMA_TYPE_ANON);
+    if (!new_vma) {
+        // Cleanup: unmap and free all pages
+        for (size_t i = 0; i < pages; i++) {
+            uintptr_t cleanup_va = va + (i * PGSIZE);
+            uint64_t *pte = vmm_walk(p->pagetable, cleanup_va, 0);
+            if (pte && (*pte & PTE_V)) {
+                uintptr_t cleanup_pa = PTE_TO_PA(*pte);
+                vmm_unmap(p->pagetable, cleanup_va);
+                pmm_free_page((void*)cleanup_pa);
+            }
+        }
+        return MAP_FAILED;
+    }
+    
+    if (vma_insert(&p->vma_list, new_vma) != 0) {
+        vma_free(new_vma);
+        // Cleanup: unmap and free all pages
+        for (size_t i = 0; i < pages; i++) {
+            uintptr_t cleanup_va = va + (i * PGSIZE);
+            uint64_t *pte = vmm_walk(p->pagetable, cleanup_va, 0);
+            if (pte && (*pte & PTE_V)) {
+                uintptr_t cleanup_pa = PTE_TO_PA(*pte);
+                vmm_unmap(p->pagetable, cleanup_va);
+                pmm_free_page((void*)cleanup_pa);
+            }
+        }
+        return MAP_FAILED;
+    }
+    
+    // Update sz to track highest address
+    if (va + alloc_size > p->sz) {
         p->sz = va + alloc_size;
     }
     
@@ -361,18 +418,54 @@ int sys_munmap(void *addr, size_t length) {
         return -1;
     }
     
-    uintptr_t va = (uintptr_t)addr;
-    size_t pages = (length + PGSIZE - 1) / PGSIZE;
+    uintptr_t va_start = PGROUNDDOWN((uintptr_t)addr);
+    uintptr_t va_end = PGROUNDUP((uintptr_t)addr + length);
     
-    for (size_t i = 0; i < pages; i++) {
-        uintptr_t page_va = va + (i * PGSIZE);
+    // Find and process all VMAs that overlap with the unmapping region
+    struct vm_area *vma = p->vma_list;
+    // struct vm_area *to_remove = NULL; // not needed removed immediately
+    
+    while (vma) {
+        struct vm_area *next = vma->next;
         
-        uint64_t *pte = vmm_walk(p->pagetable, page_va, 0);
-        if (pte && (*pte & PTE_V)) {
-            uintptr_t pa = PTE_TO_PA(*pte);
-            vmm_unmap(p->pagetable, page_va);
-            pmm_free_page((void*)pa);
+        // Check if this VMA overlaps with [va_start, va_end)
+        if (vma->start < va_end && vma->end > va_start) {
+            uintptr_t unmap_start = (vma->start > va_start) ? vma->start : va_start;
+            uintptr_t unmap_end = (vma->end < va_end) ? vma->end : va_end;
+            
+            // Unmap the overlapping pages
+            for (uintptr_t page_va = unmap_start; page_va < unmap_end; page_va += PGSIZE) {
+                uint64_t *pte = vmm_walk(p->pagetable, page_va, 0);
+                if (pte && (*pte & PTE_V)) {
+                    uintptr_t pa = PTE_TO_PA(*pte);
+                    vmm_unmap(p->pagetable, page_va);
+                    pmm_free_page((void*)pa);
+                }
+            }
+            
+            // Handle VMA modification
+            if (va_start <= vma->start && va_end >= vma->end) {
+                // Entire VMA is unmapped - remove it
+                vma_remove(&p->vma_list, vma);
+                vma_free(vma);
+            } else if (va_start > vma->start && va_end < vma->end) {
+                // Middle of VMA is unmapped - split into two VMAs
+                struct vm_area *right_vma = vma_create(va_end, vma->end, vma->prot, vma->flags, vma->type);
+                if (right_vma) {
+                    vma->end = va_start;
+                    right_vma->next = vma->next;
+                    vma->next = right_vma;
+                }
+            } else if (va_start <= vma->start) {
+                // Left part of VMA is unmapped
+                vma->start = va_end;
+            } else {
+                // Right part of VMA is unmapped
+                vma->end = va_start;
+            }
         }
+        
+        vma = next;
     }
     
     return 0;
@@ -404,6 +497,25 @@ int sys_brk(void *addr) {
     if (new_break > old_break) {
         uintptr_t start = PGROUNDUP(old_break);
         uintptr_t end = PGROUNDUP(new_break);
+        
+        if (start >= end) {
+            p->sz = new_break;
+            return 0;
+        }
+        
+        // Check for overlaps with existing VMAs (excluding heap VMA)
+        struct vm_area *existing_heap = NULL;
+        struct vm_area *vma = p->vma_list;
+        while (vma) {
+            if (vma->type & VMA_TYPE_HEAP) {
+                existing_heap = vma;
+            } else if (vma->start < end && vma->end > start) {
+                // Overlap with non-heap VMA
+                return -1;
+            }
+            vma = vma->next;
+        }
+        
         size_t pages = (end - start) / PGSIZE;
         
         for (size_t i = 0; i < pages; i++) {
@@ -441,9 +553,32 @@ int sys_brk(void *addr) {
                 return -1;
             }
         }
+        
+        // Update or create heap VMA
+        if (existing_heap) {
+            // Extend existing heap VMA
+            if (end > existing_heap->end) {
+                existing_heap->end = end;
+            }
+        } else {
+            // Create new heap VMA
+            struct vm_area *heap_vma = vma_create(USER_HEAP_START, end, 
+                                                   VMA_PROT_READ | VMA_PROT_WRITE,
+                                                   VMA_PRIVATE, VMA_TYPE_HEAP);
+            if (heap_vma) {
+                vma_insert(&p->vma_list, heap_vma);
+            }
+        }
+        
     } else if (new_break < old_break) {
         uintptr_t start = PGROUNDUP(new_break);
         uintptr_t end = PGROUNDUP(old_break);
+        
+        if (start >= end) {
+            p->sz = new_break;
+            return 0;
+        }
+        
         size_t pages = (end - start) / PGSIZE;
         
         for (size_t i = 0; i < pages; i++) {
@@ -454,6 +589,33 @@ int sys_brk(void *addr) {
                 vmm_unmap(p->pagetable, va);
                 pmm_free_page((void*)pa);
             }
+        }
+        
+        // Update heap VMA
+        struct vm_area *vma = p->vma_list;
+        while (vma) {
+            if (vma->type & VMA_TYPE_HEAP) {
+                if (start <= vma->start && end >= vma->end) {
+                    // Entire heap VMA is freed
+                    struct vm_area *to_free = vma;
+                    vma = vma->next;
+                    vma_remove(&p->vma_list, to_free);
+                    vma_free(to_free);
+                    continue;
+                } else if (start > vma->start && end < vma->end) {
+                    // Split heap VMA
+                    vma_split(&p->vma_list, vma, start);
+                    vma->next->start = end;
+                } else if (start <= vma->start && end < vma->end) {
+                    // Shrink from left
+                    vma->start = end;
+                } else if (start > vma->start && end >= vma->end) {
+                    // Shrink from right
+                    vma->end = start;
+                }
+                break;
+            }
+            vma = vma->next;
         }
     }
     
