@@ -3,7 +3,6 @@
 #define SBI_EXT_DBCN 0x4442434E
 #define SBI_EXT_DBCN_WRITE_BYTE 2
 #define SBI_EXT_DBCN_WRITE 0
-#define SBI_EXT_DBCN_READ 1
 #define SBI_EXT_TIME 0x54494D45
 #define SBI_EXT_TIME_SET 0
 
@@ -26,11 +25,6 @@ sbi_ret sbi_ecall(uint64_t eid, uint64_t fid, uint64_t arg0, uint64_t arg1, uint
 // returns number of bytes written in sbi_ret.value
 sbi_ret sbi_write(const uint64_t num_bytes, const uint8_t *data) {
     return sbi_ecall(SBI_EXT_DBCN, SBI_EXT_DBCN_WRITE, num_bytes, (uint64_t) data, 0, 0, 0, 0);
-}
-
-// returns number of bytes read in sbi_ret.value
-sbi_ret sbi_read(const uint64_t num_bytes, uint8_t *data) {
-    return sbi_ecall(SBI_EXT_DBCN, SBI_EXT_DBCN_READ, num_bytes, (uint64_t) data, 0, 0, 0, 0);
 }
 
 void sbi_set_timer(const uint64_t time_after) {

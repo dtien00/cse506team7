@@ -2,7 +2,6 @@
 #include "fs/vfs.h"
 #include "kernel/types.h"
 #include "kernel/printk.h"
-#include "kernel/console.h"
 #include "mm/kmalloc.h"
 #include "lib/string.h"
 
@@ -333,7 +332,8 @@ int vfs_read(file_t *f, void *buf, size_t len) {
         }
 
         case FILE_STDIN:
-            return console_read((uint64_t)len, (char *)buf);
+            printk("vfs: vfs_read on stdin not supported\n");
+            return -1;
 
         case FILE_STDOUT:
             return -1;
