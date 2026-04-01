@@ -127,6 +127,13 @@ void trap_handler(trap_frame *frame) {
         // Exception
         handle_exception(frame);
     }
+
+    // If returning to U-mode (SPP=0 in saved sstatus), restore the current
+    // process's page table.  exec() may have switched SATP to a new image
+    // while the parent's page table was still active; without this switch the
+    // parent's sret would execute under the child's (now freed) page table.
+    if (current && !(frame->sstatus & SSTATUS_SPP))
+        vmm_switch(current->pagetable);
 }
 
 // Timer interrupt handler

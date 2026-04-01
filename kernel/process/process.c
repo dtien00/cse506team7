@@ -61,6 +61,9 @@ void proc_init(void) {
     init->context.sp = (uint64_t)&kstacks[idx][KSTACK_SIZE];
     init->context.ra = (uint64_t)proc_entry;
     
+    // Initialize file descriptors (stdin/stdout/stderr) for the init process
+    fd_init(&init->fds);
+
     // Prepare argv for /bin/echo
     static char *argv[] = { "sh", NULL };
     // Set current to init so exec uses the right process
