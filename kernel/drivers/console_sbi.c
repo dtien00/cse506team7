@@ -14,16 +14,10 @@ static void sbi_console_write(const uint64_t num_bytes, const char *data) {
     }
 }
 
-static int sbi_console_read(char *buf, uint64_t num_bytes) {
-    // unimplemented
-    return -1;
-}
-
 static console_driver_t sbi_driver = {
         .name = "sbi",
         .init = NULL,
         .write = sbi_console_write,
-        .read = sbi_console_read,
         .next = NULL,
 };
 

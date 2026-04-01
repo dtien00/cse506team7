@@ -6,7 +6,6 @@ typedef struct console_driver {
     const char *name;
     void (*init)(void); // called once on activation
     void (*write)(uint64_t num_bytes, const char *data);
-    int (*read)(char *buf, uint64_t num_bytes); // returns bytes read, -1 on error
     struct console_driver *next; // linked list
 } console_driver_t;
 
@@ -25,6 +24,13 @@ int console_read(char *buf, uint64_t num_bytes);
 
 // Called in kernel_init — registers all drivers, activates "sbi"
 void console_init(void);
+
+// Register the function that receives input bytes from the active driver.
+// Called by term_global_init(). Pass NULL to disable input routing.
+void console_set_input_handler(void (*handler)(char c));
+
+// Called by the UART ISR — routes byte to whoever registered above.
+void console_handle_input(char c);
 
 // per-driver registration methods
 void console_sbi_register(void);

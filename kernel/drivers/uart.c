@@ -8,28 +8,6 @@ static volatile uint8_t *uart_base = (volatile uint8_t *) UART_BASE;
 
 #define UART_RX_BUF_SIZE 256
 
-static char     rx_buf[256];
-static uint32_t rx_head = 0;
-static uint32_t rx_tail = 0;
-
-static int rx_buf_empty(void) { return rx_head == rx_tail; }
-static int rx_buf_full(void)  { return ((rx_head + 1) % UART_RX_BUF_SIZE) == rx_tail; }
-
-static void rx_buf_push(char c) {
-    if (!rx_buf_full()) {
-        rx_buf[rx_head % UART_RX_BUF_SIZE] = c;
-        rx_head = (rx_head + 1) % UART_RX_BUF_SIZE;
-    }
-    // if full, drop the character
-}
-
-static int rx_buf_pop(char *c) {
-    if (rx_buf_empty()) return -1;
-    *c = rx_buf[rx_tail % UART_RX_BUF_SIZE];
-    rx_tail = (rx_tail + 1) % UART_RX_BUF_SIZE;
-    return 0;
-}
-
 static void uart_hw_init(void) {
     UART_REG(UART_IER) = 0x00; // disable interrupts during setup
     UART_REG(UART_LCR) = 0x80; // DLAB=1 to set baud divisor
@@ -60,7 +38,7 @@ static int uart_getc(void) {
 void uart_handle_interrupt(void) {
     int c;
     while ((c = uart_getc()) >= 0)
-        rx_buf_push((char)c);        // drain hardware FIFO into ring buffer
+        console_handle_input((char)c);  // just delivers upward, done
 }
 
 static void uart_write(uint64_t num_bytes, const char *data) {
@@ -68,19 +46,10 @@ static void uart_write(uint64_t num_bytes, const char *data) {
         uart_putc_sync(data[i]);
 }
 
-static int uart_read(char *buf, uint64_t num_bytes) {
-    for (uint64_t i = 0; i < num_bytes; i++) {
-        while (rx_buf_pop(&buf[i]) < 0)
-            ;   // TODO: call sleep here once implemented, for now spin until byte available
-    }
-    return (int)num_bytes;
-}
-
 static console_driver_t uart_driver = {
         .name = "uart",
         .init = uart_hw_init, // called once when console_set_driver("uart") is invoked
         .write = uart_write,
-        .read = uart_read,
         .next = NULL,
 };
 

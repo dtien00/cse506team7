@@ -25,17 +25,24 @@ int console_set_driver(const char *name) {
 
 const char *console_active_name(void) { return active ? active->name : "none"; }
 
+static void (*input_handler)(char c) = NULL;
+
+void console_set_input_handler(void (*handler)(char c)) {
+    input_handler = handler;
+}
+
+void console_handle_input(char c) {
+    if (input_handler)
+        input_handler(c);
+    // if nothing registered yet (early boot), byte is dropped —
+    // same behavior as console_write() before console_init()
+}
+
 void console_write(uint64_t num_bytes, const char *data) {
     if (active && active->write)
         active->write(num_bytes, data);
     // if nothing is active yet, output is silently dropped —
     // this only happens before console_init() in the very early boot
-}
-
-int console_read(char *buf, uint64_t num_bytes) {
-    if (active && active->read)
-        return active->read(buf, num_bytes);
-    return -1;
 }
 
 void console_init(void) {

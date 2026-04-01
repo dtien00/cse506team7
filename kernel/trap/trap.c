@@ -39,8 +39,7 @@ static void handle_interrupt(trap_frame *frame) {
             break;
 
         case SCAUSE_S_EXTERNAL_INT:
-            printk("External interrupt\n");
-            // TODO: Handle external interrupts (UART, disk, etc.)
+            // printk("External interrupt\n");
             uint32_t irq = plic_claim();
             if (irq == PLIC_UART_IRQ) {
                 // handle the interrupt - adds to the driver's char buffer which a waiting read() can query later
