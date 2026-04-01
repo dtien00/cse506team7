@@ -1,4 +1,3 @@
-
 #include "process/process.h"
 #include "process/swtch.h"
 #include "kernel/printk.h"
@@ -55,12 +54,13 @@ void proc_init(void) {
 
     struct proc *init = proc_alloc();
     int idx = init - proctab;
+    memset(init, 0, sizeof(*init));
     init->pid = 1;
     strncpy(init->name, "init", MAX_NAME - 1);
     init->state = PROC_READY;
     init->context.sp = (uint64_t)&kstacks[idx][KSTACK_SIZE];
     init->context.ra = (uint64_t)proc_entry;
-    
+    fd_init(&init->fds);
     // Prepare argv for /bin/echo
     static char *argv[] = { "sh", NULL };
     // Set current to init so exec uses the right process

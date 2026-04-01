@@ -2,6 +2,7 @@
 #include "process/swtch.h"
 #include "lib/string.h"
 #include "trap/trap.h"
+#include "kernel/printk.h"
 
 struct proc proctab[MAX_PROCS];
 struct proc *ready_queue = NULL;
@@ -9,7 +10,8 @@ struct proc *blocked_queue = NULL;
 struct proc *current = NULL;
 uint8_t kstacks[MAX_PROCS][KSTACK_SIZE] __attribute__((aligned(16)));
 
-static uint8_t idle_stack[256] __attribute__((aligned(16))); // separate isolated stack for idle loop
+// Idle must have enough stack for a full trap frame + nested C calls.
+static uint8_t idle_stack[KSTACK_SIZE] __attribute__((aligned(16)));
 static struct context idle_context;
 static struct context scheduler_context;
 
@@ -154,6 +156,7 @@ void proc_unblock(struct proc *p) {
 
 // block current process and inactivates it; switches to scheduler context
 void proc_sleep(void *chan) {
+    interrupts_off();
     current->chan = chan;
     proc_block(current);
     // Hand control back to the scheduler.
@@ -161,16 +164,15 @@ void proc_sleep(void *chan) {
     struct proc *prev = current;
     current = NULL;
     swtch(&prev->context, &scheduler_context);
-    current->chan = NULL; // After wakeup, clear channel
+    prev->chan = NULL; // After wakeup, clear channel for the resumed proc
+    interrupts_on();
 }
 
 void proc_wakeup(void *chan) {
-    struct proc *p = blocked_queue;
-    while (p) {
-        struct proc *next = p->next; // save next before unblock mutates it
-        if (p->chan == chan) {
-            proc_unblock(p); // moves process to ready queue
+    for (int i = 0; i < MAX_PROCS; i++) {
+        struct proc *p = &proctab[i];
+        if (p->state == PROC_BLOCKED && p->chan == chan) {
+            proc_unblock(p);
         }
-        p = next;
     }
 }

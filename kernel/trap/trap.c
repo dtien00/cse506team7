@@ -60,8 +60,12 @@ static void handle_interrupt(trap_frame *frame) {
 void handle_exception(trap_frame *frame) {
     // Handle U-mode syscalls silently — they are normal, not errors.
     if (frame->scause == SCAUSE_ECALL_FROM_U) {
+        uint64_t old_sepc = frame->sepc;
         syscall_handler(frame);
-        frame->sepc += 4;
+        // Most syscalls resume at the instruction after ecall.
+        // exec() may rewrite sepc to a new entry point; in that case do not bump.
+        if (frame->sepc == old_sepc)
+            frame->sepc += 4;
         return;
     }
 

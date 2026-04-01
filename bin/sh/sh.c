@@ -11,13 +11,13 @@
 static void parse_args(char *line, char **argv) {
     int argc = 0;
     char *p = line;
-    
+
     while (*p && argc < MAX_ARGS - 1) {
         while (*p == ' ' || *p == '\t' || *p == '\n') p++;
         if (*p == '\0') break;
-        
+
         argv[argc++] = p;
-        
+
         while (*p && *p != ' ' && *p != '\t' && *p != '\n') p++;
         if (*p) *p++ = '\0';
     }
@@ -46,20 +46,20 @@ static int builtin_exit(char **argv) {
 
 static int execute(char **argv) {
     if (!argv[0]) return 0;
-    
+
     if (strcmp(argv[0], "cd") == 0) {
         return builtin_cd(argv);
     }
     if (strcmp(argv[0], "exit") == 0) {
         return builtin_exit(argv);
     }
-    
+
     pid_t pid = fork();
     if (pid < 0) {
         printf("fork failed\n");
         return 1;
     }
-    
+
     if (pid == 0) {
         char path[256];
         if (argv[0][0] != '/') {
@@ -68,12 +68,12 @@ static int execute(char **argv) {
         } else {
             strcpy(path, argv[0]);
         }
-        
+
         execve(path, argv, NULL);
         printf("sh: %s: command not found\n", argv[0]);
         exit(127);
     }
-    
+
     int status;
     waitpid(pid, &status, 0);
     return WEXITSTATUS(status);
@@ -83,20 +83,19 @@ int main(void) {
     char line[MAX_LINE];
     char *argv[MAX_ARGS];
     int n;
-    
+
     while (1) {
         write(STDOUT_FILENO, "$ ", 2);
-        
+
         n = read(STDIN_FILENO, line, sizeof(line) - 1);
-        if (n <= 0) break;
-        
+
         line[n] = '\0';
-        
+
         if (line[0] == '\n' || line[0] == '\0') continue;
-        
+
         parse_args(line, argv);
         execute(argv);
     }
-    
+
     return 0;
 }
