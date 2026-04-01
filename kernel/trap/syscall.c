@@ -149,6 +149,20 @@ pid_t sys_fork(void) {
             return -1;
         }
         memcpy(child->trapframe, current->trapframe, sizeof(trap_frame));
+        
+        // Child returns 0 from fork
+        child->trapframe->a0 = 0;
+
+        // sepc was captured pointing AT the ecall instruction.
+        // handle_exception adds +4 for the parent after syscall_handler returns,
+        // so we must advance it here for the child.
+        child->trapframe->sepc += 4;
+
+        // Route child's first kernel-side wakeup through fork_ret, not proc_entry.
+        // proc_entry would jump to the ELF entry point (current->pc); fork_ret
+        // restores the full trapframe and srets to the instruction after ecall.
+        child->context.ra = (uint64_t)fork_ret;
+
     } else {
         child->trapframe = NULL;
     }
