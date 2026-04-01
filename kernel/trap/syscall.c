@@ -1,12 +1,13 @@
 #include "trap/syscall.h"
+#include "arch/riscv.h"
+#include "errno.h"
 #include "kernel/printk.h"
-#include "process/process.h"
-#include "trap/trap.h"
+#include "lib/string.h"
+#include "mm/kmalloc.h"
 #include "mm/pmm.h"
 #include "mm/vmm.h"
-#include "mm/kmalloc.h"
-#include "lib/string.h"
-#include "arch/riscv.h"
+#include "process/process.h"
+#include "trap/trap.h"
 
 
 #define MAP_FAILED ((void *) -1)
@@ -20,6 +21,7 @@
 #define USER_HEAP_END   0x40000000UL
 
 #define MAX_ARGS 64
+#define KARG_MAX 256
 
 void syscall_init(void) { printk("Syscall: Initialized\n"); }
 
@@ -41,9 +43,12 @@ void syscall_handler(trap_frame *frame) {
     // exec rewrites the entire trapframe on success; handle before the
     // generic ret path so frame->a0 is not overwritten afterwards.
     if (syscall_num == SYS_exec) {
-        char kpath[256];
-        char kargv_store[MAX_ARGS][256];
+        char kpath[KARG_MAX];
         char *kargv[MAX_ARGS + 1];
+        int argc = 0;
+
+        for (int i = 0; i <= MAX_ARGS; i++)
+            kargv[i] = NULL;
 
         // Copy user args into kernel buffers (SUM window is minimal)
         set_csr_bit(sstatus, SSTATUS_SUM);
@@ -52,11 +57,22 @@ void syscall_handler(trap_frame *frame) {
         kpath[sizeof(kpath) - 1] = '\0';
 
         char **uargv = (char **)arg1;
-        int argc = 0;
-        while (uargv[argc] && argc < MAX_ARGS - 1) {
-            strncpy(kargv_store[argc], uargv[argc], 255);
-            kargv_store[argc][255] = '\0';
-            kargv[argc] = kargv_store[argc];
+        while (uargv && argc < MAX_ARGS - 1) {
+            char *uarg = uargv[argc];
+            if (!uarg) break;
+            if ((uint64_t)uarg >= KERNBASE) break;
+
+            kargv[argc] = (char *)kmalloc(KARG_MAX);
+            if (!kargv[argc]) {
+                clear_csr_bit(sstatus, SSTATUS_SUM);
+                for (int i = 0; i < argc; i++)
+                    kfree(kargv[i]);
+                frame->a0 = (uint64_t)-1LL;
+                return;
+            }
+
+            strncpy(kargv[argc], uarg, KARG_MAX - 1);
+            kargv[argc][KARG_MAX - 1] = '\0';
             argc++;
         }
         kargv[argc] = NULL;
@@ -65,6 +81,9 @@ void syscall_handler(trap_frame *frame) {
 
         // exec() only sees kernel pointers — safe to destroy old pagetable
         int rc = exec(kpath, kargv);
+        for (int i = 0; i < argc; i++)
+            kfree(kargv[i]);
+
         if (rc < 0)
             frame->a0 = (uint64_t)-1LL;
         return;
@@ -161,6 +180,14 @@ pid_t sys_fork(void) {
     struct proc *child = proc_create(current->name);
     if (!child) return -1;
 
+    // fd_init already ran inside proc_create — now OVERWRITE with
+    // a copy of the parent's fds so the child inherits open files
+    for (int i = 0; i < MAX_FDS; i++) {
+        child->fds.files[i] = current->fds.files[i];
+        // if (child->fds.files[i])
+        //     vfs_ref(child->fds.files[i]);  // bump refcount if vfs supports it
+    }
+
     // Copy parent's address space
     child->pagetable = vmm_copy_pagetable(current->pagetable);
     if (!child->pagetable) {
@@ -218,22 +245,42 @@ ssize_t sys_read(int fd, void *buf, size_t count) {
 }
 
 ssize_t sys_write(int fd, const void *buf, size_t count) {
-    // For now, just print to console if fd is 1 (stdout)
-    if (fd == 1 || fd == 2) {
-        const char *str = (const char *) buf;
-        // buf is a user-space pointer (PTE_U set).  S-mode cannot load from
-        // user pages unless sstatus.SUM=1.  Set it for the duration of the
-        // copy, then clear it to restore the default deny policy.
+    // // For now, just print to console if fd is 1 (stdout)
+    // if (fd == 1 || fd == 2) {
+    //     const char *str = (const char *) buf;
+    //     // buf is a user-space pointer (PTE_U set).  S-mode cannot load from
+    //     // user pages unless sstatus.SUM=1.  Set it for the duration of the
+    //     // copy, then clear it to restore the default deny policy.
+    //     set_csr_bit(sstatus, SSTATUS_SUM);
+    //     for (size_t i = 0; i < count; i++) {
+    //         printk("%c", str[i]);
+    //     }
+    //     clear_csr_bit(sstatus, SSTATUS_SUM);
+    //     return (ssize_t)count;
+    // }
+    //
+    // printk("sys_write(%d, %p, %d) not implemented\n", fd, buf, count);
+    // return -1;
+    if (count == 0) return 0;
+    if (!current || fd < 0 || fd >= MAX_FDS) return -EBADF;
+
+    file_t *f = fd_get(&current->fds, fd);
+    if (!f) return -EBADF;
+
+    /* Console path — active until vfs_write has a console driver */
+    if (f->type == FILE_STDOUT || f->type == FILE_STDIN) {
         set_csr_bit(sstatus, SSTATUS_SUM);
-        for (size_t i = 0; i < count; i++) {
-            printk("%c", str[i]);
-        }
+        const char *str = (const char *)buf;
+        for (size_t i = 0; i < count; i++)
+            printk_char(str[i]);
         clear_csr_bit(sstatus, SSTATUS_SUM);
         return (ssize_t)count;
     }
-
-    printk("sys_write(%d, %p, %d) not implemented\n", fd, buf, count);
-    return -1;
+    if (!f) return -EBADF;
+    set_csr_bit(sstatus, SSTATUS_SUM);
+    ssize_t n = vfs_write(f, buf, count);
+    clear_csr_bit(sstatus, SSTATUS_SUM);
+    return n;
 }
 
 int sys_open(const char *path, int flags) {

@@ -3,6 +3,7 @@
 #include "lib/string.h"
 #include "trap/trap.h"
 #include "kernel/printk.h"
+#include "mm/vmm.h"
 
 struct proc proctab[MAX_PROCS];
 struct proc *ready_queue = NULL;
@@ -52,11 +53,20 @@ void schedule(void) {
         if (next != NULL) {
             next->state = PROC_RUNNING;
             current = next;
+
+            // Kernel execution for this process (sleep/wait resume, syscall
+            // return path, then sret) must use that process's page table.
+            if (next->pagetable)
+                vmm_switch(next->pagetable);
+            else
+                vmm_switch(vmm_kernel_pagetable());
+
             swtch(&scheduler_context, &next->context);
             // Returns here when this CPU is handed back to the scheduler
             // (i.e. the process that just ran called schedule() again).
         } else {
             // No process ready — park in idle until an interrupt wakes one.
+            vmm_switch(vmm_kernel_pagetable());
             swtch(&scheduler_context, &idle_context);
             // returns here from idle loop, and must loop back to check for processes
         }

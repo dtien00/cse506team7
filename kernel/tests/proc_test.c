@@ -40,11 +40,18 @@ void proc_test_run(void) {
         TEST("proc_free sets UNUSED", p1->state == PROC_UNUSED);
     }
     // Test max process limit
+    struct proc *test_procs[MAX_PROCS];
     int count = 0;
     for (int i = 0; i < MAX_PROCS; i++) {
-        if (proc_alloc() != NULL) count++;
+        test_procs[i] = proc_alloc();
+        if (test_procs[i] != NULL) count++;
     }
     TEST("proc_alloc respects MAX_PROCS", count <= MAX_PROCS);
+
+    // Free all test allocations before continuing
+    for (int i = 0; i < MAX_PROCS; i++) {
+        if (test_procs[i]) proc_free(test_procs[i]);
+    }
 
     // === Test wait/zombie/exit code ===
     struct proc *parent = proc_alloc();

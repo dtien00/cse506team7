@@ -90,3 +90,18 @@ void fd_close(fd_table_t *table, int fd) {
         table->files[fd] = NULL;
     }
 }
+
+// -----------------------------------------------------------------------------
+// fd_destroy
+// Closes all open file descriptors in a table. Called by proc_destroy()
+// when a process exits. Stdin/stdout/stderr (fds 0-2) are also closed here
+// since they were kmalloc'd in fd_init.
+// -----------------------------------------------------------------------------
+void fd_destroy(fd_table_t *table) {
+    if (!table) return;
+    for (int i = 0; i < MAX_FDS; i++) {
+        if (table->files[i]) {
+            fd_close(table, i);   // calls vfs_close → frees file_t if ref==0
+        }
+    }
+}

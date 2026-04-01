@@ -29,11 +29,23 @@
 static int passed = 0;
 static int failed = 0;
 
+static struct proc test_proc;
+static void test_setup_proc(void) {
+    memset(&test_proc, 0, sizeof(test_proc));
+    test_proc.pid = 99;
+    fd_init(&test_proc.fds);   // sets up FILE_STDIN/FILE_STDOUT entries
+    current = &test_proc;
+}
+static void test_teardown_proc(void) {
+    current = NULL;
+}
+
 /* ------------------------------------------------------------------ */
 /* sys_write                                                            */
 /* ------------------------------------------------------------------ */
 
 static void test_sys_write(void) {
+    test_setup_proc();
     printk("\n=== sys_write ===\n");
 
     const char *msg = "sys_write stdout test\n";
@@ -45,11 +57,12 @@ static void test_sys_write(void) {
 
     /* Writing to fd 3 (not a real open file) should return -1 */
     ssize_t bad = sys_write(3, msg, strlen(msg));
-    TEST("sys_write to fd 3 (no file) returns -1", bad == -1);
+    TEST("sys_write to fd 3 (no file) returns -1", bad < 0);
 
     /* Zero-length write to stdout */
     ssize_t zero = sys_write(1, msg, 0);
     TEST("sys_write zero length returns 0", zero == 0);
+    test_teardown_proc();
 }
 
 /* ------------------------------------------------------------------ */

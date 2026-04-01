@@ -34,6 +34,9 @@ int usleep(unsigned int usec);
 
 int chdir(const char *path);
 char* getcwd(char *buf, size_t size);
+int rename(const char *old, const char *new);  // mv applet
+int rmdir(const char *path);                    // rmdir applet
+int truncate(const char *path, off_t length);   // truncate applet
 
 int pipe(int pipefd[2]);
 int dup(int oldfd);
