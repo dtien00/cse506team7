@@ -1,36 +1,33 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
 #include <fcntl.h>
-
-#define BUF_SIZE 4096
+#include <unistd.h>
 
 int main(int argc, char *argv[]) {
+    char buf[4096];
+    int n;
+    
     if (argc != 3) {
-        printf("usage: cp <source> <dest>\n");
+        write(STDERR_FILENO, "cp: usage: cp src dest\n", 23);
         return 1;
     }
     
     int src_fd = open(argv[1], O_RDONLY);
     if (src_fd < 0) {
-        printf("cp: cannot open %s\n", argv[1]);
+        write(STDERR_FILENO, "cp: cannot open source\n", 23);
         return 1;
     }
     
     int dst_fd = open(argv[2], O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (dst_fd < 0) {
-        printf("cp: cannot create %s\n", argv[2]);
         close(src_fd);
+        write(STDERR_FILENO, "cp: cannot create destination\n", 30);
         return 1;
     }
     
-    char buf[BUF_SIZE];
-    ssize_t n;
-    while ((n = read(src_fd, buf, BUF_SIZE)) > 0) {
+    while ((n = read(src_fd, buf, sizeof(buf))) > 0) {
         if (write(dst_fd, buf, n) != n) {
-            printf("cp: write error\n");
             close(src_fd);
             close(dst_fd);
+            write(STDERR_FILENO, "cp: write error\n", 16);
             return 1;
         }
     }

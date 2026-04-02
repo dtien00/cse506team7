@@ -2,7 +2,7 @@
 #define _SYS_SELECT_H
 
 #include "types.h"
-#include "time.h"
+#include "sys/time.h"
 
 typedef struct {
     unsigned long fds_bits[16];

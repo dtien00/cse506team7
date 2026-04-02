@@ -2,6 +2,7 @@
 #include "mm/pmm.h"
 #include "arch/riscv.h"
 #include "kernel/printk.h"
+#include "lib/string.h"
 
 static pagetable_t kernel_pagetable = NULL;
 
@@ -124,38 +125,76 @@ pagetable_t vmm_create_pagetable(void) {
 
     for (int i = 0; i < 512; i++) pt[i] = 0;
 
-    // Copy ALL valid kernel L2 entries, not just the upper half.
-    // The kernel lives at 0x80200000 which is L2 index 2 — well below 256.
-    // Any new page table must be able to reach kernel code and the trap
-    // handler immediately after vmm_switch(), so we inherit every mapping
-    // the kernel page table has established.
     pagetable_t kpt = vmm_kernel_pagetable();
     if (kpt) {
         for (int i = 0; i < 512; i++) {
-            if (kpt[i] & PTE_V)
+            if (!(kpt[i] & PTE_V)) continue;
+
+            // L2 indices below KERNBASE must not share lower-level page-table
+            // pages with the kernel: user mappings installed there would mutate
+            // shared structures. Build private copies of those lower levels.
+            if (i < (int)(KERNBASE >> 30)) {
+                if (kpt[i] & (PTE_R | PTE_W | PTE_X)) {
+                    // Huge-page leaf in low VA range.
+                    pt[i] = kpt[i];
+                } else {
+                    pagetable_t kl1 = (pagetable_t)PTE_TO_PA(kpt[i]);
+                    pagetable_t pl1 = (pagetable_t)pmm_alloc_page();
+                    if (!pl1) { vmm_free_pagetable(pt); return NULL; }
+
+                    for (int j = 0; j < 512; j++) {
+                        uint64_t e = kl1[j];
+                        if (!(e & PTE_V)) {
+                            pl1[j] = 0;
+                        } else if (e & (PTE_R | PTE_W | PTE_X)) {
+                            // Leaf at L1 level (huge page): copy as-is.
+                            pl1[j] = e;
+                        } else {
+                            // Non-leaf L1 entry: deep-copy its L0 table so low
+                            // VA mappings remain private to this pagetable.
+                            pagetable_t kl0 = (pagetable_t)PTE_TO_PA(e);
+                            pagetable_t pl0 = (pagetable_t)pmm_alloc_page();
+                            if (!pl0) { vmm_free_pagetable(pt); return NULL; }
+                            for (int k = 0; k < 512; k++)
+                                pl0[k] = kl0[k];
+                            pl1[j] = PA_TO_PTE((uintptr_t)pl0) | (e & 0x3FF);
+                        }
+                    }
+
+                    pt[i] = PA_TO_PTE((uintptr_t)pl1) | (kpt[i] & 0x3FF);
+                }
+            } else {
+                // Kernel range (VA >= KERNBASE): safe to share at L2.
                 pt[i] = kpt[i];
+            }
         }
     }
 
     return pt;
 }
 
-static void vmm_free_pagetable_recursive(pagetable_t pagetable, int level) {
+static void vmm_free_pagetable_recursive(pagetable_t pagetable, pagetable_t kernel_level_pt, int level) {
     if (level > 0) {
-        pagetable_t kpt = vmm_kernel_pagetable();
-
         for (int i = 0; i < 512; i++) {
             uint64_t pte = pagetable[i];
             if (!((pte & PTE_V) && (pte & (PTE_R | PTE_W | PTE_X)) == 0))
                 continue;
 
-            // Skip entries shared with the kernel page table — they are
-            // owned by the kernel and must not be freed here.
-            if (kpt && pagetable[i] == kpt[i])
+            // Skip entries that are identical to the kernel's entry at this
+            // same level — they are shared and must not be freed here.
+            if (kernel_level_pt && pte == kernel_level_pt[i])
                 continue;
 
-            pagetable_t child = (pagetable_t)PTE_TO_PA(pte);
-            vmm_free_pagetable_recursive(child, level - 1);
+            // Determine the kernel's corresponding child table (if any) so
+            // the next recursion level can perform the same shared-entry check.
+            pagetable_t kernel_child = NULL;
+            if (kernel_level_pt) {
+                uint64_t kpte = kernel_level_pt[i];
+                if ((kpte & PTE_V) && !(kpte & (PTE_R | PTE_W | PTE_X)))
+                    kernel_child = (pagetable_t)PTE_TO_PA(kpte);
+            }
+
+            vmm_free_pagetable_recursive((pagetable_t)PTE_TO_PA(pte), kernel_child, level - 1);
         }
     }
     pmm_free_page(pagetable);
@@ -163,7 +202,7 @@ static void vmm_free_pagetable_recursive(pagetable_t pagetable, int level) {
 
 void vmm_free_pagetable(pagetable_t pagetable) {
     if (pagetable == NULL) return;
-    vmm_free_pagetable_recursive(pagetable, 2);
+    vmm_free_pagetable_recursive(pagetable, vmm_kernel_pagetable(), 2);
 }
 
 pagetable_t vmm_kernel_pagetable(void) {
@@ -213,6 +252,12 @@ void vmm_init(void) {
       return;
     }
   }
+
+  // Map PLIC: 0x0C000000 - 0x10000000
+  for (uintptr_t pa = 0x0C000000; pa < 0x10000000; pa += PGSIZE) {
+      if (vmm_map(kernel_pagetable, pa, pa, PTE_R | PTE_W) != 0)
+          printk("VMM: Failed to map PLIC page at %p\n", pa);
+  }
   
   printk("VMM: Kernel page table created\n");
   
@@ -221,3 +266,54 @@ void vmm_init(void) {
   printk("VMM: Paging enabled\n");
 }
 
+// Recursively copy user-space mappings from parent to child pagetable
+static int vmm_copy_pagetable_recursive(pagetable_t child, pagetable_t parent, int level, uintptr_t va_base) {
+  for (int i = 0; i < 512; i++) {
+    uint64_t pte = parent[i];
+    if (!(pte & PTE_V)) continue;
+
+    if ((pte & (PTE_R | PTE_W | PTE_X)) == 0) {
+      // This is a lower-level page table
+      pagetable_t parent_next = (pagetable_t)PTE_TO_PA(pte);
+      pagetable_t child_next = (pagetable_t)pmm_alloc_page();
+      if (!child_next) return -1;
+      for (int j = 0; j < 512; j++) child_next[j] = 0;
+      // Set child PTE
+      child[i] = PA_TO_PTE((uintptr_t)child_next) | PTE_V;
+      // Recurse
+      if (vmm_copy_pagetable_recursive(child_next, parent_next, level - 1, va_base | ((uintptr_t)i << (level * 9 + 12))) < 0)
+        return -1;
+    } else {
+      // Leaf PTE: user page or kernel/device mapping.
+      // Use PTE_U as the discriminator, not the VA range.  Device pages
+      // (e.g. UART at 0x10000000) sit below KERNBASE but are NOT marked
+      // PTE_U; reading their physical addresses as RAM would cause a load
+      // access fault.  Only pages explicitly tagged PTE_U by exec() are
+      // safe to copy.
+      if (pte & PTE_U) {
+        // True user page: allocate a new physical page and copy contents.
+        void *newpage = pmm_alloc_page();
+        if (!newpage) return -1;
+        void *oldpage = (void *)PTE_TO_PA(pte);
+        memcpy(newpage, oldpage, PGSIZE);
+        child[i] = PA_TO_PTE((uintptr_t)newpage) | (pte & (PTE_R | PTE_W | PTE_X | PTE_U | PTE_V));
+      } else {
+        // Kernel or device mapping: share the PTE as-is.
+        child[i] = pte;
+      }
+    }
+  }
+  return 0;
+}
+
+// Clone a parent's page table for fork()
+pagetable_t vmm_copy_pagetable(pagetable_t parent) {
+  pagetable_t child = vmm_create_pagetable();
+  if (!child) return NULL;
+  // Recursively copy user mappings (levels 2, 1, 0)
+  if (vmm_copy_pagetable_recursive(child, parent, 2, 0) < 0) {
+    vmm_free_pagetable(child);
+    return NULL;
+  }
+  return child;
+}

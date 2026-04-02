@@ -1,4 +1,6 @@
+// vfs.h
 #pragma once
+#include "fs/tarfs.h"
 #include "kernel/types.h"
 
 // Forward declarations
@@ -27,7 +29,7 @@ typedef struct vnode {
 
 // A generic open file
 typedef struct file {
-    tarfs_entry_t *entry;  // for FILE_TARFS (legacy, may be removed)
+    tarfs_entry_t *entry;  // for FILE_TARFS
     file_type_t type;
     vnode_t *vnode;
     size_t offset;
@@ -68,6 +70,7 @@ int vfs_register_fs(fs_type_t *fs_type);
 int vfs_mount(const char *source, const char *target, const char *fstype);
 int vfs_unmount(const char *target);
 mount_t *vfs_find_mount(const char *path);
+void vfs_ref(file_t *f);
 
 // File operations
 file_t *vfs_open(const char *path, int flags);
@@ -80,4 +83,4 @@ vnode_t *vfs_lookup(const char *path);
 int vfs_create(const char *path, uint32_t mode);
 int vfs_unlink(const char *path);
 int vfs_mkdir(const char *path, uint32_t mode);
-off_t vfs_lseek(file_t *f, off_t offset, int whence);
+int vfs_lseek(file_t *f, size_t offset, int whence);

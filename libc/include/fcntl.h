@@ -1,7 +1,7 @@
 #ifndef _FCNTL_H
 #define _FCNTL_H
 
-#include "types.h"
+#include "sys/types.h"
 
 #define O_RDONLY    0x0000
 #define O_WRONLY    0x0001

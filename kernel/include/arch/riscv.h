@@ -80,7 +80,7 @@
 #define MAXVA (1UL << (9 + 9 + 9 + 12 - 1)) // Sv39 max VA
 
 // User memory layout
-#define USTACK_SIZE (4 * PGSIZE)
+#define USTACK_SIZE (256 * PGSIZE)
 #define TRAMPOLINE (MAXVA - PGSIZE)
 #define TRAPFRAME (TRAMPOLINE - PGSIZE)
 

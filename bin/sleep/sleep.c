@@ -1,14 +1,13 @@
-#include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 
 int main(int argc, char *argv[]) {
     if (argc < 2) {
-        printf("usage: sleep <seconds>\n");
+        write(STDERR_FILENO, "sleep: missing operand\n", 23);
         return 1;
     }
     
-    unsigned int seconds = atoi(argv[1]);
+    unsigned int seconds = (unsigned int)atoi(argv[1]);
     sleep(seconds);
     return 0;
 }

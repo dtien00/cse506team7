@@ -15,6 +15,7 @@
 #include "mm/pmm.h"
 #include "mm/kmalloc.h"
 #include "mm/vmm.h"
+#include "mm/vma.h"
 #include "tests/test.h"
 #include "arch/riscv.h"
 
@@ -215,6 +216,77 @@ static void test_vmm(void) {
     pmm_free_pages(phys2, 4);
     vmm_free_pagetable(upt);
     TEST("vmm_free_pagetable completes without panic", 1); // structural only
+}
+
+/* ── VMA tests ───────────────────────────────────────────────────────────── */
+
+static int vma_list_count(struct vm_area *list) {
+    int n = 0;
+    while (list) {
+        n++;
+        list = list->next;
+    }
+    return n;
+}
+
+static void test_vma(void) {
+    printk("\n=== VMA Tests ===\n");
+
+    struct vm_area *list = NULL;
+    struct vm_area *copy = NULL;
+    vma_init(&list);
+    TEST("vma_init sets empty list", list == NULL);
+
+    struct vm_area *a = vma_create(0x1000, 0x2000,
+                                   VMA_PROT_READ | VMA_PROT_WRITE,
+                                   VMA_PRIVATE, VMA_TYPE_ANON);
+    struct vm_area *b = vma_create(0x3000, 0x4000,
+                                   VMA_PROT_READ | VMA_PROT_WRITE,
+                                   VMA_PRIVATE, VMA_TYPE_ANON);
+    TEST("vma_create returns non-NULL", a != NULL && b != NULL);
+    if (!a || !b) {
+        vma_free(a);
+        vma_free(b);
+        return;
+    }
+
+    TEST("vma_insert a succeeds", vma_insert(&list, a) == 0);
+    TEST("vma_insert b succeeds", vma_insert(&list, b) == 0);
+    TEST("VMA list sorted and size is 2", list == a && a->next == b && vma_list_count(list) == 2);
+
+    TEST("vma_find hits first region", vma_find(list, 0x1800) == a);
+    TEST("vma_find miss returns NULL", vma_find(list, 0x2800) == NULL);
+    TEST("vma_find_overlap detects overlap", vma_find_overlap(list, 0x1800, 0x2800) == a);
+
+    struct vm_area *ov = vma_create(0x1800, 0x2800,
+                                    VMA_PROT_READ, VMA_PRIVATE, VMA_TYPE_ANON);
+    TEST("overlap candidate created", ov != NULL);
+    if (ov) {
+        TEST("vma_insert rejects overlap", vma_insert(&list, ov) != 0);
+        vma_free(ov);
+    }
+
+    TEST("vma_split(a, 0x1800) succeeds", vma_split(&list, a, 0x1800) == 0);
+    TEST("split produces adjacent halves", a->end == 0x1800 && a->next && a->next->start == 0x1800 && a->next->end == 0x2000);
+
+    vma_merge(&list);
+    TEST("vma_merge rejoins compatible halves", a->end == 0x2000 && a->next == b);
+
+    uintptr_t free_region = vma_find_free_region(list, 0x800, 0x2000, 0x1000, 0x5000);
+    TEST("vma_find_free_region finds gap", free_region == 0x2000);
+
+    TEST("vma_copy_all succeeds", vma_copy_all(&copy, list) == 0);
+    TEST("vma_copy_all created distinct list", copy != NULL && copy != list && copy->start == list->start && copy->next && copy->next->start == list->next->start);
+
+    vma_remove(&list, b);
+    TEST("vma_remove detaches target VMA", vma_list_count(list) == 1 && list == a && a->next == NULL);
+    vma_free(b);
+
+    vma_free_all(list);
+    list = NULL;
+    vma_free_all(copy);
+    copy = NULL;
+    TEST("vma teardown completed", list == NULL && copy == NULL);
 }
 
 /**
@@ -494,6 +566,7 @@ void mem_test_run(void) {
     test_pmm();
     test_kmalloc();
     test_vmm();
+    test_vma();
 
     test_pmm_isolation();
     test_pmm_full_readback();

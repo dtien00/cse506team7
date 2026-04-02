@@ -1,7 +1,7 @@
 #ifndef _SYS_STAT_H
 #define _SYS_STAT_H
 
-#include "types.h"
+#include "sys/types.h"
 
 #define S_IFMT   0170000
 #define S_IFSOCK 0140000
@@ -52,6 +52,7 @@ struct stat {
 };
 
 int stat(const char *pathname, struct stat *statbuf);
+int lstat(const char *pathname, struct stat *statbuf);
 int fstat(int fd, struct stat *statbuf);
 int mkdir(const char *pathname, mode_t mode);
 int chmod(const char *pathname, mode_t mode);

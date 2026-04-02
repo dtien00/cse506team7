@@ -1,9 +1,14 @@
-#include "fs/vfs.h"
 #include "fs/tarfs.h"
+#include "fs/vfs.h"
 #include "kernel/types.h"
 #include "kernel/printk.h"
 #include "mm/kmalloc.h"
 #include "lib/string.h"
+#include "tty/term.h"
+
+#define SEEK_SET 0
+#define SEEK_CUR 1
+#define SEEK_END 2
 
 // -----------------------------------------------------------------------------
 // Internal state
@@ -111,7 +116,7 @@ int vfs_mount(const char *source, const char *target, const char *fstype) {
     mnt->next = mounts;
     mounts = mnt;
 
-    printk("vfs: mounted '%s' at '%s' (type: %s)\n", 
+    printk("vfs: mounted '%s' at '%s' (type: %s)\n",
            source ? source : "none", target, fstype);
     return 0;
 }
@@ -197,7 +202,7 @@ vnode_t *vfs_lookup(const char *path) {
     // Get relative path within the mount
     const char *rel_path = path;
     size_t mnt_len = strlen(mnt->mountpoint);
-    
+
     // Skip past mount point
     if (mnt_len > 1) {  // Not root mount
         rel_path += mnt_len;
@@ -262,6 +267,17 @@ int vfs_mkdir(const char *path, uint32_t mode) {
     return -1;
 }
 
+/*
+ * vfs_ref — acquire a shared reference to an already-open file.
+ *
+ * Call this whenever a file_t is handed to a second owner WITHOUT going
+ * through vfs_open (i.e. fork, dup).
+ */
+void vfs_ref(file_t *f) {
+    if (!f) return;
+    f->ref_count++;
+}
+
 // -----------------------------------------------------------------------------
 // File operations (backward compatible with existing code)
 // -----------------------------------------------------------------------------
@@ -291,6 +307,7 @@ file_t *vfs_open(const char *path, int flags) {
         f->type = FILE_TARFS;  // Default fallback
     }
 
+    f->entry = NULL;
     f->vnode = vnode;
     f->offset = 0;
     f->ref_count = 1;
@@ -331,11 +348,7 @@ int vfs_read(file_t *f, void *buf, size_t len) {
         }
 
         case FILE_STDIN:
-            printk("vfs: vfs_read on stdin not supported\n");
-            return -1;
-
-        case FILE_STDOUT:
-            return -1;
+            return term_read(&console_term, buf, (uint32_t)len);
 
         default:
             return -1;
@@ -347,8 +360,7 @@ int vfs_write(file_t *f, const void *buf, size_t len) {
 
     switch (f->type) {
         case FILE_STDOUT: {
-            printk("%.*s", (int)len, (const char *)buf);
-            return (int)len;
+            return term_write(&console_term, buf, (uint32_t)len);
         }
 
         case FILE_TMPFS: {
@@ -365,46 +377,37 @@ int vfs_write(file_t *f, const void *buf, size_t len) {
             printk("vfs: write to read-only tarfs file\n");
             return -1;
 
-        case FILE_STDIN:
-            return -1;
-
         default:
             return -1;
     }
 }
 
 // Seek to a new offset in the file
-off_t vfs_lseek(file_t *f, off_t offset, int whence) {
-	if (!f) return -1;
-	
-	off_t new_offset = 0;
-	
-	switch (whence) {
-		case SEEK_SET:
-			new_offset = offset;
-			break;
-			
-		case SEEK_CUR:
-			new_offset = (off_t)f->offset + offset;
-			break;
-			
-		case SEEK_END:
-			if (f->vnode) {
-				new_offset = (off_t)f->vnode->size + offset;
-			} else {
-				return -1;
-			}
-			break;
-			
-		default:
-			return -1;
-	}
-	
-	// Don't allow seeking to negative positions
-	if (new_offset < 0) {
-		return -1;
-	}
-	
-	f->offset = (size_t)new_offset;
-	return new_offset;
+int vfs_lseek(file_t *f, size_t offset, int whence) {
+    if (!f) return -1;
+
+    size_t new_offset = 0;
+    switch (whence) {
+        case SEEK_SET:
+            new_offset = offset;
+            break;
+        case SEEK_CUR:
+            new_offset = f->offset + offset;
+            break;
+        case SEEK_END:
+            if (f->vnode)
+                new_offset = f->vnode->size + offset;
+            else
+                return -1;
+            break;
+        default:
+            return -1;
+    }
+
+    // Bound seek by vnode size for regular VFS-backed files.
+    if (f->vnode && new_offset > f->vnode->size)
+        return -1;
+
+    f->offset = new_offset;
+    return new_offset;
 }

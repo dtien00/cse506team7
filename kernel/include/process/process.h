@@ -47,6 +47,7 @@ struct proc {
     // Memory management
     pagetable_t pagetable;
     uint64_t sz;
+    struct vm_area *vma_list;  // List of memory regions
 
     // User-mode state (saved/restored by trap_entry/sret in trap.S)
     uint64_t pc;
@@ -56,9 +57,11 @@ struct proc {
 
     proc_state_t state;
     int exit_code;
+    void *chan; // Sleep/wakeup channel support
 
     uint64_t time_slice;
     uint64_t total_time;
+    uint64_t wake_tick;    // 0 = not sleeping; >0 = timer_ticks value at which to wake
     struct proc *next;
 
     // Kernel scheduler context (callee-saved regs, used by swtch)
@@ -66,15 +69,15 @@ struct proc {
 
     // Trap frame (for user mode)
     trap_frame *trapframe;
+    uint8_t trapframe_owned;
 
     // Process hierarchy
     struct proc *parent;
     struct proc *first_child;
     struct proc *sibling;
 
-    // File descriptor table
-    fd_table_t fd_table;
-
+    // File Descriptor table
+    fd_table_t fds;
 };
 
 extern struct proc proctab[];
@@ -89,9 +92,10 @@ struct proc* proc_find(pid_t pid);
 struct proc* proc_create(const char *name);
 void proc_exit(int code);
 void proc_kill(struct proc *p);
-void proc_wait(struct proc *p);
+int proc_wait(int *exit_code_out);
 
 // Scheduling
+void scheduler_init(void);
 struct proc* proc_current(void);
 void proc_yield(void);
 void schedule(void);
@@ -101,7 +105,15 @@ struct proc* proc_next_ready(void);
 void proc_ready(struct proc *p);
 void proc_block(struct proc *p);
 void proc_unblock(struct proc *p);
-void context_switch(struct proc *next);
 
 // Debug
 void proc_dump(void);
+
+// Sleep/wakeup channel support
+void proc_sleep(void *chan);
+void proc_wakeup(void *chan);
+
+// Utilities
+int exec(const char *path, char *const argv[]);
+
+void fork_ret(void);

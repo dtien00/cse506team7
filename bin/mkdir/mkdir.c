@@ -1,15 +1,16 @@
 #include <stdio.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 int main(int argc, char *argv[]) {
     if (argc < 2) {
-        printf("usage: mkdir <directory>\n");
+        write(STDERR_FILENO, "mkdir: missing operand\n", 23);
         return 1;
     }
     
     for (int i = 1; i < argc; i++) {
         if (mkdir(argv[i], 0755) < 0) {
-            printf("mkdir: cannot create directory %s\n", argv[i]);
+            printf("mkdir: cannot create directory '%s'\n", argv[i]);
             return 1;
         }
     }

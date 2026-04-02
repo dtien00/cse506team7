@@ -6,15 +6,15 @@
 #include "process/process.h"
 #include "trap/syscall.h"
 #include "arch/riscv.h"
-#include "tests/test.h"
 #include "fs/vfs.h"
 #include "fs/tarfs.h"
 #include "fs/tmpfs.h"
-#include "fs/ext2.h"
-#include "fs/block_cache.h"
-#include "drivers/virtio.h"
 #include "kernel/types.h"
+#include "drivers/drivers.h"
+#include "kernel/console.h"
 
+#include "tests/test.h"
+#include "tty/term.h"
 
 // External symbols from linker script
 extern char _kernel_end[];
@@ -23,9 +23,25 @@ void run_all_tests(void) {
     mem_test_run();
     // trap_test_run();
     fs_test_run();
+    
+    sched_test_run();
+    sched_timeslice_test_run();
+    sched_priority_test_run();
+    sched_fairness_test_run();
+    sched_idle_test_run();
+    proc_test_run();
+    libc_syscall_test_run();
+    timer_test_run();
+
+    // printk("%d passed, %d failed\n", passed, failed);
 }
 
 void boot(uint64_t hart_id, uint64_t dtb) {
+
+    // initialize console
+    console_init(); // this will fall back to using the sbi driver by default
+    printk("console: using %s\n", console_active_name());
+
     printk("\n");
     printk("========================================\n");
     printk("       SBUnix Operating System\n");
@@ -45,7 +61,6 @@ void boot(uint64_t hart_id, uint64_t dtb) {
     uintptr_t mem_start = PGROUNDUP(kernel_end);
     size_t mem_size = 0x88000000 - mem_start;  // Up to 128MB total
 
-
     pmm_init(mem_start, mem_size);
 
     // Initialize trap handling
@@ -57,48 +72,33 @@ void boot(uint64_t hart_id, uint64_t dtb) {
     // Initialize kernel heap
     kmalloc_init();
 
+    // initialize drivers once memory is mapped
+    drivers_init();
 
-    // Initialize block device and cache
-    // Note: VirtIO MMIO base address is typically 0x10001000 in QEMU
-    // You may need to adjust this based on your device tree or QEMU config
-    printk("Initializing block device...\n");
-    if (virtio_blk_init(0x10001000) == 0) {
-        block_cache_init();
-        ext2_init();
-        printk("Block device and ext2 filesystem ready\n");
-    } else {
-        printk("Warning: Block device not available, ext2 disabled\n");
-    }
+    //initialize the terminal
+    term_global_init();
+
+    // switch to uart once drivers are initialized
+    if (console_set_driver("uart") == 0)
+        printk("console: switched to uart\n");
 
     // VFS and filesystems must be ready before proc_init because
     // proc_init calls exec(), which calls vfs_open().
+    // Initialize VFS and filesystems
     vfs_init();
     tarfs_init();
     tmpfs_init();
-    
-    // Mount root filesystem (tarfs for boot)
+    // Mount root filesystem (tarfs)
     vfs_mount(NULL, "/", "tarfs");
-    
     // Mount tmpfs at /tmp
     vfs_mount(NULL, "/tmp", "tmpfs");
-    
-    // Mount ext2 at /mnt if available (persistent storage)
-    if (virtio_blk_get_capacity() > 0) {
-        printk("Mounting ext2 filesystem at /mnt...\n");
-        if (vfs_mount(NULL, "/mnt", "ext2") == 0) {
-            printk("Persistent storage available at /mnt\n");
-        } else {
-            printk("Warning: Failed to mount ext2, check disk format\n");
-        }
-    }
 
     syscall_init();
 
+    // set up process 0 aka swapper as idle loop
+    scheduler_init();
     // proc_init sets up the init process and loads its ELF via exec().
     proc_init();
-
-    // // Initialize system calls
-    syscall_init();
 
     interrupts_on();
     printk("Turned on global interrupts. Now waiting for interrupts...\n");
@@ -111,10 +111,12 @@ void boot(uint64_t hart_id, uint64_t dtb) {
 
     #ifdef RUN_TESTS
         run_all_tests();
+    #else
+        // Hand off to the scheduler; runs the init process (pid 1).
+        schedule();
+        printk("Kernel panic.\n"); // should never reach here as schedule will always default to its own idle loop
+        while (1)
+            asm volatile("wfi");
     #endif
-
-    while (1)
-        asm volatile("wfi");
-    
 }
 

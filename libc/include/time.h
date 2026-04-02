@@ -1,10 +1,7 @@
 #ifndef _TIME_H
 #define _TIME_H
 
-#include "types.h"
-
-typedef long time_t;
-typedef long clock_t;
+#include "sys/time.h"
 
 struct tm {
     int tm_sec;
@@ -23,16 +20,10 @@ struct timespec {
     long   tv_nsec;
 };
 
-struct timeval {
-    time_t      tv_sec;
-    long        tv_usec;
-};
-
 #define CLOCK_REALTIME  0
 #define CLOCK_MONOTONIC 1
 
 time_t time(time_t *tloc);
-int gettimeofday(struct timeval *tv, void *tz);
 int clock_gettime(int clk_id, struct timespec *tp);
 struct tm* localtime(const time_t *timep);
 struct tm* gmtime(const time_t *timep);

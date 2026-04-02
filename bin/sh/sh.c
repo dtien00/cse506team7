@@ -8,114 +8,94 @@
 #define MAX_LINE 1024
 #define MAX_ARGS 64
 
-static char line[MAX_LINE];
-static char *args[MAX_ARGS];
+static void parse_args(char *line, char **argv) {
+    int argc = 0;
+    char *p = line;
 
-static void parse_line(char *line, char **args) {
-    int i = 0;
-    char *token = line;
-    int in_word = 0;
-    
-    while (*token && i < MAX_ARGS - 1) {
-        if (*token == ' ' || *token == '\t' || *token == '\n') {
-            if (in_word) {
-                *token = '\0';
-                in_word = 0;
-            }
-        } else {
-            if (!in_word) {
-                args[i++] = token;
-                in_word = 1;
-            }
-        }
-        token++;
+    while (*p && argc < MAX_ARGS - 1) {
+        while (*p == ' ' || *p == '\t' || *p == '\n') p++;
+        if (*p == '\0') break;
+
+        argv[argc++] = p;
+
+        while (*p && *p != ' ' && *p != '\t' && *p != '\n') p++;
+        if (*p) *p++ = '\0';
     }
-    args[i] = NULL;
+    argv[argc] = NULL;
 }
 
-static int builtin_cd(char **args) {
-    if (args[1] == NULL) {
-        chdir("/");
-    } else {
-        if (chdir(args[1]) < 0) {
-            printf("cd: cannot change directory to %s\n", args[1]);
-            return -1;
-        }
+static int builtin_cd(char **argv) {
+    if (!argv[1]) {
+        return 0;
+    }
+    if (chdir(argv[1]) < 0) {
+        dprintf(STDERR_FILENO, "cd: cannot change directory to '%s'\n", argv[1]);
+        return 1;
     }
     return 0;
 }
 
-static int builtin_exit(char **args) {
+static int builtin_exit(char **argv) {
     int code = 0;
-    if (args[1] != NULL) {
-        code = atoi(args[1]);
+    if (argv[1]) {
+        code = atoi(argv[1]);
     }
     exit(code);
     return 0;
 }
 
-static int execute_command(char **args) {
-    if (args[0] == NULL) {
-        return 0;
+static int execute(char **argv) {
+    if (!argv[0]) return 0;
+
+    if (strcmp(argv[0], "cd") == 0) {
+        return builtin_cd(argv);
     }
-    
-    if (strcmp(args[0], "cd") == 0) {
-        return builtin_cd(args);
+    if (strcmp(argv[0], "exit") == 0) {
+        return builtin_exit(argv);
     }
-    
-    if (strcmp(args[0], "exit") == 0) {
-        return builtin_exit(args);
-    }
-    
+
     pid_t pid = fork();
+    if (pid < 0) {
+        write(STDERR_FILENO, "fork failed\n", 12);
+        return 1;
+    }
+
     if (pid == 0) {
         char path[256];
-        
-        if (args[0][0] == '/') {
-            execve(args[0], args, NULL);
+        if (argv[0][0] != '/') {
+            strcpy(path, "/bin/");
+            strcat(path, argv[0]);
         } else {
-            snprintf(path, sizeof(path), "/bin/%s", args[0]);
-            execve(path, args, NULL);
+            strcpy(path, argv[0]);
         }
-        
-        printf("%s: command not found\n", args[0]);
+
+        execve(path, argv, NULL);
+        dprintf(STDERR_FILENO, "sh: %s: command not found\n", argv[0]);
         exit(127);
-    } else if (pid > 0) {
-        int status;
-        waitpid(pid, &status, 0);
-        return status;
-    } else {
-        printf("fork failed\n");
-        return -1;
     }
+
+    int status;
+    waitpid(pid, &status, 0);
+    return WEXITSTATUS(status);
 }
 
-int main(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-    
+int main(void) {
+    char line[MAX_LINE];
+    char *argv[MAX_ARGS];
+    int n;
+
     while (1) {
-        printf("$ ");
-        
-        int i = 0;
-        int c;
-        while (i < MAX_LINE - 1 && (c = getchar()) != EOF && c != '\n') {
-            line[i++] = c;
-        }
-        
-        if (c == EOF) {
-            break;
-        }
-        
-        line[i] = '\0';
-        
-        if (i == 0) {
-            continue;
-        }
-        
-        parse_line(line, args);
-        execute_command(args);
+        write(STDOUT_FILENO, "$ ", 2);
+
+        n = read(STDIN_FILENO, line, sizeof(line) - 1);
+
+        line[n] = '\0';
+
+        if (line[0] == '\n' || line[0] == '\0') continue;
+
+        parse_args(line, argv);
+        execute(argv);
     }
-    
+
     return 0;
 }

@@ -18,6 +18,7 @@ void fd_init(fd_table_t *table) {
     // Allocate stdin (fd 0)
     file_t *stdin_file = kmalloc(sizeof(file_t));
     if (stdin_file) {
+        stdin_file->entry = NULL;
         stdin_file->type = FILE_STDIN;
         stdin_file->vnode = NULL;
         stdin_file->offset = 0;
@@ -29,6 +30,7 @@ void fd_init(fd_table_t *table) {
     // Allocate stdout (fd 1)
     file_t *stdout_file = kmalloc(sizeof(file_t));
     if (stdout_file) {
+        stdout_file->entry = NULL;
         stdout_file->type = FILE_STDOUT;
         stdout_file->vnode = NULL;
         stdout_file->offset = 0;
@@ -40,6 +42,7 @@ void fd_init(fd_table_t *table) {
     // Allocate stderr (fd 2) - same as stdout for now
     file_t *stderr_file = kmalloc(sizeof(file_t));
     if (stderr_file) {
+        stderr_file->entry = NULL;
         stderr_file->type = FILE_STDOUT;
         stderr_file->vnode = NULL;
         stderr_file->offset = 0;
@@ -95,39 +98,16 @@ void fd_close(fd_table_t *table, int fd) {
 }
 
 // -----------------------------------------------------------------------------
-// fd_copy
-// Copies the file descriptor table from src to dst, incrementing ref counts.
-// Used by fork() to duplicate parent's open files.
-// Returns 0 on success, -1 on failure.
+// fd_destroy
+// Closes all open file descriptors in a table. Called by proc_destroy()
+// when a process exits. Stdin/stdout/stderr (fds 0-2) are also closed here
+// since they were kmalloc'd in fd_init.
 // -----------------------------------------------------------------------------
-int fd_copy(fd_table_t *dst, fd_table_t *src) {
-    if (!dst || !src) return -1;
-
-    for (int i = 0; i < MAX_FDS; i++) {
-        dst->files[i] = NULL;
-    }
-
-    for (int i = 0; i < MAX_FDS; i++) {
-        if (src->files[i]) {
-            dst->files[i] = src->files[i];
-            src->files[i]->ref_count++;
-        }
-    }
-
-    return 0;
-}
-
-// -----------------------------------------------------------------------------
-// fd_cleanup
-// Closes all open file descriptors in the table and frees resources.
-// Used when a process exits.
-// -----------------------------------------------------------------------------
-void fd_cleanup(fd_table_t *table) {
+void fd_destroy(fd_table_t *table) {
     if (!table) return;
-
     for (int i = 0; i < MAX_FDS; i++) {
         if (table->files[i]) {
-            fd_close(table, i);
+            fd_close(table, i);   // calls vfs_close → frees file_t if ref==0
         }
     }
 }

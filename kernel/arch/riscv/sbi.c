@@ -30,3 +30,11 @@ sbi_ret sbi_write(const uint64_t num_bytes, const uint8_t *data) {
 void sbi_set_timer(const uint64_t time_after) {
     (void) sbi_ecall(SBI_EXT_TIME, SBI_EXT_TIME_SET, time_after, 0, 0, 0, 0, 0);
 }
+
+// Legacy SBI console getchar (EID=0x02).
+// Returns the received character (0-255), or -1 if no character is available.
+// NOTE: EID 0x01 is sbi_console_putchar; EID 0x02 is sbi_console_getchar.
+int64_t sbi_console_getchar(void) {
+    sbi_ret r = sbi_ecall(0x02, 0, 0, 0, 0, 0, 0, 0);
+    return r.error;
+}

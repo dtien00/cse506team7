@@ -1,12 +1,7 @@
 #ifndef _UNISTD_H
 #define _UNISTD_H
 
-#include "types.h"
-
-typedef int pid_t;
-typedef int uid_t;
-typedef int gid_t;
-typedef long off_t;
+#include "sys/types.h"
 
 #define STDIN_FILENO  0
 #define STDOUT_FILENO 1
@@ -15,6 +10,12 @@ typedef long off_t;
 #define SEEK_SET 0
 #define SEEK_CUR 1
 #define SEEK_END 2
+
+/* access() mode flags */
+#define F_OK 0
+#define X_OK 1
+#define W_OK 2
+#define R_OK 4
 
 ssize_t read(int fd, void *buf, size_t count);
 ssize_t write(int fd, const void *buf, size_t count);
@@ -30,9 +31,13 @@ gid_t getgid(void);
 
 unsigned int sleep(unsigned int seconds);
 int usleep(unsigned int usec);
+int uptime(void);   /* returns kernel timer_ticks since boot (10 ticks/s on QEMU) */
 
 int chdir(const char *path);
 char* getcwd(char *buf, size_t size);
+int rename(const char *old, const char *new);  // mv applet
+int rmdir(const char *path);                    // rmdir applet
+int truncate(const char *path, off_t length);   // truncate applet
 
 int pipe(int pipefd[2]);
 int dup(int oldfd);
@@ -46,7 +51,16 @@ void* sbrk(intptr_t increment);
 int brk(void* addr);
 
 int unlink(const char *pathname);
-int mkdir(const char *pathname, mode_t mode);
-void sync(void);
+
+int access(const char *pathname, int mode);
+
+pid_t getpgid(pid_t pid);
+int   setpgid(pid_t pid, pid_t pgid);
+pid_t getpgrp(void);
+int   setpgrp(void);
+
+int link(const char *oldpath, const char *newpath);
+int symlink(const char *target, const char *linkpath);
+ssize_t readlink(const char *pathname, char *buf, size_t bufsiz);
 
 #endif
