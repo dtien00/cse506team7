@@ -64,7 +64,7 @@ void proc_init(void) {
     fd_init(&init->fds);
 
     // Prepare argv for /bin/echo
-    static char *argv[] = { "sh", NULL };
+    static char *argv[] = { "init", NULL };
     // Set current to init so exec uses the right process
     current = init;
     if (exec("/bin/init", argv) < 0) {
@@ -73,6 +73,9 @@ void proc_init(void) {
         if (exec("/bin/sh", sh_argv) < 0)
             printk("[init] exec failed fallback to /bin/sh\n");
     }
+    // if (exec("/bin/libc_test", argv) < 0) {
+    //     printk("[init] exec failed for /bin/libc_test\n");
+    // }
 
     proc_ready(init);
     current = NULL;
