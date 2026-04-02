@@ -255,6 +255,64 @@ void tmpfs_test(void) {
     // 17. Unlink non-empty directory returns error
     ret = vfs_unlink("/tmp/testdir");
     TEST("unlink non-empty dir returns error", ret < 0);
+
+    // 18. Unlink empty directory succeeds
+    ret = vfs_mkdir("/tmp/emptydir", 0755);
+    if (ret == 0) {
+        ret = vfs_unlink("/tmp/emptydir");
+        TEST("unlink empty dir succeeds", ret == 0);
+        file_t *gone = vfs_open("/tmp/emptydir");
+        TEST("unlinked empty dir not accessible", gone == NULL);
+        if (gone) vfs_close(gone);
+    }
+
+    // 19. Read with oversized buffer returns only available bytes (no overread)
+    ret = vfs_create("/tmp/small.txt", 0644);
+    if (ret == 0) {
+        f = vfs_open("/tmp/small.txt");
+        if (f) {
+            vfs_write(f, "hi", 2);
+            vfs_close(f);
+        }
+        f = vfs_open("/tmp/small.txt");
+        if (f) {
+            char big[128] = {0};
+            int nr = vfs_read(f, big, sizeof(big));
+            TEST("read with oversized buf returns only file bytes", nr == 2);
+            vfs_close(f);
+        }
+    }
+
+    // 20. Second write extends file and data is correct
+    ret = vfs_create("/tmp/extend.txt", 0644);
+    if (ret == 0) {
+        f = vfs_open("/tmp/extend.txt");
+        if (f) {
+            vfs_write(f, "Hello", 5);
+            vfs_write(f, " World", 6);
+            vfs_close(f);
+        }
+        f = vfs_open("/tmp/extend.txt");
+        if (f) {
+            char ebuf[16] = {0};
+            int nr = vfs_read(f, ebuf, sizeof(ebuf) - 1);
+            TEST("sequential writes extend file correctly",
+                 nr == 11 && strcmp(ebuf, "Hello World") == 0);
+            vfs_close(f);
+        }
+    }
+
+    // 21. Create file with missing intermediate directory returns error
+    ret = vfs_create("/tmp/nodir/file.txt", 0644);
+    TEST("create with missing parent dir returns error", ret < 0);
+
+    // 22. ref_count is exactly 1 after a single open
+    ret = vfs_create("/tmp/refcount2.txt", 0644);
+    if (ret == 0) {
+        file_t *rc = vfs_open("/tmp/refcount2.txt");
+        TEST("single open gives ref_count == 1", rc != NULL && rc->ref_count == 1);
+        if (rc) vfs_close(rc);
+    }
 }
 
 void fs_test_run(void) {
@@ -273,7 +331,7 @@ void fs_test_run(void) {
     mount_test();
     printk("\n");
 
-    // tmpfs_test();
+    tmpfs_test();
     // printk("\n");
     printk("\n========================================\n");
     printk("  Results: %d passed, %d failed\n", passed, failed);
