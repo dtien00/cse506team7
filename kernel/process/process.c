@@ -114,8 +114,9 @@ struct proc* proc_create(const char *name) {
     // p->trapframe = (trap_frame *)kmalloc(sizeof(trap_frame));
     // memset(p->trapframe, 0, sizeof(trap_frame));
 
-    // Initialize process' file descriptor
-    fd_init(&p->fds);
+    // do not initialize the process's file descriptor here, the caller of proc_create decide and initialize what fds the process might need
+    // ex: fork to inherit fds from parent, init to create the 0,1,2 fds
+    // fd_init(&p->fds);
 
     proc_ready(p);
     return p;

@@ -202,7 +202,7 @@ vnode_t *vfs_lookup(const char *path) {
     // Get relative path within the mount
     const char *rel_path = path;
     size_t mnt_len = strlen(mnt->mountpoint);
-    
+
     // Skip past mount point
     if (mnt_len > 1) {  // Not root mount
         rel_path += mnt_len;
@@ -265,6 +265,17 @@ int vfs_mkdir(const char *path, uint32_t mode) {
     }
 
     return -1;
+}
+
+/*
+ * vfs_ref — acquire a shared reference to an already-open file.
+ *
+ * Call this whenever a file_t is handed to a second owner WITHOUT going
+ * through vfs_open (i.e. fork, dup).
+ */
+void vfs_ref(file_t *f) {
+    if (!f) return;
+    f->ref_count++;
 }
 
 // -----------------------------------------------------------------------------
@@ -379,8 +390,8 @@ int vfs_lseek(file_t *f, size_t offset, int whence) {
 			new_offset = f->offset + offset;
 			break;
 		case SEEK_END:
-			if (f->entry && f->entry->size)
-				new_offset = f->entry->size + offset;
+	        if (f->vnode)
+	            new_offset = f->vnode->size + offset;
 			else
 				return -1;
 			break;

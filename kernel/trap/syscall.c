@@ -184,8 +184,8 @@ pid_t sys_fork(void) {
     // a copy of the parent's fds so the child inherits open files
     for (int i = 0; i < MAX_FDS; i++) {
         child->fds.files[i] = current->fds.files[i];
-        // if (child->fds.files[i])
-        //     vfs_ref(child->fds.files[i]);  // bump refcount if vfs supports it
+        if (child->fds.files[i])
+            vfs_ref(child->fds.files[i]);  // bump refcount if vfs supports it
     }
 
     // Copy parent's address space
