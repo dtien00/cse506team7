@@ -16,6 +16,107 @@
 // trap entry point code written in trap.S
 extern void trap_entry(void);
 
+static const char *proc_state_name(proc_state_t s) {
+    switch (s) {
+        case PROC_UNUSED:  return "UNUSED";
+        case PROC_CREATED: return "CREATED";
+        case PROC_READY:   return "READY";
+        case PROC_RUNNING: return "RUNNING";
+        case PROC_BLOCKED: return "BLOCKED";
+        case PROC_ZOMBIE:  return "ZOMBIE";
+        default:           return "?";
+    }
+}
+
+static const char *scause_name(uint64_t scause) {
+    uint64_t code = scause & ~SCAUSE_INTERRUPT;
+    if (scause & SCAUSE_INTERRUPT) {
+        switch (code) {
+            case SCAUSE_S_SOFTWARE_INT: return "S-mode software interrupt";
+            case SCAUSE_S_TIMER_INT:    return "S-mode timer interrupt";
+            case SCAUSE_S_EXTERNAL_INT: return "S-mode external interrupt";
+            default:                    return "unknown interrupt";
+        }
+    }
+
+    switch (code) {
+        case SCAUSE_INST_MISALIGNED:  return "instruction address misaligned";
+        case SCAUSE_INST_ACCESS_FAULT:return "instruction access fault";
+        case SCAUSE_ILLEGAL_INST:     return "illegal instruction";
+        case SCAUSE_BREAKPOINT:       return "breakpoint";
+        case SCAUSE_LOAD_MISALIGNED:  return "load address misaligned";
+        case SCAUSE_LOAD_ACCESS_FAULT:return "load access fault";
+        case SCAUSE_STORE_MISALIGNED: return "store address misaligned";
+        case SCAUSE_STORE_ACCESS_FAULT:return "store access fault";
+        case SCAUSE_ECALL_FROM_U:     return "ecall from user";
+        case SCAUSE_ECALL_FROM_S:     return "ecall from supervisor";
+        case SCAUSE_INST_PAGE_FAULT:  return "instruction page fault";
+        case SCAUSE_LOAD_PAGE_FAULT:  return "load page fault";
+        case SCAUSE_STORE_PAGE_FAULT: return "store page fault";
+        default:                      return "unknown exception";
+    }
+}
+
+static void print_pte_flags(uint64_t pte) {
+    printk("flags=%c%c%c%c%c%c%c%c",
+           (pte & PTE_V) ? 'V' : '-',
+           (pte & PTE_R) ? 'R' : '-',
+           (pte & PTE_W) ? 'W' : '-',
+           (pte & PTE_X) ? 'X' : '-',
+           (pte & PTE_U) ? 'U' : '-',
+           (pte & PTE_G) ? 'G' : '-',
+           (pte & PTE_A) ? 'A' : '-',
+           (pte & PTE_D) ? 'D' : '-');
+}
+
+static void dump_va_mapping(const char *tag, pagetable_t pt, uintptr_t va) {
+    if (!pt) {
+        printk("  %s: no pagetable\n", tag);
+        return;
+    }
+
+    uint64_t *pte = vmm_walk(pt, va, 0);
+    if (!pte || !(*pte & PTE_V)) {
+        printk("  %s: va=0x%p unmapped\n", tag, va);
+        return;
+    }
+
+    uintptr_t pa = PTE_TO_PA(*pte) | (va & (PGSIZE - 1));
+    printk("  %s: va=0x%p -> pa=0x%p pte=0x%p ", tag, va, pa, *pte);
+    print_pte_flags(*pte);
+    printk("\n");
+}
+
+static void dump_exception_diagnostics(trap_frame *frame) {
+    uint64_t live_satp = r_satp();
+    uint64_t live_sie = read_csr(sie);
+    uint64_t live_sip = read_csr(sip);
+    uint64_t live_sscratch = read_csr(sscratch);
+
+    printk("  Cause: %s\n", scause_name(frame->scause));
+    printk("  Priv: %s-mode  SSTATUS[spp=%d sie=%d spie=%d sum=%d]\n",
+           (frame->sstatus & SSTATUS_SPP) ? "S" : "U",
+           (frame->sstatus & SSTATUS_SPP) ? 1 : 0,
+           (frame->sstatus & SSTATUS_SIE) ? 1 : 0,
+           (frame->sstatus & SSTATUS_SPIE) ? 1 : 0,
+           (frame->sstatus & SSTATUS_SUM) ? 1 : 0);
+    printk("  CSRs: satp=0x%p sie=0x%p sip=0x%p sscratch=0x%p\n",
+           live_satp, live_sie, live_sip, live_sscratch);
+
+    if (current) {
+        printk("  Current: pid=%d name=%s state=%s pagetable=0x%p sz=0x%p trapframe=0x%p\n",
+               current->pid, current->name, proc_state_name(current->state),
+               (uintptr_t)current->pagetable, current->sz, (uintptr_t)current->trapframe);
+        dump_va_mapping("current.pt stval", current->pagetable, frame->stval);
+        dump_va_mapping("current.pt sepc", current->pagetable, frame->sepc);
+    } else {
+        printk("  Current: (none)\n");
+    }
+
+    dump_va_mapping("kernel.pt stval", vmm_kernel_pagetable(), frame->stval);
+    dump_va_mapping("kernel.pt sepc", vmm_kernel_pagetable(), frame->sepc);
+}
+
 void trap_init(void) {
     // Install trap entry point
     write_csr(sscratch, 0);
@@ -61,6 +162,8 @@ static void handle_interrupt(trap_frame *frame) {
     }
 }
 
+void page_fault_handler(trap_frame *);
+
 void handle_exception(trap_frame *frame) {
     // Handle U-mode syscalls silently — they are normal, not errors.
     if (frame->scause == SCAUSE_ECALL_FROM_U) {
@@ -74,6 +177,7 @@ void handle_exception(trap_frame *frame) {
     }
 
     printk("\nEXCEPTION: scause=0x%p stval=0x%p sepc=0x%p\n", frame->scause, frame->stval, frame->sepc);
+    dump_exception_diagnostics(frame);
 
     switch (frame->scause) {
         case SCAUSE_INST_MISALIGNED:
@@ -109,7 +213,8 @@ void handle_exception(trap_frame *frame) {
         case SCAUSE_LOAD_PAGE_FAULT:
         case SCAUSE_STORE_PAGE_FAULT:
             page_fault_handler(frame);
-            break;
+            // break;
+            return; // return instead of break when handling page faults
         default:
             printk("  Unknown exception\n");
             break;
@@ -185,6 +290,16 @@ static uint64_t vma_prot_to_pte(uint32_t prot) {
 
 /* ── kill current process on unrecoverable fault ─────────────────────────*/
 static void kill_current(trap_frame *frame, const char *reason) {
+    // If the fault came from S-mode, panic.
+    if (frame->sstatus & SSTATUS_SPP) {
+        printk("KERNEL PAGE FAULT: scause=0x%p stval=0x%p sepc=0x%p current=%d\n",
+               frame->scause, frame->stval, frame->sepc,
+               current ? current->pid : -1);
+        printk("  Reason: %s\n", reason);
+        dump_exception_diagnostics(frame);
+        while (1) asm volatile("wfi");
+    }
+
     printk("SEGFAULT: pid=%d %s sepc=0x%p stval=0x%p\n",
            current ? current->pid : -1, reason,
            frame->sepc, frame->stval);
@@ -282,8 +397,8 @@ void timer_handler(void) {
     timer_ticks++;
     sbi_set_timer(read_csr(time) + TIMER_INTERVAL);
 
-    // Enforce per-process tick budget if configured (time_slice > 0)
-    if (current != NULL) {
+    // Only preempt when we're actually in a running process context.
+    if (current != NULL && current->state == PROC_RUNNING) {
         if (current->time_slice > 0) {
             current->total_time++;
             if (current->total_time >= current->time_slice) {

@@ -6,6 +6,7 @@
 #include "mm/vmm.h"
 #include "mm/pmm.h"
 #include "mm/kmalloc.h"   // needed for kmalloc/kfree in exec()
+#include "mm/vma.h"
 #include "types.h"
 #include "string.h"
 #include "elf/elf.h"
@@ -73,13 +74,6 @@ void proc_init(void) {
             printk("[init] exec failed fallback to /bin/sh\n");
     }
 
-    // static char *argv[] = { "forktest", NULL };
-    // current = init;
-    // if (exec("/bin/libc_test", argv) < 0) {
-    //     printk("[libc_test] exec failed for /bin/libc_test\n");
-    // }
-
-
     proc_ready(init);
     current = NULL;
 }
@@ -100,19 +94,19 @@ struct proc* proc_create(const char *name) {
     if (!p) return NULL;
 
     int idx = p - proctab;
+    memset(p, 0, sizeof(*p));
+
     static uint32_t next_pid = 2;
     p->pid = next_pid++;
     strncpy(p->name, name, MAX_NAME - 1);
     p->state = PROC_CREATED;
     p->context.sp = (uint64_t)&kstacks[idx][KSTACK_SIZE];
     p->context.ra = (uint64_t)proc_entry;
+    p->trapframe = NULL;
+    p->trapframe_owned = 0;
 
     // Initialize VMA list
     vma_init(&p->vma_list);
-
-    // User-mode processes allocates a trap_frame to save/restore user registers
-    // p->trapframe = (trap_frame *)kmalloc(sizeof(trap_frame));
-    // memset(p->trapframe, 0, sizeof(trap_frame));
 
     // do not initialize the process's file descriptor here, the caller of proc_create decide and initialize what fds the process might need
     // ex: fork to inherit fds from parent, init to create the 0,1,2 fds
@@ -136,24 +130,23 @@ void proc_destroy(struct proc *p) {
 
     proc_free_pagetable(p);
 
-    if (p->trapframe) {
+    if (p->trapframe && p->trapframe_owned) {
         kfree(p->trapframe);
-        p->trapframe = NULL;
     }
+    p->trapframe = NULL;
+    p->trapframe_owned = 0;
 
     fd_destroy(&p->fds);
 }
 
 void proc_free(struct proc *p) {
     if (!p) return;
-    
+
     // Free VMA list
     vma_free_all(p->vma_list);
-    p->vma_list = NULL;
-    
-    p->pid = 0;
+
+    memset(p, 0, sizeof(*p));
     p->state = PROC_UNUSED;
-    p->next = NULL;
 }
 
 void proc_exit(int code) {
@@ -307,7 +300,6 @@ void fork_ret(void) {
     __builtin_unreachable();
 }
 
-
 void proc_start_user(struct proc *p, uint64_t entry, uint64_t user_sp) {
     // SPP=0 → sret returns to U-mode; SPIE=1 → interrupts enabled after sret
     write_csr(sstatus, (read_csr(sstatus) & ~SSTATUS_SPP) | SSTATUS_SPIE);
@@ -336,6 +328,7 @@ void proc_start_user(struct proc *p, uint64_t entry, uint64_t user_sp) {
     );
     __builtin_unreachable();
 }
+
 int exec(const char *path, char *const argv[]) {
     // 1. Open the binary
     file_t *f = vfs_open(path);
@@ -462,7 +455,7 @@ int exec(const char *path, char *const argv[]) {
         size_t len = strlen(argv[i]) + 1;
         sp -= len;
         uintptr_t pa = vmm_translate(new_pt, sp);
-        if (!pa) { kfree(argv_uvas); goto fail_pt; }
+        if (!pa) { kfree(argv_uvas); goto fail_vma; }
         memcpy((void *)pa, argv[i], len);
         argv_uvas[i] = sp;   // user-space VA of this string
     }
@@ -474,20 +467,27 @@ int exec(const char *path, char *const argv[]) {
     for (int i = 0; i <= argc; i++) {
         uintptr_t slot_va = sp + (uint64_t)i * sizeof(uintptr_t);
         uintptr_t slot_pa = vmm_translate(new_pt, slot_va);
-        if (!slot_pa) { kfree(argv_uvas); goto fail_pt; }
+        if (!slot_pa) { kfree(argv_uvas); goto fail_vma; }
         *(uintptr_t *)slot_pa = argv_uvas[i];
     }
     uintptr_t user_argv = sp;
     kfree(argv_uvas);
 
-    // 7. Commit: discard old address space, install the new one
-    vmm_free_pagetable(current->pagetable);
-    vma_free_all(current->vma_list);
-    
+    // 7. Commit: install new address space, then tear down the old one.
+    // Keep the old root alive until after SATP switches away from it.
+    pagetable_t old_pt = current->pagetable;
+    struct vm_area *old_vma_list = current->vma_list;
+
     current->pagetable = new_pt;
     current->vma_list = new_vma_list;
     current->sz        = highest_seg_end;
     current->satp      = MAKE_SATP((uintptr_t)new_pt);
+
+    // Switch to the new page table before freeing old page-table pages.
+    vmm_switch(current->pagetable);
+
+    vmm_free_pagetable(old_pt);
+    vma_free_all(old_vma_list);
 
     // 8. Write entry point and argument registers into the live trapframe
     //    (set by syscall_handler before calling exec; NULL at boot-time)
@@ -505,8 +505,7 @@ int exec(const char *path, char *const argv[]) {
     current->regs[10] = (uint64_t)argc;
     current->regs[11] = user_argv;
 
-    // Switch to the new page table
-    vmm_switch(current->pagetable);
+    // current->pagetable is already active after commit above.
 
     vfs_close(f);
     return 0;

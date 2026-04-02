@@ -17,7 +17,7 @@
 #define MAP_ANONYMOUS 0x20
 #define MAP_FIXED     0x10
 
-#define USER_HEAP_START 0x10000000UL
+#define USER_HEAP_START 0x11000000UL
 #define USER_HEAP_END   0x40000000UL
 
 #define MAX_ARGS 64
@@ -26,8 +26,14 @@
 void syscall_init(void) { printk("Syscall: Initialized\n"); }
 
 void syscall_handler(trap_frame *frame) {
-    // Make live trapframe accessible to exec() and sys_fork()
-    if (current) current->trapframe = frame;
+    // Make live trapframe accessible to exec() and sys_fork().
+    // If an old heap snapshot exists (fork child bootstrap), drop it now.
+    if (current) {
+        if (current->trapframe && current->trapframe_owned)
+            kfree(current->trapframe);
+        current->trapframe = frame;
+        current->trapframe_owned = 0;
+    }
 
     // System call number is in a7
     const uint64_t syscall_num = frame->a7;
@@ -203,6 +209,7 @@ pid_t sys_fork(void) {
             proc_free(child);
             return -1;
         }
+        child->trapframe_owned = 1;
         memcpy(child->trapframe, current->trapframe, sizeof(trap_frame));
 
         // Child returns 0 from fork
@@ -220,6 +227,7 @@ pid_t sys_fork(void) {
 
     } else {
         child->trapframe = NULL;
+        child->trapframe_owned = 0;
     }
     child->pc = current->pc;
     child->sp = current->sp;

@@ -49,6 +49,9 @@ void scheduler_init(void) {
 //     → next process resumes
 void schedule(void) {
     while (1) {
+        // Keep scheduler bookkeeping + context handoff atomic w.r.t. timer IRQs.
+        interrupts_off();
+
         struct proc *next = proc_next_ready();
         if (next != NULL) {
             next->state = PROC_RUNNING;
@@ -61,12 +64,14 @@ void schedule(void) {
             else
                 vmm_switch(vmm_kernel_pagetable());
 
+            // Do not re-enable interrupts here; new context controls that.
             swtch(&scheduler_context, &next->context);
             // Returns here when this CPU is handed back to the scheduler
             // (i.e. the process that just ran called schedule() again).
         } else {
             // No process ready — park in idle until an interrupt wakes one.
             vmm_switch(vmm_kernel_pagetable());
+            interrupts_on();
             swtch(&scheduler_context, &idle_context);
             // returns here from idle loop, and must loop back to check for processes
         }

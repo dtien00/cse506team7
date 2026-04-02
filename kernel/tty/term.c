@@ -273,9 +273,12 @@ int term_read(terminal_t *t, char *buf, uint32_t n)
             return 0;
         }
 
-        // Copy canonical line to the caller's buffer
+        // Copy canonical line to the caller's buffer.
+        // SUM must be enabled at copy time (not across proc_sleep).
         uint32_t tocopy = (t->llen < n) ? t->llen : n;
+        set_csr_bit(sstatus, SSTATUS_SUM);
         memcpy(buf, t->lbuf, tocopy);
+        clear_csr_bit(sstatus, SSTATUS_SUM);
 
         // Reset line buffer so the next read starts fresh
         t->llen       = 0;
@@ -290,8 +293,10 @@ int term_read(terminal_t *t, char *buf, uint32_t n)
             // Non-blocking: return whatever is already in the buffer
             uint32_t got = 0;
             char ch;
+            set_csr_bit(sstatus, SSTATUS_SUM);
             while (got < n && ibuf_pop(t, &ch) == 0)
                 buf[got++] = ch;
+            clear_csr_bit(sstatus, SSTATUS_SUM);
             return (int)got;
         }
 
@@ -310,8 +315,10 @@ int term_read(terminal_t *t, char *buf, uint32_t n)
         // Drain up to n bytes from the ring buffer
         uint32_t got = 0;
         char ch;
+        set_csr_bit(sstatus, SSTATUS_SUM);
         while (got < n && ibuf_pop(t, &ch) == 0)
             buf[got++] = ch;
+        clear_csr_bit(sstatus, SSTATUS_SUM);
         return (int)got;
     }
 }

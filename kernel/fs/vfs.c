@@ -305,6 +305,7 @@ file_t *vfs_open(const char *path) {
         f->type = FILE_TARFS;  // Default fallback
     }
 
+    f->entry = NULL;
     f->vnode = vnode;
     f->offset = 0;
     f->ref_count = 1;
@@ -380,27 +381,30 @@ int vfs_write(file_t *f, const void *buf, size_t len) {
 
 // Seek to a new offset in the file
 int vfs_lseek(file_t *f, size_t offset, int whence) {
-	if (!f) return -1;
-	size_t new_offset = 0;
-	switch (whence) {
-		case SEEK_SET:
-			new_offset = offset;
-			break;
-		case SEEK_CUR:
-			new_offset = f->offset + offset;
-			break;
-		case SEEK_END:
-	        if (f->vnode)
-	            new_offset = f->vnode->size + offset;
-			else
-				return -1;
-			break;
-		default:
-			return -1;
-	}
-	// Optionally, check bounds (0 <= new_offset <= file size)
-	if (f->entry && new_offset > f->entry->size)
-		return -1;
-	f->offset = new_offset;
-	return new_offset;
+    if (!f) return -1;
+
+    size_t new_offset = 0;
+    switch (whence) {
+        case SEEK_SET:
+            new_offset = offset;
+            break;
+        case SEEK_CUR:
+            new_offset = f->offset + offset;
+            break;
+        case SEEK_END:
+            if (f->vnode)
+                new_offset = f->vnode->size + offset;
+            else
+                return -1;
+            break;
+        default:
+            return -1;
+    }
+
+    // Bound seek by vnode size for regular VFS-backed files.
+    if (f->vnode && new_offset > f->vnode->size)
+        return -1;
+
+    f->offset = new_offset;
+    return new_offset;
 }

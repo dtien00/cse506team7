@@ -18,6 +18,7 @@ void fd_init(fd_table_t *table) {
     // Allocate stdin (fd 0)
     file_t *stdin_file = kmalloc(sizeof(file_t));
     if (stdin_file) {
+        stdin_file->entry = NULL;
         stdin_file->type = FILE_STDIN;
         stdin_file->vnode = NULL;
         stdin_file->offset = 0;
@@ -28,6 +29,7 @@ void fd_init(fd_table_t *table) {
     // Allocate stdout (fd 1)
     file_t *stdout_file = kmalloc(sizeof(file_t));
     if (stdout_file) {
+        stdout_file->entry = NULL;
         stdout_file->type = FILE_STDOUT;
         stdout_file->vnode = NULL;
         stdout_file->offset = 0;
@@ -38,6 +40,7 @@ void fd_init(fd_table_t *table) {
     // Allocate stderr (fd 2) - same as stdout for now
     file_t *stderr_file = kmalloc(sizeof(file_t));
     if (stderr_file) {
+        stderr_file->entry = NULL;
         stderr_file->type = FILE_STDOUT;
         stderr_file->vnode = NULL;
         stderr_file->offset = 0;

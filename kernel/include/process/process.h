@@ -47,6 +47,7 @@ struct proc {
     // Memory management
     pagetable_t pagetable;
     uint64_t sz;
+    struct vm_area *vma_list;  // List of memory regions
 
     // User-mode state (saved/restored by trap_entry/sret in trap.S)
     uint64_t pc;
@@ -67,6 +68,7 @@ struct proc {
 
     // Trap frame (for user mode)
     trap_frame *trapframe;
+    uint8_t trapframe_owned;
 
     // Process hierarchy
     struct proc *parent;
