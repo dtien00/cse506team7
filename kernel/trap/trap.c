@@ -391,11 +391,20 @@ void page_fault_handler(trap_frame *frame) {
 
 
 // Timer interrupt handler
-static uint64_t timer_ticks = 0;
+uint64_t timer_ticks = 0;
 
 void timer_handler(void) {
     timer_ticks++;
     sbi_set_timer(read_csr(time) + TIMER_INTERVAL);
+
+    // Wake any processes whose timed sleep deadline has expired.
+    for (int i = 0; i < MAX_PROCS; i++) {
+        struct proc *p = &proctab[i];
+        if (p->state == PROC_BLOCKED && p->wake_tick != 0 && timer_ticks >= p->wake_tick) {
+            p->wake_tick = 0;
+            proc_wakeup(p);  // p slept on itself (chan == p)
+        }
+    }
 
     // Only preempt when we're actually in a running process context.
     if (current != NULL && current->state == PROC_RUNNING) {

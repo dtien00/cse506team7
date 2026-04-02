@@ -22,3 +22,4 @@ void sched_priority_test_run(void);
 void sched_fairness_test_run(void);
 void sched_idle_test_run(void);
 void libc_syscall_test_run(void);
+void timer_test_run(void);

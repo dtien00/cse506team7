@@ -325,13 +325,14 @@ pid_t sys_getpid(void) {
 // }
 
 int sys_sleep(int seconds) {
-    printk("sys_sleep(%d) not implemented\n", seconds);
-    return -1;
+    if (seconds <= 0) return 0;
+    current->wake_tick = timer_ticks + (uint64_t)seconds * TICKS_PER_SEC;
+    proc_sleep(current);   // sleep on self; timer_handler calls proc_wakeup(p)
+    return 0;
 }
 
 int sys_uptime(void) {
-    // TODO: Return system uptime in ticks
-    return 0;
+    return (int)timer_ticks;
 }
 
 int sys_kill(pid_t pid) {
