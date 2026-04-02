@@ -247,6 +247,12 @@ void vmm_init(void) {
       return;
     }
   }
+
+  // Map PLIC: 0x0C000000 - 0x10000000
+  for (uintptr_t pa = 0x0C000000; pa < 0x10000000; pa += PGSIZE) {
+      if (vmm_map(kernel_pagetable, pa, pa, PTE_R | PTE_W) != 0)
+          printk("VMM: Failed to map PLIC page at %p\n", pa);
+  }
   
   printk("VMM: Kernel page table created\n");
   

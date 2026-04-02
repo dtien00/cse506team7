@@ -100,10 +100,10 @@ getgid:
     ecall
     ret
 
-lseek:
-    li a7, 8
-    ecall
-    ret
+//lseek:
+//    li a7, 8
+//    ecall
+//    ret
 
 pipe:
     li a7, 22

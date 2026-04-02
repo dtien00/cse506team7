@@ -4,6 +4,8 @@
 #include "kernel/printk.h"
 #include "process/process.h"
 #include "trap/syscall.h"
+#include "drivers/plic.h"
+#include "drivers/uart.h"
 
 #define TIMER_INTERVAL 1000000ULL // ~0.1 second at 10 MHz clock
 
@@ -11,7 +13,6 @@
 extern void trap_entry(void);
 
 void trap_init(void) {
-
     // Install trap entry point
     write_csr(sscratch, 0);
     write_csr(stvec, (uint64_t) trap_entry);
@@ -20,7 +21,7 @@ void trap_init(void) {
     // Enable interrupts
     interrupts_enable(SIE_SOFTWARE);
     interrupts_enable(SIE_TIMER);
-    interrupts_enable(SIE_EXTERNAL);
+    // interrupts_enable(SIE_EXTERNAL);
 }
 
 static void handle_interrupt(trap_frame *frame) {
@@ -38,8 +39,16 @@ static void handle_interrupt(trap_frame *frame) {
             break;
 
         case SCAUSE_S_EXTERNAL_INT:
-            printk("External interrupt\n");
-            // TODO: Handle external interrupts (UART, disk, etc.)
+            // printk("External interrupt\n");
+            uint32_t irq = plic_claim();
+            if (irq == PLIC_UART_IRQ) {
+                // handle the interrupt - adds to the driver's char buffer which a waiting read() can query later
+                uart_handle_interrupt();
+            }
+            // complete the interrupt
+            if (irq != 0) {
+                plic_complete(irq);
+            }
             break;
 
         default:
@@ -51,8 +60,12 @@ static void handle_interrupt(trap_frame *frame) {
 void handle_exception(trap_frame *frame) {
     // Handle U-mode syscalls silently — they are normal, not errors.
     if (frame->scause == SCAUSE_ECALL_FROM_U) {
+        uint64_t old_sepc = frame->sepc;
         syscall_handler(frame);
-        frame->sepc += 4;
+        // Most syscalls resume at the instruction after ecall.
+        // exec() may rewrite sepc to a new entry point; in that case do not bump.
+        if (frame->sepc == old_sepc)
+            frame->sepc += 4;
         return;
     }
 
@@ -84,7 +97,7 @@ void handle_exception(trap_frame *frame) {
             printk("  Store access fault\n");
             break;
         case SCAUSE_ECALL_FROM_U:
-            // Handled above; unreachable.
+        // Handled above; unreachable.
         case SCAUSE_ECALL_FROM_S:
             printk("  System call from supervisor mode\n");
             break;
@@ -144,23 +157,23 @@ void timer_handler(void) {
     sbi_set_timer(read_csr(time) + TIMER_INTERVAL);
 
     // Enforce per-process tick budget if configured (time_slice > 0)
-    if (current != NULL && current->time_slice > 0) {
-        current->total_time++;
-        if (current->total_time >= current->time_slice) {
-            printk("Timer: pid %d exceeded tick budget (%llu ticks), killing\n",
-                   current->pid, current->time_slice);
-            current->state = PROC_ZOMBIE;
-            current->exit_code = -1;
-            if (current->parent)
-                proc_wakeup(current->parent);
-            // proc_yield() below will NOT re-queue a ZOMBIE
-            // (context_switch checks state == PROC_RUNNING before re-queuing)
+    if (current != NULL) {
+        if (current->time_slice > 0) {
+            current->total_time++;
+            if (current->total_time >= current->time_slice) {
+                printk("Timer: pid %d exceeded tick budget (%llu ticks), killing\n",
+                       current->pid, current->time_slice);
+                current->state = PROC_ZOMBIE;
+                current->exit_code = -1;
+                if (current->parent)
+                    proc_wakeup(current->parent);
+                // proc_yield() below will NOT re-queue a ZOMBIE
+                // (context_switch checks state == PROC_RUNNING before re-queuing)
+            }
         }
+        proc_yield();
     }
-
-    proc_yield();
 }
-
 
 // Set/clear the SIE (supervisor interrupt enable) bit in sstatus
 void interrupts_on(void) { set_csr_bit(sstatus, SSTATUS_SIE); }

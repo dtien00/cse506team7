@@ -1,4 +1,3 @@
-
 #include "process/process.h"
 #include "process/swtch.h"
 #include "kernel/printk.h"
@@ -39,7 +38,8 @@ static void proc_entry(void) {
 
 struct proc* proc_alloc(void) {
     for (int i = 0; i < MAX_PROCS; i++) {
-        if (proctab[i].state == PROC_ZOMBIE || proctab[i].pid == 0) {
+        if (proctab[i].state == PROC_UNUSED) {
+            proctab[i].state = PROC_CREATED;   // mark as taken immediately
             return &proctab[i];
         }
     }
@@ -55,12 +55,13 @@ void proc_init(void) {
 
     struct proc *init = proc_alloc();
     int idx = init - proctab;
+    memset(init, 0, sizeof(*init));
     init->pid = 1;
     strncpy(init->name, "init", MAX_NAME - 1);
     init->state = PROC_READY;
     init->context.sp = (uint64_t)&kstacks[idx][KSTACK_SIZE];
     init->context.ra = (uint64_t)proc_entry;
-    
+
     // Initialize file descriptors (stdin/stdout/stderr) for the init process
     fd_init(&init->fds);
 
@@ -68,8 +69,11 @@ void proc_init(void) {
     static char *argv[] = { "sh", NULL };
     // Set current to init so exec uses the right process
     current = init;
-    if (exec("/bin/sh", argv) < 0) {
-        printk("[sh] exec failed for /bin/sh\n");
+    if (exec("/bin/init", argv) < 0) {
+        printk("[init] exec failed for /bin/init, falling back to /bin/sh\n");
+        static char *sh_argv[] = { "sh", NULL };
+        if (exec("/bin/sh", sh_argv) < 0)
+            printk("[init] exec failed fallback to /bin/sh\n");
     }
 
     // static char *argv[] = { "forktest", NULL };
@@ -117,6 +121,28 @@ struct proc* proc_create(const char *name) {
     return p;
 }
 
+/* Free just the address space — used by exec() to drop the old image */
+static void proc_free_pagetable(struct proc *p) {
+    if (p->pagetable) {
+        vmm_free_pagetable(p->pagetable);
+        p->pagetable = NULL;
+    }
+}
+
+/* Full teardown — used by proc_exit() */
+void proc_destroy(struct proc *p) {
+    if (!p) return;
+
+    proc_free_pagetable(p);
+
+    if (p->trapframe) {
+        kfree(p->trapframe);
+        p->trapframe = NULL;
+    }
+
+    fd_destroy(&p->fds);
+}
+
 void proc_free(struct proc *p) {
     if (!p) return;
     p->pid = 0;
@@ -126,6 +152,8 @@ void proc_free(struct proc *p) {
 
 void proc_exit(int code) {
     if (!current) return;
+
+    proc_destroy(current); // to protect from memory leaks
 
     // Store exit code and mark as ZOMBIE
     current->exit_code = code;
@@ -147,9 +175,13 @@ void proc_exit(int code) {
     }
     current->first_child = NULL;
 
-    // Do not free process here; wait for parent to reap via wait()
+    // Switch back via the normal yield path so the current process context
+    // is saved in its own slot; schedule() must run on scheduler_context.
+    proc_yield();
 
-    schedule();
+    // proc_exit is noreturn in practice.
+    while (1)
+        asm volatile("wfi");
 }
 
 void proc_kill(struct proc *p) {
@@ -162,8 +194,8 @@ void proc_kill(struct proc *p) {
 int proc_wait(int *exit_code_out) {
     if (!current) return -1;
     struct proc *child = current->first_child;
-    int have_children = 0;
     while (1) {
+        int have_children = 0;
         child = current->first_child;
         while (child) {
             have_children = 1;
@@ -410,7 +442,7 @@ int exec(const char *path, char *const argv[]) {
     kfree(argv_uvas);
 
     // 7. Commit: discard old address space, install the new one
-    vmm_free_pagetable(current->pagetable);
+    proc_free_pagetable(current);
     current->pagetable = new_pt;
     current->sz        = stack_top;
     current->satp      = MAKE_SATP((uintptr_t)new_pt);

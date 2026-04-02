@@ -4,7 +4,7 @@
 #include "kernel/printk.h"
 #include "mm/kmalloc.h"
 #include "lib/string.h"
-#include "arch/sbi.h"
+#include "tty/term.h"
 
 #define SEEK_SET 0
 #define SEEK_CUR 1
@@ -116,7 +116,7 @@ int vfs_mount(const char *source, const char *target, const char *fstype) {
     mnt->next = mounts;
     mounts = mnt;
 
-    printk("vfs: mounted '%s' at '%s' (type: %s)\n", 
+    printk("vfs: mounted '%s' at '%s' (type: %s)\n",
            source ? source : "none", target, fstype);
     return 0;
 }
@@ -332,41 +332,8 @@ int vfs_read(file_t *f, void *buf, size_t len) {
             return -1;
         }
 
-        case FILE_STDIN: {
-            // Line-buffered console read: spin for characters, echo each one,
-            // and return when a newline is received or the buffer is full.
-            // sys_read sets SSTATUS_SUM before calling here, so writing to the
-            // user-space buf pointer is safe.
-            char *cbuf = (char *)buf;
-            size_t i = 0;
-            while (i < len) {
-                int64_t c;
-                do { c = sbi_console_getchar(); } while (c < 0);
-
-                if (c == '\r') c = '\n';
-
-                if ((c == '\b' || c == 0x7f) && i > 0) {
-                    // backspace: erase last character
-                    i--;
-                    const char erase[] = "\b \b";
-                    sbi_write(3, (const uint8_t *)erase);
-                    continue;
-                }
-
-                cbuf[i++] = (char)c;
-                // Echo via a kernel-local variable: cbuf is a user VA which
-                // OpenSBI (M-mode, no MMU) would misinterpret as a physical
-                // address. Copy to the kernel stack so the PA is correct.
-                uint8_t echo_byte = (uint8_t)c;
-                sbi_write(1, &echo_byte);
-
-                if (c == '\n') break;
-            }
-            return (int)i;
-        }
-
-        case FILE_STDOUT:
-            return -1;
+        case FILE_STDIN:
+            return term_read(&console_term, buf, (uint32_t)len);
 
         default:
             return -1;
@@ -378,8 +345,7 @@ int vfs_write(file_t *f, const void *buf, size_t len) {
 
     switch (f->type) {
         case FILE_STDOUT: {
-            printk("%.*s", (int)len, (const char *)buf);
-            return (int)len;
+            return term_write(&console_term, buf, (uint32_t)len);
         }
 
         case FILE_TMPFS: {
@@ -394,9 +360,6 @@ int vfs_write(file_t *f, const void *buf, size_t len) {
 
         case FILE_TARFS:
             printk("vfs: write to read-only tarfs file\n");
-            return -1;
-
-        case FILE_STDIN:
             return -1;
 
         default:

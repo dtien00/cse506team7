@@ -1,12 +1,13 @@
 #include "trap/syscall.h"
+#include "arch/riscv.h"
+#include "errno.h"
 #include "kernel/printk.h"
-#include "process/process.h"
-#include "trap/trap.h"
+#include "lib/string.h"
+#include "mm/kmalloc.h"
 #include "mm/pmm.h"
 #include "mm/vmm.h"
-#include "mm/kmalloc.h"
-#include "lib/string.h"
-#include "arch/riscv.h"
+#include "process/process.h"
+#include "trap/trap.h"
 
 
 #define MAP_FAILED ((void *) -1)
@@ -18,6 +19,9 @@
 
 #define USER_HEAP_START 0x10000000UL
 #define USER_HEAP_END   0x40000000UL
+
+#define MAX_ARGS 64
+#define KARG_MAX 256
 
 void syscall_init(void) { printk("Syscall: Initialized\n"); }
 
@@ -39,7 +43,48 @@ void syscall_handler(trap_frame *frame) {
     // exec rewrites the entire trapframe on success; handle before the
     // generic ret path so frame->a0 is not overwritten afterwards.
     if (syscall_num == SYS_exec) {
-        if (exec((const char *)arg0, (char **)arg1) < 0)
+        char kpath[KARG_MAX];
+        char *kargv[MAX_ARGS + 1];
+        int argc = 0;
+
+        for (int i = 0; i <= MAX_ARGS; i++)
+            kargv[i] = NULL;
+
+        // Copy user args into kernel buffers (SUM window is minimal)
+        set_csr_bit(sstatus, SSTATUS_SUM);
+
+        strncpy(kpath, (const char *)arg0, sizeof(kpath) - 1);
+        kpath[sizeof(kpath) - 1] = '\0';
+
+        char **uargv = (char **)arg1;
+        while (uargv && argc < MAX_ARGS - 1) {
+            char *uarg = uargv[argc];
+            if (!uarg) break;
+            if ((uint64_t)uarg >= KERNBASE) break;
+
+            kargv[argc] = (char *)kmalloc(KARG_MAX);
+            if (!kargv[argc]) {
+                clear_csr_bit(sstatus, SSTATUS_SUM);
+                for (int i = 0; i < argc; i++)
+                    kfree(kargv[i]);
+                frame->a0 = (uint64_t)-1LL;
+                return;
+            }
+
+            strncpy(kargv[argc], uarg, KARG_MAX - 1);
+            kargv[argc][KARG_MAX - 1] = '\0';
+            argc++;
+        }
+        kargv[argc] = NULL;
+
+        clear_csr_bit(sstatus, SSTATUS_SUM);  // done with user memory
+
+        // exec() only sees kernel pointers — safe to destroy old pagetable
+        int rc = exec(kpath, kargv);
+        for (int i = 0; i < argc; i++)
+            kfree(kargv[i]);
+
+        if (rc < 0)
             frame->a0 = (uint64_t)-1LL;
         return;
     }
@@ -75,9 +120,9 @@ void syscall_handler(trap_frame *frame) {
             ret = sys_wait((int *) arg0);
             break;
 
-        case SYS_exec:
-            ret = sys_exec((const char *) arg0, (char **) arg1);
-            break;
+        // case SYS_exec:
+        //     ret = sys_exec((const char *) arg0, (char **) arg1);
+        //     break;
 
         case SYS_getpid:
             ret = sys_getpid();
@@ -129,9 +174,19 @@ void sys_exit(int status) {
 }
 
 pid_t sys_fork(void) {
+    if (!current) return -1;
+
     // Allocate and initialize new process (assigns pid, stack, context)
     struct proc *child = proc_create(current->name);
     if (!child) return -1;
+
+    // fd_init already ran inside proc_create — now OVERWRITE with
+    // a copy of the parent's fds so the child inherits open files
+    for (int i = 0; i < MAX_FDS; i++) {
+        child->fds.files[i] = current->fds.files[i];
+        // if (child->fds.files[i])
+        //     vfs_ref(child->fds.files[i]);  // bump refcount if vfs supports it
+    }
 
     // Copy parent's address space
     child->pagetable = vmm_copy_pagetable(current->pagetable);
@@ -149,7 +204,7 @@ pid_t sys_fork(void) {
             return -1;
         }
         memcpy(child->trapframe, current->trapframe, sizeof(trap_frame));
-        
+
         // Child returns 0 from fork
         child->trapframe->a0 = 0;
 
@@ -190,22 +245,42 @@ ssize_t sys_read(int fd, void *buf, size_t count) {
 }
 
 ssize_t sys_write(int fd, const void *buf, size_t count) {
-    // For now, just print to console if fd is 1 (stdout)
-    if (fd == 1 || fd == 2) {
-        const char *str = (const char *) buf;
-        // buf is a user-space pointer (PTE_U set).  S-mode cannot load from
-        // user pages unless sstatus.SUM=1.  Set it for the duration of the
-        // copy, then clear it to restore the default deny policy.
+    // // For now, just print to console if fd is 1 (stdout)
+    // if (fd == 1 || fd == 2) {
+    //     const char *str = (const char *) buf;
+    //     // buf is a user-space pointer (PTE_U set).  S-mode cannot load from
+    //     // user pages unless sstatus.SUM=1.  Set it for the duration of the
+    //     // copy, then clear it to restore the default deny policy.
+    //     set_csr_bit(sstatus, SSTATUS_SUM);
+    //     for (size_t i = 0; i < count; i++) {
+    //         printk("%c", str[i]);
+    //     }
+    //     clear_csr_bit(sstatus, SSTATUS_SUM);
+    //     return (ssize_t)count;
+    // }
+    //
+    // printk("sys_write(%d, %p, %d) not implemented\n", fd, buf, count);
+    // return -1;
+    if (count == 0) return 0;
+    if (!current || fd < 0 || fd >= MAX_FDS) return -EBADF;
+
+    file_t *f = fd_get(&current->fds, fd);
+    if (!f) return -EBADF;
+
+    /* Console path — active until vfs_write has a console driver */
+    if (f->type == FILE_STDOUT || f->type == FILE_STDIN) {
         set_csr_bit(sstatus, SSTATUS_SUM);
-        for (size_t i = 0; i < count; i++) {
-            printk("%c", str[i]);
-        }
+        const char *str = (const char *)buf;
+        for (size_t i = 0; i < count; i++)
+            printk_char(str[i]);
         clear_csr_bit(sstatus, SSTATUS_SUM);
         return (ssize_t)count;
     }
-
-    printk("sys_write(%d, %p, %d) not implemented\n", fd, buf, count);
-    return -1;
+    if (!f) return -EBADF;
+    set_csr_bit(sstatus, SSTATUS_SUM);
+    ssize_t n = vfs_write(f, buf, count);
+    clear_csr_bit(sstatus, SSTATUS_SUM);
+    return n;
 }
 
 int sys_open(const char *path, int flags) {
@@ -227,11 +302,6 @@ pid_t sys_wait(int *status) {
     // Use the new proc_wait implementation for process reaping and blocking
     return proc_wait(status);
 }
-
-int sys_exec(const char *path, char **argv) {
-    return exec(path, argv);
-}
-
 
 pid_t sys_getpid(void) {
     struct proc *p = proc_current();
@@ -264,27 +334,27 @@ int sys_kill(pid_t pid) {
 void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset) {
     (void)fd;
     (void)offset;
-    
+
     if (length == 0) {
         return MAP_FAILED;
     }
-    
+
     if (!(flags & MAP_ANONYMOUS)) {
         printk("sys_mmap: file-backed mapping not supported yet\n");
         return MAP_FAILED;
     }
-    
+
     struct proc *p = current;
     if (p == NULL || p->pagetable == NULL) {
         printk("sys_mmap: no current process or page table\n");
         return MAP_FAILED;
     }
-    
+
     size_t pages = (length + PGSIZE - 1) / PGSIZE;
     size_t alloc_size = pages * PGSIZE;
-    
+
     uintptr_t va;
-    
+
     if ((flags & MAP_FIXED) && addr != NULL) {
         va = (uintptr_t)addr;
         if (va < USER_HEAP_START || va + alloc_size > USER_HEAP_END) {
@@ -296,21 +366,21 @@ void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t off
             p->sz = USER_HEAP_START;
         }
         va = PGROUNDUP(p->sz);
-        
+
         if (va + alloc_size > USER_HEAP_END) {
             printk("sys_mmap: out of virtual address space\n");
             return MAP_FAILED;
         }
     }
-    
+
     uint64_t perm = PTE_U;
     if (prot & PROT_READ) perm |= PTE_R;
     if (prot & PROT_WRITE) perm |= PTE_W;
-    
+
     for (size_t i = 0; i < pages; i++) {
         uintptr_t page_va = va + (i * PGSIZE);
         void* page_pa = pmm_alloc_page();
-        
+
         if (page_pa == NULL) {
             for (size_t j = 0; j < i; j++) {
                 uintptr_t cleanup_va = va + (j * PGSIZE);
@@ -323,11 +393,11 @@ void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t off
             }
             return MAP_FAILED;
         }
-        
+
         for (int j = 0; j < PGSIZE; j++) {
             ((char*)page_pa)[j] = 0;
         }
-        
+
         if (vmm_map(p->pagetable, page_va, (uintptr_t)page_pa, perm) != 0) {
             pmm_free_page(page_pa);
             for (size_t j = 0; j < i; j++) {
@@ -342,11 +412,11 @@ void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t off
             return MAP_FAILED;
         }
     }
-    
+
     if (!(flags & MAP_FIXED)) {
         p->sz = va + alloc_size;
     }
-    
+
     return (void*)va;
 }
 
@@ -354,19 +424,19 @@ int sys_munmap(void *addr, size_t length) {
     if (addr == NULL || length == 0) {
         return -1;
     }
-    
+
     struct proc *p = current;
     if (p == NULL || p->pagetable == NULL) {
         printk("sys_munmap: no current process or page table\n");
         return -1;
     }
-    
+
     uintptr_t va = (uintptr_t)addr;
     size_t pages = (length + PGSIZE - 1) / PGSIZE;
-    
+
     for (size_t i = 0; i < pages; i++) {
         uintptr_t page_va = va + (i * PGSIZE);
-        
+
         uint64_t *pte = vmm_walk(p->pagetable, page_va, 0);
         if (pte && (*pte & PTE_V)) {
             uintptr_t pa = PTE_TO_PA(*pte);
@@ -374,7 +444,7 @@ int sys_munmap(void *addr, size_t length) {
             pmm_free_page((void*)pa);
         }
     }
-    
+
     return 0;
 }
 
@@ -384,32 +454,32 @@ int sys_brk(void *addr) {
         printk("sys_brk: no current process or page table\n");
         return -1;
     }
-    
+
     if (p->sz < USER_HEAP_START) {
         p->sz = USER_HEAP_START;
     }
-    
+
     if (addr == NULL) {
         return (int)p->sz;
     }
-    
+
     uintptr_t new_break = (uintptr_t)addr;
-    
+
     if (new_break < USER_HEAP_START || new_break > USER_HEAP_END) {
         return -1;
     }
-    
+
     uintptr_t old_break = p->sz;
-    
+
     if (new_break > old_break) {
         uintptr_t start = PGROUNDUP(old_break);
         uintptr_t end = PGROUNDUP(new_break);
         size_t pages = (end - start) / PGSIZE;
-        
+
         for (size_t i = 0; i < pages; i++) {
             uintptr_t va = start + (i * PGSIZE);
             void* pa = pmm_alloc_page();
-            
+
             if (pa == NULL) {
                 for (size_t j = 0; j < i; j++) {
                     uintptr_t cleanup_va = start + (j * PGSIZE);
@@ -422,11 +492,11 @@ int sys_brk(void *addr) {
                 }
                 return -1;
             }
-            
+
             for (int j = 0; j < PGSIZE; j++) {
                 ((char*)pa)[j] = 0;
             }
-            
+
             if (vmm_map(p->pagetable, va, (uintptr_t)pa, PTE_R | PTE_W | PTE_U) != 0) {
                 pmm_free_page(pa);
                 for (size_t j = 0; j < i; j++) {
@@ -445,7 +515,7 @@ int sys_brk(void *addr) {
         uintptr_t start = PGROUNDUP(new_break);
         uintptr_t end = PGROUNDUP(old_break);
         size_t pages = (end - start) / PGSIZE;
-        
+
         for (size_t i = 0; i < pages; i++) {
             uintptr_t va = start + (i * PGSIZE);
             uint64_t *pte = vmm_walk(p->pagetable, va, 0);
@@ -456,7 +526,7 @@ int sys_brk(void *addr) {
             }
         }
     }
-    
+
     p->sz = new_break;
     return 0;
 }
@@ -467,26 +537,26 @@ void *sys_sbrk(intptr_t increment) {
         printk("sys_sbrk: no current process or page table\n");
         return (void *) -1;
     }
-    
+
     if (p->sz < USER_HEAP_START) {
         p->sz = USER_HEAP_START;
     }
-    
+
     void* old_break = (void*)p->sz;
-    
+
     if (increment == 0) {
         return old_break;
     }
-    
+
     uintptr_t new_break = p->sz + increment;
-    
+
     if (new_break < USER_HEAP_START || new_break > USER_HEAP_END) {
         return (void *) -1;
     }
-    
+
     if (sys_brk((void*)new_break) != 0) {
         return (void *) -1;
     }
-    
+
     return old_break;
 }

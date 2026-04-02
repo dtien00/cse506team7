@@ -10,8 +10,11 @@
 #include "fs/tarfs.h"
 #include "fs/tmpfs.h"
 #include "kernel/types.h"
+#include "drivers/drivers.h"
+#include "kernel/console.h"
 
 #include "tests/test.h"
+#include "tty/term.h"
 
 // External symbols from linker script
 extern char _kernel_end[];
@@ -27,11 +30,17 @@ void run_all_tests(void) {
     sched_fairness_test_run();
     sched_idle_test_run();
     proc_test_run();
+    libc_syscall_test_run();
 
     // printk("%d passed, %d failed\n", passed, failed);
 }
 
 void boot(uint64_t hart_id, uint64_t dtb) {
+
+    // initialize console
+    console_init(); // this will fall back to using the sbi driver by default
+    printk("console: using %s\n", console_active_name());
+
     printk("\n");
     printk("========================================\n");
     printk("       SBUnix Operating System\n");
@@ -62,6 +71,15 @@ void boot(uint64_t hart_id, uint64_t dtb) {
     // Initialize kernel heap
     kmalloc_init();
 
+    // initialize drivers once memory is mapped
+    drivers_init();
+
+    //initialize the terminal
+    term_global_init();
+
+    // switch to uart once drivers are initialized
+    if (console_set_driver("uart") == 0)
+        printk("console: switched to uart\n");
 
     // VFS and filesystems must be ready before proc_init because
     // proc_init calls exec(), which calls vfs_open().
@@ -76,6 +94,8 @@ void boot(uint64_t hart_id, uint64_t dtb) {
 
     syscall_init();
 
+    // set up process 0 aka swapper as idle loop
+    scheduler_init();
     // proc_init sets up the init process and loads its ELF via exec().
     proc_init();
 
@@ -93,6 +113,7 @@ void boot(uint64_t hart_id, uint64_t dtb) {
     #else
         // Hand off to the scheduler; runs the init process (pid 1).
         schedule();
+        printk("Kernel panic.\n"); // should never reach here as schedule will always default to its own idle loop
         while (1)
             asm volatile("wfi");
     #endif
