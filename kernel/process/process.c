@@ -1,6 +1,4 @@
-
 #include "process/process.h"
-#include "process/swtch.h"
 #include "kernel/printk.h"
 #include "trap/trap.h"
 #include "arch/riscv.h"
@@ -8,10 +6,11 @@
 #include "mm/vmm.h"
 #include "mm/pmm.h"
 #include "mm/kmalloc.h"   // needed for kmalloc/kfree in exec()
+#include "mm/vma.h"
 #include "types.h"
 #include "string.h"
 #include "elf/elf.h"
-#include "trap/syscall.h"
+#include "fs/file.h"
 
 #ifndef SEEK_SET
 #define SEEK_SET 0
@@ -38,7 +37,8 @@ static void proc_entry(void) {
 
 struct proc* proc_alloc(void) {
     for (int i = 0; i < MAX_PROCS; i++) {
-        if (proctab[i].state == PROC_ZOMBIE || proctab[i].pid == 0) {
+        if (proctab[i].state == PROC_UNUSED) {
+            proctab[i].state = PROC_CREATED;   // mark as taken immediately
             return &proctab[i];
         }
     }
@@ -54,18 +54,24 @@ void proc_init(void) {
 
     struct proc *init = proc_alloc();
     int idx = init - proctab;
+    memset(init, 0, sizeof(*init));
     init->pid = 1;
     strncpy(init->name, "init", MAX_NAME - 1);
     init->state = PROC_READY;
     init->context.sp = (uint64_t)&kstacks[idx][KSTACK_SIZE];
     init->context.ra = (uint64_t)proc_entry;
+    vma_init(&init->vma_list);
+    fd_init(&init->fds);
 
     // Prepare argv for /bin/echo
-    static char *argv[] = { "echo", "Hello, world!", NULL };
+    static char *argv[] = { "sh", NULL };
     // Set current to init so exec uses the right process
     current = init;
-    if (exec("/bin/echo", argv) < 0) {
-        printk("[init] exec failed for /bin/echo\n");
+    if (exec("/bin/init", argv) < 0) {
+        printk("[init] exec failed for /bin/init, falling back to /bin/sh\n");
+        static char *sh_argv[] = { "sh", NULL };
+        if (exec("/bin/sh", sh_argv) < 0)
+            printk("[init] exec failed fallback to /bin/sh\n");
     }
 
     proc_ready(init);
@@ -88,38 +94,65 @@ struct proc* proc_create(const char *name) {
     if (!p) return NULL;
 
     int idx = p - proctab;
+    memset(p, 0, sizeof(*p));
+
     static uint32_t next_pid = 2;
     p->pid = next_pid++;
     strncpy(p->name, name, MAX_NAME - 1);
     p->state = PROC_CREATED;
     p->context.sp = (uint64_t)&kstacks[idx][KSTACK_SIZE];
     p->context.ra = (uint64_t)proc_entry;
+    p->trapframe = NULL;
+    p->trapframe_owned = 0;
 
     // Initialize VMA list
     vma_init(&p->vma_list);
 
-    // User-mode processes allocates a trap_frame to save/restore user registers
-    // p->trapframe = (trap_frame *)kmalloc(sizeof(trap_frame));
-    // memset(p->trapframe, 0, sizeof(trap_frame));
+    // do not initialize the process's file descriptor here, the caller of proc_create decide and initialize what fds the process might need
+    // ex: fork to inherit fds from parent, init to create the 0,1,2 fds
+    // fd_init(&p->fds);
 
     proc_ready(p);
     return p;
 }
 
+/* Free just the address space — used by exec() to drop the old image */
+static void proc_free_pagetable(struct proc *p) {
+    if (p->pagetable) {
+        vmm_free_pagetable(p->pagetable);
+        p->pagetable = NULL;
+    }
+}
+
+/* Full teardown — used by proc_exit() */
+void proc_destroy(struct proc *p) {
+    if (!p) return;
+
+    proc_free_pagetable(p);
+
+    if (p->trapframe && p->trapframe_owned) {
+        kfree(p->trapframe);
+    }
+    p->trapframe = NULL;
+    p->trapframe_owned = 0;
+
+    fd_destroy(&p->fds);
+}
+
 void proc_free(struct proc *p) {
     if (!p) return;
-    
+
     // Free VMA list
     vma_free_all(p->vma_list);
-    p->vma_list = NULL;
-    
-    p->pid = 0;
+
+    memset(p, 0, sizeof(*p));
     p->state = PROC_UNUSED;
-    p->next = NULL;
 }
 
 void proc_exit(int code) {
     if (!current) return;
+
+    proc_destroy(current); // to protect from memory leaks
 
     // Store exit code and mark as ZOMBIE
     current->exit_code = code;
@@ -141,9 +174,13 @@ void proc_exit(int code) {
     }
     current->first_child = NULL;
 
-    // Do not free process here; wait for parent to reap via wait()
+    // Switch back via the normal yield path so the current process context
+    // is saved in its own slot; schedule() must run on scheduler_context.
+    proc_yield();
 
-    schedule();
+    // proc_exit is noreturn in practice.
+    while (1)
+        asm volatile("wfi");
 }
 
 void proc_kill(struct proc *p) {
@@ -156,19 +193,25 @@ void proc_kill(struct proc *p) {
 int proc_wait(int *exit_code_out) {
     if (!current) return -1;
     struct proc *child = current->first_child;
-    int have_children = 0;
     while (1) {
+        int have_children = 0;
         child = current->first_child;
         while (child) {
             have_children = 1;
             if (child->state == PROC_ZOMBIE) {
                 int pid = child->pid;
-                if (exit_code_out) *exit_code_out = child->exit_code;
                 // Remove child from parent's child list
                 struct proc **link = &current->first_child;
                 while (*link && *link != child) link = &(*link)->sibling;
                 if (*link == child) *link = child->sibling;
-                // Free child resources
+                // Write exit code to user-space pointer with SUM so S-mode
+                // can access user pages.
+                if (exit_code_out) {
+                    set_csr_bit(sstatus, SSTATUS_SUM);
+                    *exit_code_out = child->exit_code;
+                    clear_csr_bit(sstatus, SSTATUS_SUM);
+                }
+
                 proc_free(child);
                 return pid;
             }
@@ -205,6 +248,58 @@ void proc_dump(void) {
     }
 }
 
+void fork_ret(void) {
+    struct proc *p = current;
+    trap_frame *tf = p->trapframe;
+
+    // Mirror proc_start_user: kernel stack in sscratch, U-mode sstatus, switch pagetable
+    int idx = p - proctab;
+    write_csr(sscratch, (uint64_t)&kstacks[idx][KSTACK_SIZE]);
+    write_csr(sepc, tf->sepc);
+    write_csr(sstatus, (tf->sstatus & ~SSTATUS_SPP) | SSTATUS_SPIE);
+    vmm_switch(p->pagetable);
+
+    // Restore all 31 GPRs from the trapframe and sret.
+    // t6 is used as the pointer, so it must be loaded last.
+    register uint64_t tf_r asm("t6") = (uint64_t)tf;
+    asm volatile(
+        "ld ra,    0(t6)\n"
+        "ld sp,    8(t6)\n"
+        "ld gp,   16(t6)\n"
+        "ld tp,   24(t6)\n"
+        "ld a0,   32(t6)\n"
+        "ld a1,   40(t6)\n"
+        "ld a2,   48(t6)\n"
+        "ld a3,   56(t6)\n"
+        "ld a4,   64(t6)\n"
+        "ld a5,   72(t6)\n"
+        "ld a6,   80(t6)\n"
+        "ld a7,   88(t6)\n"
+        "ld s0,   96(t6)\n"
+        "ld s1,  104(t6)\n"
+        "ld s2,  112(t6)\n"
+        "ld s3,  120(t6)\n"
+        "ld s4,  128(t6)\n"
+        "ld s5,  136(t6)\n"
+        "ld s6,  144(t6)\n"
+        "ld s7,  152(t6)\n"
+        "ld s8,  160(t6)\n"
+        "ld s9,  168(t6)\n"
+        "ld s10, 176(t6)\n"
+        "ld s11, 184(t6)\n"
+        "ld t0,  192(t6)\n"
+        "ld t1,  200(t6)\n"
+        "ld t2,  208(t6)\n"
+        "ld t3,  216(t6)\n"
+        "ld t4,  224(t6)\n"
+        "ld t5,  232(t6)\n"
+        "ld t6,  240(t6)\n"
+        "sret\n"
+        : : "r"(tf_r) : "memory"
+    );
+    __builtin_unreachable();
+}
+
 void proc_start_user(struct proc *p, uint64_t entry, uint64_t user_sp) {
     // SPP=0 → sret returns to U-mode; SPIE=1 → interrupts enabled after sret
     write_csr(sstatus, (read_csr(sstatus) & ~SSTATUS_SPP) | SSTATUS_SPIE);
@@ -233,6 +328,7 @@ void proc_start_user(struct proc *p, uint64_t entry, uint64_t user_sp) {
     );
     __builtin_unreachable();
 }
+
 int exec(const char *path, char *const argv[]) {
     // 1. Open the binary
     file_t *f = vfs_open(path);
@@ -255,6 +351,8 @@ int exec(const char *path, char *const argv[]) {
     struct vm_area *new_vma_list = NULL;
     vma_init(&new_vma_list);
 
+    uintptr_t highest_seg_end = 0;
+
     // 4. Load each PT_LOAD segment into the new page table
     for (int i = 0; i < ehdr.e_phnum; i++) {
         elf_prog_header_t phdr;
@@ -273,6 +371,10 @@ int exec(const char *path, char *const argv[]) {
 
         uintptr_t seg_start = PGROUNDDOWN(phdr.p_vaddr);
         uintptr_t seg_end   = PGROUNDUP(phdr.p_vaddr + phdr.p_memsz);
+
+        if (seg_end > highest_seg_end) {
+            highest_seg_end = seg_end;
+        }
 
         // Allocate and map physical pages; zero them so BSS is handled
         for (uintptr_t va = seg_start; va < seg_end; va += PGSIZE) {
@@ -353,7 +455,7 @@ int exec(const char *path, char *const argv[]) {
         size_t len = strlen(argv[i]) + 1;
         sp -= len;
         uintptr_t pa = vmm_translate(new_pt, sp);
-        if (!pa) { kfree(argv_uvas); goto fail_pt; }
+        if (!pa) { kfree(argv_uvas); goto fail_vma; }
         memcpy((void *)pa, argv[i], len);
         argv_uvas[i] = sp;   // user-space VA of this string
     }
@@ -365,20 +467,27 @@ int exec(const char *path, char *const argv[]) {
     for (int i = 0; i <= argc; i++) {
         uintptr_t slot_va = sp + (uint64_t)i * sizeof(uintptr_t);
         uintptr_t slot_pa = vmm_translate(new_pt, slot_va);
-        if (!slot_pa) { kfree(argv_uvas); goto fail_pt; }
+        if (!slot_pa) { kfree(argv_uvas); goto fail_vma; }
         *(uintptr_t *)slot_pa = argv_uvas[i];
     }
     uintptr_t user_argv = sp;
     kfree(argv_uvas);
 
-    // 7. Commit: discard old address space, install the new one
-    vmm_free_pagetable(current->pagetable);
-    vma_free_all(current->vma_list);
-    
+    // 7. Commit: install new address space, then tear down the old one.
+    // Keep the old root alive until after SATP switches away from it.
+    pagetable_t old_pt = current->pagetable;
+    struct vm_area *old_vma_list = current->vma_list;
+
     current->pagetable = new_pt;
     current->vma_list = new_vma_list;
-    current->sz        = stack_top;
+    current->sz        = highest_seg_end;
     current->satp      = MAKE_SATP((uintptr_t)new_pt);
+
+    // Switch to the new page table before freeing old page-table pages.
+    vmm_switch(current->pagetable);
+
+    vmm_free_pagetable(old_pt);
+    vma_free_all(old_vma_list);
 
     // 8. Write entry point and argument registers into the live trapframe
     //    (set by syscall_handler before calling exec; NULL at boot-time)
@@ -396,8 +505,7 @@ int exec(const char *path, char *const argv[]) {
     current->regs[10] = (uint64_t)argc;
     current->regs[11] = user_argv;
 
-    // Switch to the new page table
-    vmm_switch(current->pagetable);
+    // current->pagetable is already active after commit above.
 
     vfs_close(f);
     return 0;

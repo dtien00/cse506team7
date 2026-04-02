@@ -1,11 +1,7 @@
 #ifndef _TIME_H
 #define _TIME_H
 
-#include "types.h"
 #include "sys/time.h"
-
-typedef long time_t;
-typedef long clock_t;
 
 struct tm {
     int tm_sec;
@@ -28,7 +24,6 @@ struct timespec {
 #define CLOCK_MONOTONIC 1
 
 time_t time(time_t *tloc);
-// int gettimeofday(struct timeval* tv, struct timezone* tz);
 int clock_gettime(int clk_id, struct timespec *tp);
 struct tm* localtime(const time_t *timep);
 struct tm* gmtime(const time_t *timep);

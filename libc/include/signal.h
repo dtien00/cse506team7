@@ -1,7 +1,7 @@
 #ifndef _SIGNAL_H
 #define _SIGNAL_H
 
-#include "types.h"
+#include "sys/types.h"
 
 typedef int sig_atomic_t;
 typedef void (*sighandler_t)(int);
@@ -48,9 +48,7 @@ typedef void (*sighandler_t)(int);
 #define SIG_UNBLOCK 1
 #define SIG_SETMASK 2
 
-typedef struct {
-    unsigned long sig[1];
-} sigset_t;
+typedef unsigned long sigset_t;
 
 struct sigaction {
     sighandler_t sa_handler;

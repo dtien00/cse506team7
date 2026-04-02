@@ -130,36 +130,41 @@ pagetable_t vmm_create_pagetable(void) {
         for (int i = 0; i < 512; i++) {
             if (!(kpt[i] & PTE_V)) continue;
 
-            // L2 indices 0 and 1 cover VA < KERNBASE (0x80000000), i.e. the
-            // user/device range.  The kernel maps UART here (0x10000000,
-            // VPN[2]=0), so kpt[0] points to a live kernel L1 table.
-            //
-            // We MUST NOT share that L1 pointer in user page tables.
-            // vmm_walk(new_pt, user_va, alloc=1) would follow the shared L1
-            // pointer and write new L0 entries directly into the kernel's own
-            // L1 table.  Every other page table that later calls
-            // vmm_create_pagetable would then inherit those user entries —
-            // and any vmm_unmap on one page table would silently unmap the
-            // same VA in every other page table that shares the L1.
-            //
-            // Fix: for user-range L2 entries, allocate a private copy of the
-            // L1 page so that walks stay within the new page table.
+            // L2 indices below KERNBASE must not share lower-level page-table
+            // pages with the kernel: user mappings installed there would mutate
+            // shared structures. Build private copies of those lower levels.
             if (i < (int)(KERNBASE >> 30)) {
                 if (kpt[i] & (PTE_R | PTE_W | PTE_X)) {
-                    // Huge-page leaf in user range — just copy the PTE.
+                    // Huge-page leaf in low VA range.
                     pt[i] = kpt[i];
                 } else {
-                    // Non-leaf: make a private copy of the kernel L1 page.
                     pagetable_t kl1 = (pagetable_t)PTE_TO_PA(kpt[i]);
                     pagetable_t pl1 = (pagetable_t)pmm_alloc_page();
                     if (!pl1) { vmm_free_pagetable(pt); return NULL; }
-                    for (int j = 0; j < 512; j++) pl1[j] = kl1[j];
+
+                    for (int j = 0; j < 512; j++) {
+                        uint64_t e = kl1[j];
+                        if (!(e & PTE_V)) {
+                            pl1[j] = 0;
+                        } else if (e & (PTE_R | PTE_W | PTE_X)) {
+                            // Leaf at L1 level (huge page): copy as-is.
+                            pl1[j] = e;
+                        } else {
+                            // Non-leaf L1 entry: deep-copy its L0 table so low
+                            // VA mappings remain private to this pagetable.
+                            pagetable_t kl0 = (pagetable_t)PTE_TO_PA(e);
+                            pagetable_t pl0 = (pagetable_t)pmm_alloc_page();
+                            if (!pl0) { vmm_free_pagetable(pt); return NULL; }
+                            for (int k = 0; k < 512; k++)
+                                pl0[k] = kl0[k];
+                            pl1[j] = PA_TO_PTE((uintptr_t)pl0) | (e & 0x3FF);
+                        }
+                    }
+
                     pt[i] = PA_TO_PTE((uintptr_t)pl1) | (kpt[i] & 0x3FF);
                 }
             } else {
-                // Kernel range (VA >= KERNBASE): safe to share — these are
-                // identity-mapped RAM pages that the kernel never walks via a
-                // user page table, so no user entry can be installed there.
+                // Kernel range (VA >= KERNBASE): safe to share at L2.
                 pt[i] = kpt[i];
             }
         }
@@ -246,6 +251,12 @@ void vmm_init(void) {
       printk("VMM: Failed to map device page at %p\n", pa);
       return;
     }
+  }
+
+  // Map PLIC: 0x0C000000 - 0x10000000
+  for (uintptr_t pa = 0x0C000000; pa < 0x10000000; pa += PGSIZE) {
+      if (vmm_map(kernel_pagetable, pa, pa, PTE_R | PTE_W) != 0)
+          printk("VMM: Failed to map PLIC page at %p\n", pa);
   }
   
   printk("VMM: Kernel page table created\n");

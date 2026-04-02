@@ -280,31 +280,43 @@ int atexit(void (*func)(void)) {
     return 0;
 }
 
+static void swap_bytes(char *a, char *b, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        char tmp = a[i];
+        a[i] = b[i];
+        b[i] = tmp;
+    }
+}
+
 void qsort(void* base, size_t nmemb, size_t size,
            int (*compar)(const void*, const void*)) {
     if (nmemb <= 1) return;
-    
+
     char* arr = (char*)base;
-    char* pivot = arr + (nmemb / 2) * size;
-    char temp[256];
-    
-    size_t i = 0, j = nmemb - 1;
-    while (1) {
-        while (i < nmemb && compar(arr + i * size, pivot) < 0) i++;
-        while (j > 0 && compar(arr + j * size, pivot) > 0) j--;
-        
-        if (i >= j) break;
-        
-        memcpy(temp, arr + i * size, size);
-        memcpy(arr + i * size, arr + j * size, size);
-        memcpy(arr + j * size, temp, size);
-        
-        i++;
-        if (j > 0) j--;
+    size_t pivot_idx = nmemb / 2;
+
+    swap_bytes(arr + pivot_idx * size, arr + (nmemb - 1) * size, size);
+
+    char* pivot = arr + (nmemb - 1) * size;
+    size_t store_idx = 0;
+
+    for (size_t i = 0; i < nmemb - 1; i++) {
+        if (compar(arr + i * size, pivot) < 0) {
+            if (i != store_idx) {
+                swap_bytes(arr + i * size, arr + store_idx * size, size);
+            }
+            store_idx++;
+        }
     }
     
-    if (j > 0) qsort(arr, j + 1, size, compar);
-    if (i < nmemb - 1) qsort(arr + (i + 1) * size, nmemb - i - 1, size, compar);
+    swap_bytes(arr + store_idx * size, arr + (nmemb - 1) * size, size);
+
+    if (store_idx > 0) {
+        qsort(arr, store_idx, size, compar);
+    }
+    if (store_idx + 1 < nmemb) {
+        qsort(arr + (store_idx + 1) * size, nmemb - store_idx - 1, size, compar);
+    }
 }
 
 void* bsearch(const void* key, const void* base, size_t nmemb, size_t size,

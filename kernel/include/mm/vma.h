@@ -26,11 +26,11 @@ struct vm_area {
     uint32_t prot;             // Protection flags (VMA_PROT_*)
     uint32_t flags;            // VMA flags (VMA_*)
     uint32_t type;             // VMA type (VMA_TYPE_*)
-    
+
     // File-backed mapping info (for future use)
     void *file;                // File descriptor or inode
     uint64_t offset;           // Offset in file
-    
+
     struct vm_area *next;      // Next VMA in list
 };
 

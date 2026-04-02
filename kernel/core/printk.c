@@ -56,6 +56,10 @@ static void put_hex_buf(char *buf, uint64_t *idx, const uint64_t x, int digits) 
     }
 }
 
+void printk_char(char c) {
+    console_write(1, &c);
+}
+
 void printk(const char *fmt, ...) {
     char buf[PRINTK_BUF_SZ];
     uint64_t idx = 0;

@@ -2,8 +2,8 @@
 
 #include "kernel/types.h"
 #include "mm/vmm.h"
-#include "mm/vma.h"
 #include "trap/trap.h"
+#include "fs/file.h"
 
 #define MAX_PROCS 64
 #define MAX_NAME 16
@@ -68,12 +68,15 @@ struct proc {
 
     // Trap frame (for user mode)
     trap_frame *trapframe;
+    uint8_t trapframe_owned;
 
     // Process hierarchy
     struct proc *parent;
     struct proc *first_child;
     struct proc *sibling;
 
+    // File Descriptor table
+    fd_table_t fds;
 };
 
 extern struct proc proctab[];
@@ -91,6 +94,7 @@ void proc_kill(struct proc *p);
 int proc_wait(int *exit_code_out);
 
 // Scheduling
+void scheduler_init(void);
 struct proc* proc_current(void);
 void proc_yield(void);
 void schedule(void);
@@ -100,7 +104,6 @@ struct proc* proc_next_ready(void);
 void proc_ready(struct proc *p);
 void proc_block(struct proc *p);
 void proc_unblock(struct proc *p);
-void context_switch(struct proc *next);
 
 // Debug
 void proc_dump(void);
@@ -111,3 +114,5 @@ void proc_wakeup(void *chan);
 
 // Utilities
 int exec(const char *path, char *const argv[]);
+
+void fork_ret(void);
