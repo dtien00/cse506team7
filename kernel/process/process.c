@@ -73,9 +73,6 @@ void proc_init(void) {
         if (exec("/bin/sh", sh_argv) < 0)
             printk("[init] exec failed fallback to /bin/sh\n");
     }
-    // if (exec("/bin/libc_test", argv) < 0) {
-    //     printk("[init] exec failed for /bin/libc_test\n");
-    // }
 
     // Initialize file descriptor table with stdin/stdout/stderr
     fd_init(&init->fd_table);
