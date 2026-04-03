@@ -24,6 +24,7 @@
 #include "mm/pmm.h"
 #include "mm/vmm.h"
 #include "tests/test.h"
+#include "errno.h"
 #include "lib/string.h"
 
 static int passed = 0;
@@ -355,7 +356,8 @@ static void test_sys_pipe_ops(void) {
     memset(buf, 0, sizeof(buf));
     ssize_t nr = sys_read(pipefd[0], buf, 5);
     TEST("sys_read from pipe can read a partial payload", nr == 5);
-    TEST("pipe preserves first partial chunk", strncmp(buf, "hello", 5) == 0);
+    buf[5] = '\0';
+    TEST("pipe preserves first partial chunk", strcmp(buf, "hello") == 0);
 
     memset(buf, 0, sizeof(buf));
     nr = sys_read(pipefd[0], buf, strlen(msg) - 5);
