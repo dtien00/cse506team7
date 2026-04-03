@@ -322,6 +322,7 @@ static void test_sys_dup_ops(void) {
 
 static void test_sys_pipe_ops(void) {
     printk("\n=== sys_pipe ===\n");
+    char buf[32];
 
     test_setup_proc();
 
@@ -338,16 +339,28 @@ static void test_sys_pipe_ops(void) {
     TEST("pipe write end exists", write_end != NULL && write_end->type == FILE_PIPE);
     TEST("pipe ends share same backing pipe",
          read_end != NULL && write_end != NULL && read_end->pipe == write_end->pipe);
+    TEST("pipe read end is marked read-only",
+         read_end != NULL && (read_end->pipe_flags & PIPE_END_READ) != 0);
+    TEST("pipe write end is marked write-only",
+         write_end != NULL && (write_end->pipe_flags & PIPE_END_WRITE) != 0);
+
+    memset(buf, 0, sizeof(buf));
+    TEST("sys_read on pipe write end fails", sys_read(pipefd[1], buf, 1) < 0);
+    TEST("sys_write on pipe read end fails", sys_write(pipefd[0], "x", 1) < 0);
 
     const char *msg = "hello pipe";
     ssize_t nw = sys_write(pipefd[1], msg, strlen(msg));
     TEST("sys_write to pipe writes full payload", nw == (ssize_t)strlen(msg));
 
-    char buf[32];
     memset(buf, 0, sizeof(buf));
-    ssize_t nr = sys_read(pipefd[0], buf, strlen(msg));
-    TEST("sys_read from pipe reads full payload", nr == (ssize_t)strlen(msg));
-    TEST("pipe preserves payload bytes", strcmp(buf, msg) == 0);
+    ssize_t nr = sys_read(pipefd[0], buf, 5);
+    TEST("sys_read from pipe can read a partial payload", nr == 5);
+    TEST("pipe preserves first partial chunk", strncmp(buf, "hello", 5) == 0);
+
+    memset(buf, 0, sizeof(buf));
+    nr = sys_read(pipefd[0], buf, strlen(msg) - 5);
+    TEST("sys_read from pipe reads remaining payload", nr == (ssize_t)(strlen(msg) - 5));
+    TEST("pipe preserves remaining bytes", strcmp(buf, " pipe") == 0);
 
     int dup_read = sys_dup(pipefd[0]);
     TEST("sys_dup(pipe read end) returns next free fd", dup_read == 5);
@@ -368,6 +381,22 @@ static void test_sys_pipe_ops(void) {
     sys_close(dup_read);
     sys_close(pipefd[0]);
 
+    test_teardown_proc();
+
+    test_setup_proc();
+
+    pipefd[0] = -1;
+    pipefd[1] = -1;
+    rc = sys_pipe(pipefd);
+    TEST("second sys_pipe returns 0", rc == 0);
+    TEST("second pipe allocates read fd 3", pipefd[0] == 3);
+    TEST("second pipe allocates write fd 4", pipefd[1] == 4);
+
+    sys_close(pipefd[0]);
+    TEST("write after closing all readers returns EPIPE",
+         sys_write(pipefd[1], "z", 1) == -EPIPE);
+
+    sys_close(pipefd[1]);
     test_teardown_proc();
 }
 
