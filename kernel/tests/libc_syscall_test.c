@@ -210,6 +210,7 @@ static void test_syscall_numbers(void) {
     TEST("SYS_mmap  == 14", SYS_mmap  == 14);
     TEST("SYS_munmap == 15",SYS_munmap == 15);
     TEST("SYS_brk   == 16", SYS_brk   == 16);
+    TEST("SYS_pipe  == 22", SYS_pipe  == 22);
     TEST("SYS_dup   == 23", SYS_dup   == 23);
     TEST("SYS_dup2  == 33", SYS_dup2  == 33);
 
@@ -316,6 +317,61 @@ static void test_sys_dup_ops(void) {
 }
 
 /* ------------------------------------------------------------------ */
+/* sys_pipe                                                            */
+/* ------------------------------------------------------------------ */
+
+static void test_sys_pipe_ops(void) {
+    printk("\n=== sys_pipe ===\n");
+
+    test_setup_proc();
+
+    int pipefd[2] = {-1, -1};
+    int rc = sys_pipe(pipefd);
+    TEST("sys_pipe returns 0", rc == 0);
+    TEST("pipe read fd is first free slot", pipefd[0] == 3);
+    TEST("pipe write fd is next free slot", pipefd[1] == 4);
+    TEST("pipe ends are distinct", pipefd[0] != pipefd[1]);
+
+    file_t *read_end = fd_get(&current->fds, pipefd[0]);
+    file_t *write_end = fd_get(&current->fds, pipefd[1]);
+    TEST("pipe read end exists", read_end != NULL && read_end->type == FILE_PIPE);
+    TEST("pipe write end exists", write_end != NULL && write_end->type == FILE_PIPE);
+    TEST("pipe ends share same backing pipe",
+         read_end != NULL && write_end != NULL && read_end->pipe == write_end->pipe);
+
+    const char *msg = "hello pipe";
+    ssize_t nw = sys_write(pipefd[1], msg, strlen(msg));
+    TEST("sys_write to pipe writes full payload", nw == (ssize_t)strlen(msg));
+
+    char buf[32];
+    memset(buf, 0, sizeof(buf));
+    ssize_t nr = sys_read(pipefd[0], buf, strlen(msg));
+    TEST("sys_read from pipe reads full payload", nr == (ssize_t)strlen(msg));
+    TEST("pipe preserves payload bytes", strcmp(buf, msg) == 0);
+
+    int dup_read = sys_dup(pipefd[0]);
+    TEST("sys_dup(pipe read end) returns next free fd", dup_read == 5);
+    TEST("dup'd pipe read end aliases same file object",
+         dup_read >= 0 && fd_get(&current->fds, dup_read) == read_end);
+
+    int dup_write_target = sys_dup2(pipefd[1], 1);
+    TEST("sys_dup2(pipe write end, 1) returns target fd", dup_write_target == 1);
+    TEST("fd 1 now aliases pipe write end", fd_get(&current->fds, 1) == write_end);
+
+    sys_close(pipefd[1]);
+    sys_close(1);
+
+    memset(buf, 0, sizeof(buf));
+    nr = sys_read(pipefd[0], buf, sizeof(buf));
+    TEST("read after closing all writers returns EOF", nr == 0);
+
+    sys_close(dup_read);
+    sys_close(pipefd[0]);
+
+    test_teardown_proc();
+}
+
+/* ------------------------------------------------------------------ */
 /* Entry point                                                          */
 /* ------------------------------------------------------------------ */
 
@@ -331,6 +387,7 @@ void libc_syscall_test_run(void) {
     test_sys_file_io();
     test_fd_init();
     test_sys_dup_ops();
+    test_sys_pipe_ops();
     test_sys_getpid();
     test_sys_mmap();
 

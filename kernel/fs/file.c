@@ -21,6 +21,8 @@ void fd_init(fd_table_t *table) {
         stdin_file->entry = NULL;
         stdin_file->type = FILE_STDIN;
         stdin_file->vnode = NULL;
+        stdin_file->pipe = NULL;
+        stdin_file->pipe_flags = 0;
         stdin_file->offset = 0;
         stdin_file->ref_count = 1;
         table->files[0] = stdin_file;
@@ -32,6 +34,8 @@ void fd_init(fd_table_t *table) {
         stdout_file->entry = NULL;
         stdout_file->type = FILE_STDOUT;
         stdout_file->vnode = NULL;
+        stdout_file->pipe = NULL;
+        stdout_file->pipe_flags = 0;
         stdout_file->offset = 0;
         stdout_file->ref_count = 1;
         table->files[1] = stdout_file;
@@ -43,6 +47,8 @@ void fd_init(fd_table_t *table) {
         stderr_file->entry = NULL;
         stderr_file->type = FILE_STDOUT;
         stderr_file->vnode = NULL;
+        stderr_file->pipe = NULL;
+        stderr_file->pipe_flags = 0;
         stderr_file->offset = 0;
         stderr_file->ref_count = 1;
         table->files[2] = stderr_file;
