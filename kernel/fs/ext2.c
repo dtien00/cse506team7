@@ -3,7 +3,7 @@
 #include "drivers/virtio.h"
 #include "kernel/printk.h"
 #include "mm/kmalloc.h"
-#include "lib/string.h"
+#include "lib/kstring.h"
 
 static fs_type_t ext2_fs_type;
 
@@ -122,8 +122,8 @@ static uint32_t ext2_alloc_block(ext2_mount_data_t *mnt) {
                         // Found free block
                         bitmap[byte] |= (1 << bit);
                         
-                        uint32_t block_num = group * mnt->blocks_per_group + 
-                                            byte * 8 + bit + mnt->sb->s_first_data_block;
+                        uint32_t block_num = group * mnt->blocks_per_group +
+                                            byte * 8 + bit;
                         
                         // Write back bitmap
                         block_cache_write(bitmap_block, bitmap);
@@ -555,7 +555,8 @@ int ext2_write(vnode_t *vnode, const void *buf, size_t offset, size_t len) {
                 return bytes_written > 0 ? (int)bytes_written : -1;
             }
             inode->i_block[block_idx] = new_block;
-            
+            inode->i_blocks += 2;  // i_blocks counts 512-byte sectors; 1KB block = 2
+
             // Zero the new block
             memset(block_buf, 0, mnt->block_size);
             block_cache_write(new_block, block_buf);
@@ -593,6 +594,66 @@ int ext2_write(vnode_t *vnode, const void *buf, size_t offset, size_t len) {
     }
     
     return (int)bytes_written;
+}
+
+/*
+ * ext2_dirent_append — insert a new directory entry into an already-loaded
+ * directory block, splitting the last entry's slack space.
+ *
+ * Returns 0 on success, -1 if no space (caller must allocate a new block).
+ */
+static int ext2_dirent_append(uint8_t *block_buf, uint32_t block_size,
+                               uint32_t new_ino, const char *name,
+                               uint8_t file_type) {
+    uint16_t name_len  = (uint16_t)strlen(name);
+    uint16_t need      = (uint16_t)((8 + name_len + 3) & ~3u); /* aligned */
+
+    uint32_t offset = 0;
+    while (offset < block_size) {
+        ext2_dirent_t *de = (ext2_dirent_t *)(block_buf + offset);
+        if (de->rec_len == 0)
+            break;
+
+        /* Minimum space occupied by this entry */
+        uint16_t min_len = (uint16_t)((8 + de->name_len + 3) & ~3u);
+        uint16_t slack   = de->rec_len - min_len;
+
+        if (de->inode == 0) {
+            /* Deleted entry — reuse it if big enough */
+            if (de->rec_len >= need) {
+                de->inode     = new_ino;
+                de->name_len  = name_len;
+                de->file_type = file_type;
+                memcpy(de->name, name, name_len);
+                return 0;
+            }
+        } else if (slack >= need) {
+            /* Split the slack from the last (or any) entry with enough room */
+            ext2_dirent_t *new_de = (ext2_dirent_t *)(block_buf + offset + min_len);
+            new_de->inode     = new_ino;
+            new_de->rec_len   = de->rec_len - min_len;
+            new_de->name_len  = name_len;
+            new_de->file_type = file_type;
+            memcpy(new_de->name, name, name_len);
+            de->rec_len = min_len;
+            return 0;
+        }
+
+        offset += de->rec_len;
+    }
+
+    /* Block is full or empty with no entries yet */
+    if (offset + need <= block_size) {
+        ext2_dirent_t *de = (ext2_dirent_t *)(block_buf + offset);
+        de->inode     = new_ino;
+        de->rec_len   = block_size - offset; /* last entry spans to end */
+        de->name_len  = name_len;
+        de->file_type = file_type;
+        memcpy(de->name, name, name_len);
+        return 0;
+    }
+
+    return -1; /* no space */
 }
 
 // Create a new file in ext2
@@ -673,7 +734,7 @@ int ext2_create(mount_t *mnt, const char *path, uint32_t mode) {
         return -1;
     }
 
-    // For simplicity, append to first block (or allocate if empty)
+    // Load (or allocate) the first directory block of the parent
     if (parent_inode->i_block[0] == 0) {
         uint32_t new_block = ext2_alloc_block(ext2_mnt);
         if (new_block == 0) {
@@ -684,6 +745,7 @@ int ext2_create(mount_t *mnt, const char *path, uint32_t mode) {
             return -1;
         }
         parent_inode->i_block[0] = new_block;
+        parent_inode->i_blocks  += 2;
         memset(block_buf, 0, ext2_mnt->block_size);
     } else {
         if (block_cache_read(parent_inode->i_block[0], block_buf) != 0) {
@@ -695,32 +757,17 @@ int ext2_create(mount_t *mnt, const char *path, uint32_t mode) {
         }
     }
 
-    // Find free space in directory block (simplified - append at end)
-    uint32_t offset = 0;
-    while (offset < parent_inode->i_size && offset < ext2_mnt->block_size) {
-        ext2_dirent_t *dirent = (ext2_dirent_t *)(block_buf + offset);
-        if (dirent->rec_len == 0) break;
-        offset += dirent->rec_len;
+    // Insert new directory entry by splitting the last entry's slack space
+    if (ext2_dirent_append(block_buf, ext2_mnt->block_size,
+                           new_ino, filename, EXT2_FT_REG_FILE) != 0) {
+        printk("ext2: directory block full, cannot create %s\n", path);
+        kfree(block_buf);
+        kfree(parent_vnode->fs_data);
+        kfree(parent_vnode);
+        kfree(path_copy);
+        return -1;
     }
 
-    // Create new directory entry
-    ext2_dirent_t *new_dirent = (ext2_dirent_t *)(block_buf + offset);
-    new_dirent->inode = new_ino;
-    new_dirent->name_len = strlen(filename);
-    new_dirent->file_type = EXT2_FT_REG_FILE;
-
-    // Calculate record length (aligned to 4 bytes)
-    uint16_t rec_len = 8 + new_dirent->name_len;
-    rec_len = (rec_len + 3) & ~3;
-
-    // If this is the last entry, extend to end of block
-    if (offset + rec_len >= ext2_mnt->block_size) {
-        rec_len = ext2_mnt->block_size - offset;
-    }
-    
-    new_dirent->rec_len = rec_len;
-    memcpy(new_dirent->name, filename, new_dirent->name_len);
-    
     // Write directory block back
     if (block_cache_write(parent_inode->i_block[0], block_buf) != 0) {
         kfree(block_buf);
@@ -729,10 +776,10 @@ int ext2_create(mount_t *mnt, const char *path, uint32_t mode) {
         kfree(path_copy);
         return -1;
     }
-    
-    // Update parent directory size
-    if (offset + rec_len > parent_inode->i_size) {
-        parent_inode->i_size = offset + rec_len;
+
+    // Update parent directory size to cover the full block
+    if (parent_inode->i_size < ext2_mnt->block_size) {
+        parent_inode->i_size = ext2_mnt->block_size;
         ext2_write_inode(ext2_mnt, parent_vnode->ino, parent_inode);
     }
     
@@ -969,6 +1016,7 @@ int ext2_mkdir(mount_t *mnt, const char *path, uint32_t mode) {
             return -1;
         }
         parent_inode->i_block[0] = new_block;
+        parent_inode->i_blocks  += 2;
         memset(block_buf, 0, ext2_mnt->block_size);
     } else {
         if (block_cache_read(parent_inode->i_block[0], block_buf) != 0) {
@@ -980,35 +1028,22 @@ int ext2_mkdir(mount_t *mnt, const char *path, uint32_t mode) {
         }
     }
 
-    // Find free space
-    uint32_t offset = 0;
-    while (offset < parent_inode->i_size && offset < ext2_mnt->block_size) {
-        ext2_dirent_t *dirent = (ext2_dirent_t *)(block_buf + offset);
-        if (dirent->rec_len == 0) break;
-        offset += dirent->rec_len;
+    // Insert new directory entry by splitting the last entry's slack space
+    if (ext2_dirent_append(block_buf, ext2_mnt->block_size,
+                           new_ino, dirname, EXT2_FT_DIR) != 0) {
+        printk("ext2: directory block full, cannot mkdir %s\n", path);
+        kfree(block_buf);
+        kfree(parent_vnode->fs_data);
+        kfree(parent_vnode);
+        kfree(path_copy);
+        return -1;
     }
 
-    // Add directory entry
-    ext2_dirent_t *new_dirent = (ext2_dirent_t *)(block_buf + offset);
-    new_dirent->inode = new_ino;
-    new_dirent->name_len = strlen(dirname);
-    new_dirent->file_type = EXT2_FT_DIR;
-
-    uint16_t rec_len = 8 + new_dirent->name_len;
-    rec_len = (rec_len + 3) & ~3;
-    if (offset + rec_len >= ext2_mnt->block_size) {
-        rec_len = ext2_mnt->block_size - offset;
-    }
-    
-    new_dirent->rec_len = rec_len;
-    memcpy(new_dirent->name, dirname, new_dirent->name_len);
-    
     block_cache_write(parent_inode->i_block[0], block_buf);
-    
+
     // Update parent
-    if (offset + rec_len > parent_inode->i_size) {
-        parent_inode->i_size = offset + rec_len;
-    }
+    if (parent_inode->i_size < ext2_mnt->block_size)
+        parent_inode->i_size = ext2_mnt->block_size;
     parent_inode->i_links_count++;  // New subdirectory adds link
     ext2_write_inode(ext2_mnt, parent_vnode->ino, parent_inode);
     

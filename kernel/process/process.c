@@ -8,7 +8,7 @@
 #include "mm/kmalloc.h"   // needed for kmalloc/kfree in exec()
 #include "mm/vma.h"
 #include "types.h"
-#include "string.h"
+#include "lib/kstring.h"
 #include "elf/elf.h"
 #include "fs/file.h"
 

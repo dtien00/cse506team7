@@ -1,6 +1,6 @@
 #include "kernel/console.h"
 #include "arch/sbi.h"
-#include "lib/string.h"
+#include "lib/kstring.h"
 
 static console_driver_t *drivers = NULL; // all registered drivers
 static console_driver_t *active = NULL; // currently active one

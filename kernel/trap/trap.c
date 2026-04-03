@@ -7,7 +7,7 @@
 #include "mm/vmm.h"
 #include "mm/pmm.h"
 #include "mm/vma.h"
-#include "string.h"   // memset
+#include "lib/kstring.h"   // memset
 #include "drivers/plic.h"
 #include "drivers/uart.h"
 

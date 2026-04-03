@@ -3,7 +3,7 @@
 #include "drivers/virtio.h"
 #include "kernel/printk.h"
 #include "mm/kmalloc.h"
-#include "lib/string.h"
+#include "lib/kstring.h"
 
 
 static block_cache_t cache;

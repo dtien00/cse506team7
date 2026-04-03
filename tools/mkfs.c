@@ -23,7 +23,8 @@ static void write_superblock(FILE *f, uint32_t blocks, uint32_t inodes) {
     sb->s_inodes_count      = inodes;
     sb->s_blocks_count      = blocks;
     sb->s_r_blocks_count    = blocks / 20;   // 5% reserved
-    sb->s_free_blocks_count = blocks - 6;    // rough estimate
+    uint32_t inode_table_blocks_sb = (inodes * EXT2_INODE_SIZE + EXT2_BLOCK_SIZE - 1) / EXT2_BLOCK_SIZE;
+    sb->s_free_blocks_count = blocks - 5 - inode_table_blocks_sb - 1; // matches group descriptor
     sb->s_free_inodes_count = inodes - 1;    // root inode used
     sb->s_first_data_block  = 1;             // superblock is in block 1 for 1KB blocks
     sb->s_log_block_size    = 0;             // 1024 << 0 = 1024

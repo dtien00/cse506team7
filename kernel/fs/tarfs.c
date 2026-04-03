@@ -3,7 +3,7 @@
 #include "kernel/types.h"
 #include "kernel/printk.h"
 #include "mm/kmalloc.h"
-#include "lib/string.h"
+#include "lib/kstring.h"
 
 // -----------------------------------------------------------------------------
 // TAR blob — linked into the kernel binary via .incbin in your linker/assembly.

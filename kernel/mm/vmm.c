@@ -2,7 +2,7 @@
 #include "mm/pmm.h"
 #include "arch/riscv.h"
 #include "kernel/printk.h"
-#include "lib/string.h"
+#include "lib/kstring.h"
 
 static pagetable_t kernel_pagetable = NULL;
 

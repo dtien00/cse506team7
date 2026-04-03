@@ -4,7 +4,7 @@
 #include "fs/file.h"
 #include "fs/tmpfs.h"
 #include "tests/test.h"
-#include "lib/string.h"
+#include "lib/kstring.h"
 
 static int passed = 0;
 static int failed = 0;

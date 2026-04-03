@@ -2,7 +2,7 @@
 #include "kernel/types.h"
 #include "kernel/printk.h"
 #include "mm/kmalloc.h"
-#include "lib/string.h"
+#include "lib/kstring.h"
 #include "tty/term.h"
 
 #define SEEK_SET 0

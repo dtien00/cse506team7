@@ -13,6 +13,7 @@
 .global getuid
 .global getgid
 .global lseek
+.global sync
 .global pipe
 .global dup
 .global dup2
@@ -100,10 +101,15 @@ getgid:
     ecall
     ret
 
-//lseek:
-//    li a7, 8
-//    ecall
-//    ret
+lseek:
+    li a7, 17
+    ecall
+    ret
+
+sync:
+    li a7, 20
+    ecall
+    ret
 
 pipe:
     li a7, 22
@@ -141,7 +147,7 @@ fstat:
     ret
 
 mkdir:
-    li a7, 83
+    li a7, 19
     ecall
     ret
 

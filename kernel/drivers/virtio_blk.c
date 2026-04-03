@@ -2,7 +2,7 @@
 #include "kernel/printk.h"
 #include "mm/kmalloc.h"
 #include "mm/pmm.h"
-#include "lib/string.h"
+#include "lib/kstring.h"
 
 static virtio_blk_dev_t blk_dev;
 static int initialized = 0;

@@ -1,4 +1,4 @@
-#include "lib/string.h"
+#include "lib/kstring.h"
 
 void* memcpy(void *dest, const void *src, size_t n) {
     uint8_t *d = dest;

@@ -1,7 +1,7 @@
 #include "mm/vma.h"
 #include "mm/kmalloc.h"
 #include "kernel/printk.h"
-#include "lib/string.h"
+#include "lib/kstring.h"
 
 void vma_init(struct vm_area **vma_list) {
     if (vma_list) {

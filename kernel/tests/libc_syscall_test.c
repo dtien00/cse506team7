@@ -24,7 +24,7 @@
 #include "mm/pmm.h"
 #include "mm/vmm.h"
 #include "tests/test.h"
-#include "lib/string.h"
+#include "lib/kstring.h"
 
 static int passed = 0;
 static int failed = 0;
