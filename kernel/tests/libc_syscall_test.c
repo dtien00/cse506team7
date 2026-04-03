@@ -210,6 +210,8 @@ static void test_syscall_numbers(void) {
     TEST("SYS_mmap  == 14", SYS_mmap  == 14);
     TEST("SYS_munmap == 15",SYS_munmap == 15);
     TEST("SYS_brk   == 16", SYS_brk   == 16);
+    TEST("SYS_dup   == 23", SYS_dup   == 23);
+    TEST("SYS_dup2  == 33", SYS_dup2  == 33);
 
     /*
      * KNOWN BUG: libc/syscall.S uses a7=8 for lseek — same as SYS_exec.
@@ -273,6 +275,47 @@ static void test_fd_init(void) {
 }
 
 /* ------------------------------------------------------------------ */
+/* sys_dup / sys_dup2                                                 */
+/* ------------------------------------------------------------------ */
+
+static void test_sys_dup_ops(void) {
+    printk("\n=== sys_dup / sys_dup2 ===\n");
+
+    test_setup_proc();
+
+    int dup_stdout = sys_dup(1);
+    TEST("sys_dup(stdout) returns first free fd", dup_stdout == 3);
+    TEST("dup'd fd points at same file object",
+         dup_stdout >= 0 && fd_get(&current->fds, dup_stdout) == fd_get(&current->fds, 1));
+
+    file_t *stdout_file = fd_get(&current->fds, 1);
+    TEST("dup increments ref_count",
+         stdout_file != NULL && stdout_file->ref_count == 2);
+
+    int same_fd = sys_dup2(1, 1);
+    TEST("sys_dup2(fd, fd) returns fd", same_fd == 1);
+    TEST("dup2(fd, fd) leaves ref_count unchanged",
+         stdout_file != NULL && stdout_file->ref_count == 2);
+
+    int replace_fd = sys_dup2(0, dup_stdout);
+    TEST("sys_dup2(stdin, 3) returns target fd", replace_fd == dup_stdout);
+    TEST("target fd now aliases stdin",
+         replace_fd >= 0 && fd_get(&current->fds, replace_fd) == fd_get(&current->fds, 0));
+    TEST("replacing dup target drops old stdout alias ref",
+         stdout_file != NULL && stdout_file->ref_count == 1);
+
+    file_t *stdin_file = fd_get(&current->fds, 0);
+    TEST("dup2 increments new aliased file ref_count",
+         stdin_file != NULL && stdin_file->ref_count == 2);
+
+    TEST("sys_dup invalid oldfd returns error", sys_dup(99) < 0);
+    TEST("sys_dup2 invalid oldfd returns error", sys_dup2(99, 4) < 0);
+    TEST("sys_dup2 invalid newfd returns error", sys_dup2(0, MAX_FDS) < 0);
+
+    test_teardown_proc();
+}
+
+/* ------------------------------------------------------------------ */
 /* Entry point                                                          */
 /* ------------------------------------------------------------------ */
 
@@ -287,6 +330,7 @@ void libc_syscall_test_run(void) {
     test_sys_write();
     test_sys_file_io();
     test_fd_init();
+    test_sys_dup_ops();
     test_sys_getpid();
     test_sys_mmap();
 

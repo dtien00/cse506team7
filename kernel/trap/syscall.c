@@ -163,6 +163,14 @@ void syscall_handler(trap_frame *frame) {
             ret = sys_brk((void *) arg0);
             break;
 
+        case SYS_dup:
+            ret = sys_dup((int) arg0);
+            break;
+
+        case SYS_dup2:
+            ret = sys_dup2((int) arg0, (int) arg1);
+            break;
+
         default:
             printk("Unknown system call: %d\n", syscall_num);
             ret = -1;
@@ -306,6 +314,40 @@ int sys_close(int fd) {
     if (!f) return -1;
     fd_close(&current->fds, fd);
     return 0;
+}
+
+int sys_dup(int oldfd) {
+    if (!current) return -EBADF;
+
+    file_t *f = fd_get(&current->fds, oldfd);
+    if (!f) return -EBADF;
+
+    vfs_ref(f);
+    int newfd = fd_alloc(&current->fds, f);
+    if (newfd < 0) {
+        vfs_close(f);
+        return -EMFILE;
+    }
+
+    return newfd;
+}
+
+int sys_dup2(int oldfd, int newfd) {
+    if (!current) return -EBADF;
+    if (newfd < 0 || newfd >= MAX_FDS) return -EBADF;
+
+    file_t *f = fd_get(&current->fds, oldfd);
+    if (!f) return -EBADF;
+
+    if (oldfd == newfd) return newfd;
+
+    if (fd_get(&current->fds, newfd)) {
+        fd_close(&current->fds, newfd);
+    }
+
+    vfs_ref(f);
+    current->fds.files[newfd] = f;
+    return newfd;
 }
 
 pid_t sys_wait(int *status) {

@@ -20,6 +20,9 @@
 #define SYS_mmap     14
 #define SYS_munmap   15
 #define SYS_brk      16
+#define SYS_pipe     22
+#define SYS_dup      23
+#define SYS_dup2     33
 
 // Initialize syscall subsystem
 void syscall_init(void);
@@ -44,3 +47,5 @@ int sys_kill(pid_t pid);
 void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset);
 int sys_munmap(void *addr, size_t length);
 int sys_brk(void *addr);
+int sys_dup(int oldfd);
+int sys_dup2(int oldfd, int newfd);
