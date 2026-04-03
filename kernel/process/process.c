@@ -205,7 +205,7 @@ int proc_wait(int *exit_code_out) {
                 // can access user pages.
                 if (exit_code_out) {
                     set_csr_bit(sstatus, SSTATUS_SUM);
-                    *exit_code_out = child->exit_code;
+                    *exit_code_out = (child->exit_code & 0xff) << 8;
                     clear_csr_bit(sstatus, SSTATUS_SUM);
                 }
 
