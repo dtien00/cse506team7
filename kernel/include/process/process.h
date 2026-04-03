@@ -9,6 +9,12 @@
 #define MAX_NAME 16
 #define KSTACK_SIZE 4096
 
+// Kernel-internal signal numbers (mirrors libc/include/signal.h)
+#define KERNEL_SIGKILL   9
+#define KERNEL_SIGTERM  15
+// Bitmask of signals that unconditionally terminate the process
+#define KERNEL_FATAL_SIGS ((1U << KERNEL_SIGKILL) | (1U << KERNEL_SIGTERM))
+
 extern struct proc *current;
 extern uint8_t kstacks[][KSTACK_SIZE];
 
@@ -61,7 +67,8 @@ struct proc {
 
     uint64_t time_slice;
     uint64_t total_time;
-    uint64_t wake_tick;    // 0 = not sleeping; >0 = timer_ticks value at which to wake
+    uint64_t wake_tick;      // 0 = not sleeping; >0 = timer_ticks value at which to wake
+    uint32_t pending_signals; // bitmask: bit N set means signal N is pending
     struct proc *next;
 
     // Kernel scheduler context (callee-saved regs, used by swtch)

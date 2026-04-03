@@ -35,6 +35,14 @@ void syscall_handler(trap_frame *frame) {
         current->trapframe_owned = 0;
     }
 
+    // Check if this process has a fatal pending signal before handling anything.
+    // This catches processes that were signaled while running (not sleeping).
+    if (current && (current->pending_signals & KERNEL_FATAL_SIGS)) {
+        current->pending_signals = 0;
+        sys_exit(-1);
+        return; // unreachable — sys_exit calls proc_exit which never returns
+    }
+
     // System call number is in a7
     const uint64_t syscall_num = frame->a7;
 
@@ -147,7 +155,7 @@ void syscall_handler(trap_frame *frame) {
             break;
 
         case SYS_kill:
-            ret = sys_kill((pid_t) arg0);
+            ret = sys_kill((pid_t) arg0, (int) arg1);
             break;
 
         case SYS_mmap:
@@ -335,9 +343,28 @@ int sys_uptime(void) {
     return (int)timer_ticks;
 }
 
-int sys_kill(pid_t pid) {
-    printk("sys_kill(%d) not implemented\n", pid);
-    return -1;
+int sys_kill(pid_t pid, int sig) {
+    if (sig < 0 || sig > 31) return -1;
+
+    struct proc *target = proc_find(pid);
+    if (!target || target->state == PROC_UNUSED || target->state == PROC_ZOMBIE)
+        return -1;
+
+    // sig == 0: validity check only (POSIX), no signal sent
+    if (sig == 0) return 0;
+
+    // Set the signal bit in the target's pending bitmask
+    target->pending_signals |= (1U << sig);
+
+    // Wake a blocked (sleeping) target so it re-enters the scheduler
+    // and checks pending_signals before resuming user mode.
+    // Use proc_unblock() directly rather than proc_wakeup() because
+    // proc_wakeup() only matches processes sleeping on a specific channel
+    // (e.g. it would miss a process blocked on terminal I/O with chan != target).
+    if (target->state == PROC_BLOCKED)
+        proc_unblock(target);
+
+    return 0;
 }
 
 void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset) {

@@ -40,7 +40,7 @@ pid_t sys_getpid(void);
 void *sys_sbrk(intptr_t increment);
 int sys_sleep(int seconds);
 int sys_uptime(void);
-int sys_kill(pid_t pid);
+int sys_kill(pid_t pid, int sig);
 void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset);
 int sys_munmap(void *addr, size_t length);
 int sys_brk(void *addr);
