@@ -108,11 +108,8 @@ struct proc* proc_create(const char *name) {
     // Initialize VMA list
     vma_init(&p->vma_list);
 
-    // do not initialize the process's file descriptor here, the caller of proc_create decide and initialize what fds the process might need
-    // ex: fork to inherit fds from parent, init to create the 0,1,2 fds
-    // fd_init(&p->fds);
-
-    proc_ready(p);
+    // Caller finishes initialization (address space, trapframe, fds)
+    // and then decides when to enqueue via proc_ready().
     return p;
 }
 

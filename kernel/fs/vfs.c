@@ -17,6 +17,21 @@
 static fs_type_t *fs_types = NULL;  // Linked list of registered filesystems
 static mount_t *mounts = NULL;      // Linked list of mount points
 
+static void vfs_dump_mounts(void) {
+    mount_t *curr = mounts;
+    if (!curr) {
+        printk("vfs: mount table is empty\n");
+        return;
+    }
+    printk("vfs: active mount points:\n");
+    while (curr) {
+        printk("  - '%s' (type: %s)\n",
+               curr->mountpoint,
+               curr->fs_type ? curr->fs_type->name : "unknown");
+        curr = curr->next;
+    }
+}
+
 // -----------------------------------------------------------------------------
 // VFS Initialization
 // -----------------------------------------------------------------------------
@@ -196,6 +211,7 @@ vnode_t *vfs_lookup(const char *path) {
     mount_t *mnt = vfs_find_mount(path);
     if (!mnt) {
         printk("vfs: no mount point for path '%s'\n", path);
+        vfs_dump_mounts();
         return NULL;
     }
 

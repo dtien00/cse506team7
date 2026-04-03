@@ -1,9 +1,10 @@
+#include "arch/riscv.h"
+#include "kernel/printk.h"
+#include "lib/string.h"
+#include "mm/vmm.h"
 #include "process/process.h"
 #include "process/swtch.h"
-#include "lib/string.h"
 #include "trap/trap.h"
-#include "kernel/printk.h"
-#include "mm/vmm.h"
 
 struct proc proctab[MAX_PROCS];
 struct proc *ready_queue = NULL;
@@ -71,7 +72,7 @@ void schedule(void) {
         } else {
             // No process ready — park in idle until an interrupt wakes one.
             vmm_switch(vmm_kernel_pagetable());
-            interrupts_on();
+            // interrupts_on();
             swtch(&scheduler_context, &idle_context);
             // returns here from idle loop, and must loop back to check for processes
         }

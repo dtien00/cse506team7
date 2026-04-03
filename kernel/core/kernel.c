@@ -19,6 +19,17 @@
 // External symbols from linker script
 extern char _kernel_end[];
 
+static void boot_park_forever(void) {
+    while (1)
+        asm volatile("wfi");
+}
+
+static void boot_fallback_to_idle(void) {
+    interrupts_on();
+    schedule();
+    boot_park_forever();
+}
+
 void run_all_tests(void) {
     mem_test_run();
     // trap_test_run();
@@ -73,6 +84,9 @@ void boot(uint64_t hart_id, uint64_t dtb) {
     // Initialize kernel heap
     kmalloc_init();
 
+    // initialize scheduler with swapper or idle loop process
+    scheduler_init();
+
     // initialize drivers once memory is mapped
     drivers_init();
 
@@ -90,14 +104,18 @@ void boot(uint64_t hart_id, uint64_t dtb) {
     tarfs_init();
     tmpfs_init();
     // Mount root filesystem (tarfs)
-    vfs_mount(NULL, "/", "tarfs");
+    if (vfs_mount(NULL, "/", "tarfs") < 0) {
+        printk("FATAL: failed to mount tarfs at '/'\n");
+        boot_fallback_to_idle();
+    }
     // Mount tmpfs at /tmp
-    vfs_mount(NULL, "/tmp", "tmpfs");
+    if (vfs_mount(NULL, "/tmp", "tmpfs") < 0) {
+        printk("FATAL: failed to mount tmpfs at '/tmp'\n");
+        boot_fallback_to_idle();
+    }
 
     syscall_init();
 
-    // set up process 0 aka swapper as idle loop
-    scheduler_init();
     // proc_init sets up the init process and loads its ELF via exec().
     proc_init();
 
@@ -116,8 +134,6 @@ void boot(uint64_t hart_id, uint64_t dtb) {
         // Hand off to the scheduler; runs the init process (pid 1).
         schedule();
         printk("Kernel panic.\n"); // should never reach here as schedule will always default to its own idle loop
-        while (1)
-            asm volatile("wfi");
+        boot_park_forever();
     #endif
 }
-

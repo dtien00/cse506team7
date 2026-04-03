@@ -237,7 +237,7 @@ vnode_t *tmpfs_lookup(mount_t *mnt, const char *path) {
 
     tmpfs_mount_data_t *mnt_data = (tmpfs_mount_data_t *)mnt->fs_data;
     tmpfs_inode_t *inode = tmpfs_find_inode(mnt_data->root, path);
-    
+
     if (!inode) return NULL;
 
     // Allocate a vnode
