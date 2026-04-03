@@ -22,10 +22,11 @@ int main(void) {
         };
         static const int N_TESTS = (int)(sizeof(tests) / sizeof(tests[0]));
 
-        write(STDOUT_FILENO,
-              "\n========================================\n"
-              "       SBUnix User-Space Test Suite\n"
-              "========================================\n\n", 90);
+#define SUITE_OPEN "\n========================================\n" \
+                   "       SBUnix User-Space Test Suite\n" \
+                   "========================================\n\n"
+        write(STDOUT_FILENO, SUITE_OPEN, sizeof(SUITE_OPEN) - 1);
+#undef SUITE_OPEN
 
         int suite_failed = 0;
 
@@ -60,10 +61,11 @@ int main(void) {
             }
         }
 
-        write(STDOUT_FILENO,
-              "\n========================================\n"
-              "       Test Suite Complete\n"
-              "========================================\n\n", 90);
+#define SUITE_CLOSE "\n========================================\n" \
+                    "       Test Suite Complete\n" \
+                    "========================================\n\n"
+        write(STDOUT_FILENO, SUITE_CLOSE, sizeof(SUITE_CLOSE) - 1);
+#undef SUITE_CLOSE
 
         if (suite_failed) {
             write(STDOUT_FILENO, "WARN: some test suites FAILED — check output above\n\n", 52);
