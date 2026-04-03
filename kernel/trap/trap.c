@@ -126,7 +126,7 @@ void trap_init(void) {
     // Enable interrupts
     interrupts_enable(SIE_SOFTWARE);
     interrupts_enable(SIE_TIMER);
-    // interrupts_enable(SIE_EXTERNAL);
+    interrupts_enable(SIE_EXTERNAL);
 }
 
 static void handle_interrupt(trap_frame *frame) {
@@ -250,8 +250,11 @@ void trap_handler(trap_frame *frame) {
     // process's page table.  exec() may have switched SATP to a new image
     // while the parent's page table was still active; without this switch the
     // parent's sret would execute under the child's (now freed) page table.
-    if (current && !(frame->sstatus & SSTATUS_SPP))
+    if (current && !(frame->sstatus & SSTATUS_SPP)) {
+        // Ensure sret reenables S-mode interrupts after returning to user.
+        frame->sstatus |= SSTATUS_SPIE;
         vmm_switch(current->pagetable);
+    }
 }
 
 
