@@ -96,7 +96,7 @@ int main(int argc, char **argv) {
     printf("  /mnt/test.txt\n");
     printf("  /mnt/data/\n");
     printf("  /mnt/data/nested.txt\n");
-    printf("\nThese files will persist across reboots!\n");
+    printf("\nYou need to check if these files persist across reboots!\n");
     
     return 0;
 }

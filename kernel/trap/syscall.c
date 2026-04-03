@@ -202,8 +202,7 @@ pid_t sys_fork(void) {
     struct proc *child = proc_create(current->name);
     if (!child) return -1;
 
-    // fd_init already ran inside proc_create — now OVERWRITE with
-    // a copy of the parent's fds so the child inherits open files
+    // Inherit parent's open files (including stdio) and bump file refs.
     for (int i = 0; i < MAX_FDS; i++) {
         child->fds.files[i] = current->fds.files[i];
         if (child->fds.files[i])
@@ -254,6 +253,9 @@ pid_t sys_fork(void) {
     child->parent = current;
     child->sibling = current->first_child;
     current->first_child = child;
+
+    // Child is now fully initialized and safe to run.
+    proc_ready(child);
 
     // Return child pid to parent that called fork syscall
     return child->pid;

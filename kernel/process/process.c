@@ -119,21 +119,8 @@ struct proc* proc_create(const char *name) {
     // Initialize VMA list
     vma_init(&p->vma_list);
 
-    // do not initialize the process's file descriptor here, the caller of proc_create decide and initialize what fds the process might need
-    // ex: fork to inherit fds from parent, init to create the 0,1,2 fds
-    // fd_init(&p->fds);
-
-    // Initialize VMA list
-    vma_init(&p->vma_list);
-
-    // Initialize file descriptor table with stdin/stdout/stderr
-    fd_init(&p->fd_table);
-
-    // User-mode processes allocates a trap_frame to save/restore user registers
-    // p->trapframe = (trap_frame *)kmalloc(sizeof(trap_frame));
-    // memset(p->trapframe, 0, sizeof(trap_frame));
-
-    proc_ready(p);
+    // Caller finishes initialization (address space, trapframe, fds)
+    // and then decides when to enqueue via proc_ready().
     return p;
 }
 
