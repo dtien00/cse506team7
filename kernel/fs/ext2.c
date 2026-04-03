@@ -600,11 +600,12 @@ int ext2_create(mount_t *mnt, const char *path, uint32_t mode) {
     if (!mnt || !mnt->fs_data || !path) return -1;
     
     ext2_mount_data_t *ext2_mnt = (ext2_mount_data_t *)mnt->fs_data;
-    
+
     // Parse path to get parent directory and filename
     char *path_copy = (char *)kmalloc(strlen(path) + 1);
     if (!path_copy) return -1;
     strcpy(path_copy, path);
+
     
     // Find last slash
     char *last_slash = NULL;
@@ -664,14 +665,14 @@ int ext2_create(mount_t *mnt, const char *path, uint32_t mode) {
     
     // Add directory entry to parent
     // Find space in parent directory
-    uint8_t *block_buf = (uint8_t *)kmalloc(mnt->block_size);
+    uint8_t *block_buf = (uint8_t *)kmalloc(ext2_mnt->block_size);
     if (!block_buf) {
         kfree(parent_vnode->fs_data);
         kfree(parent_vnode);
         kfree(path_copy);
         return -1;
     }
-    
+
     // For simplicity, append to first block (or allocate if empty)
     if (parent_inode->i_block[0] == 0) {
         uint32_t new_block = ext2_alloc_block(ext2_mnt);
@@ -683,7 +684,7 @@ int ext2_create(mount_t *mnt, const char *path, uint32_t mode) {
             return -1;
         }
         parent_inode->i_block[0] = new_block;
-        memset(block_buf, 0, mnt->block_size);
+        memset(block_buf, 0, ext2_mnt->block_size);
     } else {
         if (block_cache_read(parent_inode->i_block[0], block_buf) != 0) {
             kfree(block_buf);
@@ -693,28 +694,28 @@ int ext2_create(mount_t *mnt, const char *path, uint32_t mode) {
             return -1;
         }
     }
-    
+
     // Find free space in directory block (simplified - append at end)
     uint32_t offset = 0;
-    while (offset < parent_inode->i_size && offset < mnt->block_size) {
+    while (offset < parent_inode->i_size && offset < ext2_mnt->block_size) {
         ext2_dirent_t *dirent = (ext2_dirent_t *)(block_buf + offset);
         if (dirent->rec_len == 0) break;
         offset += dirent->rec_len;
     }
-    
+
     // Create new directory entry
     ext2_dirent_t *new_dirent = (ext2_dirent_t *)(block_buf + offset);
     new_dirent->inode = new_ino;
     new_dirent->name_len = strlen(filename);
     new_dirent->file_type = EXT2_FT_REG_FILE;
-    
+
     // Calculate record length (aligned to 4 bytes)
     uint16_t rec_len = 8 + new_dirent->name_len;
     rec_len = (rec_len + 3) & ~3;
-    
+
     // If this is the last entry, extend to end of block
-    if (offset + rec_len >= mnt->block_size) {
-        rec_len = mnt->block_size - offset;
+    if (offset + rec_len >= ext2_mnt->block_size) {
+        rec_len = ext2_mnt->block_size - offset;
     }
     
     new_dirent->rec_len = rec_len;
@@ -749,11 +750,12 @@ int ext2_unlink(mount_t *mnt, const char *path) {
     if (!mnt || !mnt->fs_data || !path) return -1;
     
     ext2_mount_data_t *ext2_mnt = (ext2_mount_data_t *)mnt->fs_data;
-    
+
     // Parse path to get parent directory and filename
     char *path_copy = (char *)kmalloc(strlen(path) + 1);
     if (!path_copy) return -1;
     strcpy(path_copy, path);
+
     
     char *last_slash = NULL;
     for (char *p = path_copy; *p; p++) {
@@ -783,23 +785,23 @@ int ext2_unlink(mount_t *mnt, const char *path) {
     ext2_inode_t *parent_inode = (ext2_inode_t *)parent_vnode->fs_data;
     
     // Find and remove directory entry
-    uint8_t *block_buf = (uint8_t *)kmalloc(mnt->block_size);
+    uint8_t *block_buf = (uint8_t *)kmalloc(ext2_mnt->block_size);
     if (!block_buf) {
         kfree(parent_vnode->fs_data);
         kfree(parent_vnode);
         kfree(path_copy);
         return -1;
     }
-    
+
     int found = 0;
     uint32_t file_ino = 0;
-    
+
     if (parent_inode->i_block[0] != 0) {
         if (block_cache_read(parent_inode->i_block[0], block_buf) == 0) {
             uint32_t offset = 0;
             size_t name_len = strlen(filename);
-            
-            while (offset < parent_inode->i_size && offset < mnt->block_size) {
+
+            while (offset < parent_inode->i_size && offset < ext2_mnt->block_size) {
                 ext2_dirent_t *dirent = (ext2_dirent_t *)(block_buf + offset);
                 if (dirent->rec_len == 0) break;
                 
@@ -909,21 +911,21 @@ int ext2_mkdir(mount_t *mnt, const char *path, uint32_t mode) {
     new_inode.i_mode = EXT2_S_IFDIR | (mode & 0xFFF);
     new_inode.i_uid = 0;
     new_inode.i_gid = 0;
-    new_inode.i_size = mnt->block_size;
+    new_inode.i_size = ext2_mnt->block_size;
     new_inode.i_links_count = 2;  // . and parent
     new_inode.i_blocks = 2;  // In 512-byte blocks
     new_inode.i_block[0] = dir_block;
-    
+
     // Create . and .. entries
-    uint8_t *block_buf = (uint8_t *)kmalloc(mnt->block_size);
+    uint8_t *block_buf = (uint8_t *)kmalloc(ext2_mnt->block_size);
     if (!block_buf) {
         kfree(parent_vnode->fs_data);
         kfree(parent_vnode);
         kfree(path_copy);
         return -1;
     }
-    memset(block_buf, 0, mnt->block_size);
-    
+    memset(block_buf, 0, ext2_mnt->block_size);
+
     // Entry for "."
     ext2_dirent_t *dot = (ext2_dirent_t *)block_buf;
     dot->inode = new_ino;
@@ -931,11 +933,11 @@ int ext2_mkdir(mount_t *mnt, const char *path, uint32_t mode) {
     dot->name_len = 1;
     dot->file_type = EXT2_FT_DIR;
     dot->name[0] = '.';
-    
+
     // Entry for ".."
     ext2_dirent_t *dotdot = (ext2_dirent_t *)(block_buf + 12);
     dotdot->inode = parent_vnode->ino;
-    dotdot->rec_len = mnt->block_size - 12;
+    dotdot->rec_len = ext2_mnt->block_size - 12;
     dotdot->name_len = 2;
     dotdot->file_type = EXT2_FT_DIR;
     dotdot->name[0] = '.';
@@ -949,14 +951,14 @@ int ext2_mkdir(mount_t *mnt, const char *path, uint32_t mode) {
     ext2_write_inode(ext2_mnt, new_ino, &new_inode);
     
     // Add entry to parent directory (similar to create)
-    block_buf = (uint8_t *)kmalloc(mnt->block_size);
+    block_buf = (uint8_t *)kmalloc(ext2_mnt->block_size);
     if (!block_buf) {
         kfree(parent_vnode->fs_data);
         kfree(parent_vnode);
         kfree(path_copy);
         return -1;
     }
-    
+
     if (parent_inode->i_block[0] == 0) {
         uint32_t new_block = ext2_alloc_block(ext2_mnt);
         if (new_block == 0) {
@@ -967,7 +969,7 @@ int ext2_mkdir(mount_t *mnt, const char *path, uint32_t mode) {
             return -1;
         }
         parent_inode->i_block[0] = new_block;
-        memset(block_buf, 0, mnt->block_size);
+        memset(block_buf, 0, ext2_mnt->block_size);
     } else {
         if (block_cache_read(parent_inode->i_block[0], block_buf) != 0) {
             kfree(block_buf);
@@ -977,25 +979,25 @@ int ext2_mkdir(mount_t *mnt, const char *path, uint32_t mode) {
             return -1;
         }
     }
-    
+
     // Find free space
     uint32_t offset = 0;
-    while (offset < parent_inode->i_size && offset < mnt->block_size) {
+    while (offset < parent_inode->i_size && offset < ext2_mnt->block_size) {
         ext2_dirent_t *dirent = (ext2_dirent_t *)(block_buf + offset);
         if (dirent->rec_len == 0) break;
         offset += dirent->rec_len;
     }
-    
+
     // Add directory entry
     ext2_dirent_t *new_dirent = (ext2_dirent_t *)(block_buf + offset);
     new_dirent->inode = new_ino;
     new_dirent->name_len = strlen(dirname);
     new_dirent->file_type = EXT2_FT_DIR;
-    
+
     uint16_t rec_len = 8 + new_dirent->name_len;
     rec_len = (rec_len + 3) & ~3;
-    if (offset + rec_len >= mnt->block_size) {
-        rec_len = mnt->block_size - offset;
+    if (offset + rec_len >= ext2_mnt->block_size) {
+        rec_len = ext2_mnt->block_size - offset;
     }
     
     new_dirent->rec_len = rec_len;

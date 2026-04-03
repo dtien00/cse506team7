@@ -1,5 +1,5 @@
 #pragma once
-#include "types.h"
+#include "kernel/types.h"
 
 // QEMU virt UART (NS16550A) base address
 #define UART_BASE 0x10000000UL

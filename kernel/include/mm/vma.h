@@ -1,6 +1,6 @@
 #pragma once
 
-#include "types.h"
+#include "kernel/types.h"
 
 // Virtual Memory Area (VMA) - tracks memory regions in a process's address space
 // Each VMA represents a contiguous region of virtual memory with specific properties

@@ -311,7 +311,7 @@ ssize_t sys_write(int fd, const void *buf, size_t count) {
 
 int sys_open(const char *path, int flags) {
     set_csr_bit(sstatus, SSTATUS_SUM);
-    file_t *f = vfs_open(path);
+    file_t *f = vfs_open(path, flags);
     clear_csr_bit(sstatus, SSTATUS_SUM);
     if (!f) return -1;
     return fd_alloc(&current->fds, f);

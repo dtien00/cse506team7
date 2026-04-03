@@ -1,8 +1,10 @@
+#include "kernel/types.h"
 #include "fs/block_cache.h"
 #include "drivers/virtio.h"
 #include "kernel/printk.h"
 #include "mm/kmalloc.h"
 #include "lib/string.h"
+
 
 static block_cache_t cache;
 static int cache_initialized = 0;

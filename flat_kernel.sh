@@ -74,4 +74,17 @@ find "$KERNEL_DEST" -type f \( -name "*.c" -o -name "*.h" \) | while read -r fil
     perl -i -pe 's{#include\s*"[^"]*?([^"/]+)"}{#include "$1"}g' "$filepath"
 done
 
+# ── Rewrite #includes in tools/ files that reference kernel headers ──────────
+echo "Rewriting #include paths in $DEST/tools ..."
+
+find "$DEST/tools" -type f \( -name "*.c" -o -name "*.h" \) | while read -r filepath; do
+    # ../kernel/include/fs/file.h  ->  ../kernel/file.h
+    # ../kernel/include/something/file.h  ->  ../kernel/file.h
+    perl -i -pe 's{#include\s*"\.\./kernel/[^"]*?([^"/]+)"}{#include "../kernel/$1"}g' "$filepath"
+done
+
+# ── Fix Makefile include paths for flat kernel structure ─────────────────────
+# kernel/ was flattened so -Ikernel/include must become -Ikernel
+sed -i 's/-Ikernel\/include/-Ikernel/g' "$DEST/Makefile"
+
 echo "Done. Flat copy is in '$DEST'."

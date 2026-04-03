@@ -1,4 +1,3 @@
-#include "fs/tarfs.h"
 #include "fs/vfs.h"
 #include "kernel/types.h"
 #include "kernel/printk.h"
@@ -312,18 +311,7 @@ file_t *vfs_open(const char *path, int flags) {
         return NULL;
     }
 
-    // Determine file type from filesystem name
-    if (strcmp(vnode->fs_type->name, "tmpfs") == 0) {
-        f->type = FILE_TMPFS;
-    } else if (strcmp(vnode->fs_type->name, "tarfs") == 0) {
-        f->type = FILE_TARFS;
-    } else if (strcmp(vnode->fs_type->name, "ext2") == 0) {
-        f->type = FILE_TMPFS;  // Treat ext2 like tmpfs for read/write
-    } else {
-        f->type = FILE_TARFS;  // Default fallback
-    }
-
-    f->entry = NULL;
+    f->type = FILE_REGULAR;
     f->vnode = vnode;
     f->offset = 0;
     f->ref_count = 1;
@@ -352,8 +340,7 @@ int vfs_read(file_t *f, void *buf, size_t len) {
     if (!f || !buf) return -1;
 
     switch (f->type) {
-        case FILE_TARFS:
-        case FILE_TMPFS: {
+        case FILE_REGULAR: {
             if (f->vnode && f->vnode->mount && f->vnode->mount->fs_type->ops.read) {
                 int n = f->vnode->mount->fs_type->ops.read(f->vnode, buf, f->offset, len);
                 if (n > 0)
@@ -375,23 +362,22 @@ int vfs_write(file_t *f, const void *buf, size_t len) {
     if (!f || !buf) return -1;
 
     switch (f->type) {
-        case FILE_STDOUT: {
+        case FILE_STDOUT:
             return term_write(&console_term, buf, (uint32_t)len);
-        }
 
-        case FILE_TMPFS: {
-            if (f->vnode && f->vnode->mount && f->vnode->mount->fs_type->ops.write) {
-                int n = f->vnode->mount->fs_type->ops.write(f->vnode, buf, f->offset, len);
-                if (n > 0)
-                    f->offset += (size_t)n;
-                return n;
+        case FILE_REGULAR: {
+            if (!f->vnode || !f->vnode->mount) return -1;
+            fs_ops_t *ops = &f->vnode->mount->fs_type->ops;
+            if (!ops->write) {
+                printk("vfs: write to read-only filesystem '%s'\n",
+                       f->vnode->mount->fs_type->name);
+                return -1;
             }
-            return -1;
+            int n = ops->write(f->vnode, buf, f->offset, len);
+            if (n > 0)
+                f->offset += (size_t)n;
+            return n;
         }
-
-        case FILE_TARFS:
-            printk("vfs: write to read-only tarfs file\n");
-            return -1;
 
         default:
             return -1;

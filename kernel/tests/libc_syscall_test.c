@@ -80,7 +80,7 @@ static void test_sys_file_io(void) {
      */
 
     /* vfs_open works without a process context */
-    file_t *f = vfs_open("/hello.txt");
+    file_t *f = vfs_open("/hello.txt", 0);
     TEST("vfs_open /hello.txt non-NULL", f != NULL);
 
     if (f) {
@@ -109,11 +109,11 @@ static void test_sys_file_io(void) {
     }
 
     /* Open nonexistent file returns NULL */
-    file_t *bad = vfs_open("/does_not_exist_xyz.txt");
+    file_t *bad = vfs_open("/does_not_exist_xyz.txt", 0);
     TEST("vfs_open nonexistent returns NULL", bad == NULL);
 
     /* Write to tarfs file returns error (read-only filesystem) */
-    file_t *rf = vfs_open("/hello.txt");
+    file_t *rf = vfs_open("/hello.txt", 0);
     if (rf) {
         int w = vfs_write(rf, "x", 1);
         TEST("vfs_write to tarfs returns error", w < 0);
@@ -247,7 +247,7 @@ static void test_fd_init(void) {
     TEST("fd_get(999) returns NULL", fd_get(&table, 999) == NULL);
 
     /* Allocate user fd — must land at 3 */
-    file_t *f = vfs_open("/hello.txt");
+    file_t *f = vfs_open("/hello.txt", 0);
     if (f) {
         int fd = fd_alloc(&table, f);
         TEST("first user fd is 3", fd == 3);
@@ -259,7 +259,7 @@ static void test_fd_init(void) {
         TEST("fd_get after close returns NULL", fd_get(&table, fd) == NULL);
 
         /* Slot should be reusable */
-        file_t *f2 = vfs_open("/hello.txt");
+        file_t *f2 = vfs_open("/hello.txt", 0);
         if (f2) {
             int fd2 = fd_alloc(&table, f2);
             TEST("freed slot reused", fd2 == 3);

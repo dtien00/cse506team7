@@ -1,6 +1,5 @@
 // vfs.h
 #pragma once
-#include "fs/tarfs.h"
 #include "kernel/types.h"
 
 // Forward declarations
@@ -10,10 +9,9 @@ struct filesystem_type;
 
 // File types
 typedef enum {
-    FILE_TARFS,
-    FILE_TMPFS,
+    FILE_REGULAR,   // Any VFS-backed file (tarfs, tmpfs, ext2, ...)
     FILE_STDIN,
-    FILE_STDOUT
+    FILE_STDOUT,
 } file_type_t;
 
 // VFS node - represents an inode in the VFS layer
@@ -29,7 +27,6 @@ typedef struct vnode {
 
 // A generic open file
 typedef struct file {
-    tarfs_entry_t *entry;  // for FILE_TARFS
     file_type_t type;
     vnode_t *vnode;
     size_t offset;
