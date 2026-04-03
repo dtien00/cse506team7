@@ -63,7 +63,7 @@ void proc_init(void) {
     vma_init(&init->vma_list);
     fd_init(&init->fds);
 
-    // Prepare argv for /bin/echo
+    // Prepare argv for /bin/init
     static char *argv[] = { "init", NULL };
     // Set current to init so exec uses the right process
     current = init;
@@ -72,17 +72,6 @@ void proc_init(void) {
         static char *sh_argv[] = { "sh", NULL };
         if (exec("/bin/sh", sh_argv) < 0)
             printk("[init] exec failed fallback to /bin/sh\n");
-    }
-
-    // Initialize file descriptor table with stdin/stdout/stderr
-    fd_init(&init->fd_table);
-
-    // Prepare argv for /bin/echo
-    static char *argv[] = { "echo", "Hello, world!", NULL };
-    // Set current to init so exec uses the right process
-    current = init;
-    if (exec("/bin/echo", argv) < 0) {
-        printk("[init] exec failed for /bin/echo\n");
     }
 
     proc_ready(init);
@@ -119,21 +108,8 @@ struct proc* proc_create(const char *name) {
     // Initialize VMA list
     vma_init(&p->vma_list);
 
-    // do not initialize the process's file descriptor here, the caller of proc_create decide and initialize what fds the process might need
-    // ex: fork to inherit fds from parent, init to create the 0,1,2 fds
-    // fd_init(&p->fds);
-
-    // Initialize VMA list
-    vma_init(&p->vma_list);
-
-    // Initialize file descriptor table with stdin/stdout/stderr
-    fd_init(&p->fd_table);
-
-    // User-mode processes allocates a trap_frame to save/restore user registers
-    // p->trapframe = (trap_frame *)kmalloc(sizeof(trap_frame));
-    // memset(p->trapframe, 0, sizeof(trap_frame));
-
-    proc_ready(p);
+    // Caller finishes initialization (address space, trapframe, fds)
+    // and then decides when to enqueue via proc_ready().
     return p;
 }
 
@@ -352,7 +328,7 @@ void proc_start_user(struct proc *p, uint64_t entry, uint64_t user_sp) {
 
 int exec(const char *path, char *const argv[]) {
     // 1. Open the binary
-    file_t *f = vfs_open(path, 0);
+    file_t *f = vfs_open(path, 0); // just use 0 for now
     if (!f) return -1;
 
     // 2. Read and validate the ELF64 header
@@ -539,4 +515,3 @@ fail_file:
     vfs_close(f);
     return -1;
 }
-

@@ -1,21 +1,25 @@
 #pragma once
-#include <stdint.h>   // uint8_t, uint16_t, uint32_t, uint64_t, int8_t..int64_t, uintptr_t, intptr_t
-#include <stddef.h>   // ptrdiff_t
+#ifndef TYPES_H
+#define TYPES_H
 
-#ifndef __SIZE_TYPE__ // somehow size_t is undefined
-typedef unsigned long size_t;
-#else
-typedef __SIZE_TYPE__ size_t;
-#endif
+typedef unsigned char      uint8_t;
+typedef unsigned short     uint16_t;
+typedef unsigned int       uint32_t;
+typedef unsigned long long uint64_t;
+typedef long               time_t;
+typedef long long          int64_t;
+typedef int                int32_t;
+typedef short              int16_t;
+typedef signed char        int8_t;
 
-#ifndef NULL
-#define NULL ((void *)0)
-#endif
-
-// POSIX types not provided by freestanding stdint/stddef
+typedef uint64_t  uintptr_t;   // RISC-V 64-bit
+typedef int64_t   intptr_t;
+typedef long unsigned int  size_t;
 typedef int64_t   ssize_t;
-typedef int32_t   pid_t;
-typedef int64_t   off_t; // file offset (signed, supports seeking)
-typedef uint32_t  mode_t;
 
 typedef unsigned long  ino_t;   // inode number
+typedef int64_t   off_t;   // file offset (signed, supports seeking)
+
+#define NULL ((void *)0)
+
+#endif // TYPES_H

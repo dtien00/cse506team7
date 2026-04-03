@@ -8,6 +8,7 @@
 #include "mm/vmm.h"
 #include "process/process.h"
 #include "trap/trap.h"
+#include "fs/block_cache.h"
 
 
 #define MAP_FAILED ((void *) -1)
@@ -591,7 +592,7 @@ void *sys_sbrk(intptr_t increment) {
 off_t sys_lseek(int fd, off_t offset, int whence) {
     if (!current) return -1;
     
-    file_t *f = fd_get(&current->fd_table, fd);
+    file_t *f = fd_get(&current->fds, fd);
     if (!f) {
         printk("sys_lseek: invalid fd %d\n", fd);
         return -1;
