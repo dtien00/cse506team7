@@ -1,74 +1,22 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
 
 int main(void) {
     /* fds 0/1/2 already open — fd_init set them up in the kernel */
 
-    /*
-     * User-space test suite — runs before the shell so results are always
-     * visible at boot.  Each binary reports its own [PASS]/[FAIL] lines;
-     * init collects the exit codes and prints a final summary.
-     *
-     * Add new test binaries to this table.  Each entry is:
-     *   { display_name, path }
-     */
+    /* Run the test suite before starting the shell. */
     {
-        static const struct { const char *name; const char *path; } tests[] = {
-            { "libc / stdlib / malloc",  "/bin/libc_test" },
-            { "uptime / sleep / kill",   "/bin/sigtest"   },
-        };
-        static const int N_TESTS = (int)(sizeof(tests) / sizeof(tests[0]));
-
-#define SUITE_OPEN "\n========================================\n" \
-                   "       SBUnix User-Space Test Suite\n" \
-                   "========================================\n\n"
-        write(STDOUT_FILENO, SUITE_OPEN, sizeof(SUITE_OPEN) - 1);
-#undef SUITE_OPEN
-
-        int suite_failed = 0;
-
-        for (int i = 0; i < N_TESTS; i++) {
-            /* Print which suite is starting */
-            write(STDOUT_FILENO, "--- Running: ", 13);
-            write(STDOUT_FILENO, tests[i].name, strlen(tests[i].name));
-            write(STDOUT_FILENO, " ---\n", 5);
-
-            pid_t test_pid = fork();
-            if (test_pid == 0) {
-                char *argv[] = { (char *)tests[i].name, NULL };
-                execve(tests[i].path, argv, NULL);
-                /* execve failed — report and exit non-zero */
-                write(STDERR_FILENO, "init: exec failed: ", 19);
-                write(STDERR_FILENO, tests[i].path, strlen(tests[i].path));
-                write(STDERR_FILENO, "\n", 1);
-                exit(1);
-            }
-
-            if (test_pid > 0) {
-                int status = 0;
-                wait(&status);
-                if (status != 0) {
-                    write(STDOUT_FILENO, "[SUITE FAIL] ", 13);
-                    suite_failed++;
-                } else {
-                    write(STDOUT_FILENO, "[SUITE PASS] ", 13);
-                }
-                write(STDOUT_FILENO, tests[i].name, strlen(tests[i].name));
-                write(STDOUT_FILENO, "\n", 1);
-            }
+        pid_t ts_pid = fork();
+        if (ts_pid == 0) {
+            char *argv[] = { "testsuite", NULL };
+            execve("/bin/testsuite", argv, NULL);
+            write(STDERR_FILENO, "init: exec /bin/testsuite failed\n", 33);
+            exit(1);
         }
-
-#define SUITE_CLOSE "\n========================================\n" \
-                    "       Test Suite Complete\n" \
-                    "========================================\n\n"
-        write(STDOUT_FILENO, SUITE_CLOSE, sizeof(SUITE_CLOSE) - 1);
-#undef SUITE_CLOSE
-
-        if (suite_failed) {
-            write(STDOUT_FILENO, "WARN: some test suites FAILED — check output above\n\n", 52);
+        if (ts_pid > 0) {
+            int status;
+            wait(&status);
         }
         /* Always continue to the shell regardless of test outcome */
     }
