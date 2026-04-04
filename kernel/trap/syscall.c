@@ -6,6 +6,7 @@
 #include "mm/kmalloc.h"
 #include "mm/pmm.h"
 #include "mm/vmm.h"
+#include "mm/vma.h"
 #include "process/process.h"
 #include "trap/trap.h"
 
@@ -33,6 +34,14 @@ void syscall_handler(trap_frame *frame) {
             kfree(current->trapframe);
         current->trapframe = frame;
         current->trapframe_owned = 0;
+    }
+
+    // Check if this process has a fatal pending signal before handling anything.
+    // This catches processes that were signaled while running (not sleeping).
+    if (current && (current->pending_signals & KERNEL_FATAL_SIGS)) {
+        current->pending_signals = 0;
+        sys_exit(-1);
+        return; // unreachable — sys_exit calls proc_exit which never returns
     }
 
     // System call number is in a7
@@ -147,7 +156,7 @@ void syscall_handler(trap_frame *frame) {
             break;
 
         case SYS_kill:
-            ret = sys_kill((pid_t) arg0);
+            ret = sys_kill((pid_t) arg0, (int) arg1);
             break;
 
         case SYS_mmap:
@@ -161,6 +170,10 @@ void syscall_handler(trap_frame *frame) {
 
         case SYS_brk:
             ret = sys_brk((void *) arg0);
+            break;
+
+        case SYS_waitpid:
+            ret = sys_waitpid((pid_t) arg0, (int *) arg1);
             break;
 
         default:
@@ -193,11 +206,16 @@ pid_t sys_fork(void) {
             vfs_ref(child->fds.files[i]);  // bump refcount if vfs supports it
     }
 
-    // Copy parent's address space
+    // Copy parent's address space (page table + VMA list)
     child->pagetable = vmm_copy_pagetable(current->pagetable);
     if (!child->pagetable) {
         proc_free(child);
-        return -1; // Unable to create child address space as copy of the parent
+        return -1;
+    }
+    if (vma_copy_all(&child->vma_list, current->vma_list) != 0) {
+        vmm_free_pagetable(child->pagetable);
+        proc_free(child);
+        return -1;
     }
 
     // Copy parent's trap frame and register state to the child
@@ -309,8 +327,11 @@ int sys_close(int fd) {
 }
 
 pid_t sys_wait(int *status) {
-    // Use the new proc_wait implementation for process reaping and blocking
     return proc_wait(status);
+}
+
+pid_t sys_waitpid(pid_t pid, int *status) {
+    return proc_waitpid(pid, status);
 }
 
 pid_t sys_getpid(void) {
@@ -327,18 +348,38 @@ pid_t sys_getpid(void) {
 // }
 
 int sys_sleep(int seconds) {
-    printk("sys_sleep(%d) not implemented\n", seconds);
-    return -1;
-}
-
-int sys_uptime(void) {
-    // TODO: Return system uptime in ticks
+    if (seconds <= 0) return 0;
+    current->wake_tick = timer_ticks + (uint64_t)seconds * TICKS_PER_SEC;
+    proc_sleep(current);   // sleep on self; timer_handler calls proc_wakeup(p)
     return 0;
 }
 
-int sys_kill(pid_t pid) {
-    printk("sys_kill(%d) not implemented\n", pid);
-    return -1;
+int sys_uptime(void) {
+    return (int)timer_ticks;
+}
+
+int sys_kill(pid_t pid, int sig) {
+    if (sig < 0 || sig > 31) return -1;
+
+    struct proc *target = proc_find(pid);
+    if (!target || target->state == PROC_UNUSED || target->state == PROC_ZOMBIE)
+        return -1;
+
+    // sig == 0: validity check only (POSIX), no signal sent
+    if (sig == 0) return 0;
+
+    // Set the signal bit in the target's pending bitmask
+    target->pending_signals |= (1U << sig);
+
+    // Wake a blocked (sleeping) target so it re-enters the scheduler
+    // and checks pending_signals before resuming user mode.
+    // Use proc_unblock() directly rather than proc_wakeup() because
+    // proc_wakeup() only matches processes sleeping on a specific channel
+    // (e.g. it would miss a process blocked on terminal I/O with chan != target).
+    if (target->state == PROC_BLOCKED)
+        proc_unblock(target);
+
+    return 0;
 }
 
 void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset) {

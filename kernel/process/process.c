@@ -205,7 +205,7 @@ int proc_wait(int *exit_code_out) {
                 // can access user pages.
                 if (exit_code_out) {
                     set_csr_bit(sstatus, SSTATUS_SUM);
-                    *exit_code_out = child->exit_code;
+                    *exit_code_out = (child->exit_code & 0xff) << 8;
                     clear_csr_bit(sstatus, SSTATUS_SUM);
                 }
 
@@ -220,6 +220,38 @@ int proc_wait(int *exit_code_out) {
         // proc_exit() can find and unblock it.  The channel is the current
         // process pointer itself; proc_exit calls proc_wakeup(child->parent)
         // which matches any caller that slept on that same address.
+        proc_sleep(current);
+    }
+}
+
+// Wait for a specific child pid to exit.  Returns child's PID on success,
+// or -1 if the target pid is not a child of the current process.
+int proc_waitpid(pid_t target_pid, int *exit_code_out) {
+    if (!current) return -1;
+    while (1) {
+        int have_target = 0;
+        struct proc *child = current->first_child;
+        while (child) {
+            if (child->pid == target_pid) {
+                have_target = 1;
+                if (child->state == PROC_ZOMBIE) {
+                    // Remove from parent's child list
+                    struct proc **link = &current->first_child;
+                    while (*link && *link != child) link = &(*link)->sibling;
+                    if (*link == child) *link = child->sibling;
+                    if (exit_code_out) {
+                        set_csr_bit(sstatus, SSTATUS_SUM);
+                        *exit_code_out = (child->exit_code & 0xff) << 8;
+                        clear_csr_bit(sstatus, SSTATUS_SUM);
+                    }
+                    proc_free(child);
+                    return target_pid;
+                }
+                break;
+            }
+            child = child->sibling;
+        }
+        if (!have_target) return -1;  // not our child
         proc_sleep(current);
     }
 }
