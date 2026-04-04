@@ -32,10 +32,11 @@ void run_test_process(us_test_group_t *group);
 void run_test_write(us_test_group_t *group);
 void run_test_syscall(us_test_group_t *group);
 void run_test_cow(us_test_group_t *group);
+void run_test_sched(us_test_group_t *group);
 
 int main(void) {
     us_test_group_t groups[] = {
-        {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}
+        {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}
     };
 
     ut_suite_begin("SBUnix Userspace Test Suite");
@@ -50,6 +51,7 @@ int main(void) {
     run_test_write(&groups[7]);
     run_test_syscall(&groups[8]);
     run_test_cow(&groups[9]);
+    run_test_sched(&groups[10]);
 
     return ut_suite_end(groups, (int)(sizeof(groups) / sizeof(groups[0])));
 }
