@@ -324,12 +324,20 @@ static void kill_current(trap_frame *frame, const char *reason) {
 /* ── main page fault handler ─────────────────────────────────────────────
  *
  * Called from handle_exception() for the three page-fault scause codes.
+ * This function is invoked BEFORE any EXCEPTION diagnostic is printed, so
+ * faults handled successfully here produce no kernel output — in particular,
+ * COW store faults triggered by normal fork() usage are silent.
  *
  * Policy:
  *   1. Must have a current user-mode process.
- *   2. stval (faulting address) must fall inside a VMA with appropriate prot.
- *   3. If the page is already mapped, this is a protection violation → kill.
- *   4. Otherwise, demand-allocate a zeroed physical page and map it.
+ *   2. COW fast path (store fault on a PTE_COW page): promote to a private
+ *      writable copy (or re-enable write in-place if refcount == 1).
+ *      No VMA lookup needed — legitimacy was established at original map time.
+ *      This also covers heap/mmap pages that have no VMA entry.
+ *   3. stval (faulting address) must fall inside a VMA with appropriate prot.
+ *   4. If the page is already mapped but not COW, this is a real protection
+ *      violation → kill the process.
+ *   5. Otherwise, demand-allocate a zeroed physical page and map it.
  */
 void page_fault_handler(trap_frame *frame) {
     uintptr_t faulting_va = frame->stval;

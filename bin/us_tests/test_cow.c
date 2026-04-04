@@ -1,6 +1,6 @@
-#include <unistd.h>
-#include <sys/wait.h>
-#include <stdlib.h>
+#include "unistd.h"
+#include "sys/wait.h"
+#include "stdlib.h"
 #include "us_test_common.h"
 
 void run_test_cow(us_test_group_t *group) {
