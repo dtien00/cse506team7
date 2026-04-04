@@ -176,6 +176,16 @@ void handle_exception(trap_frame *frame) {
         return;
     }
 
+    // Handle page faults before printing diagnostics: COW faults are expected
+    // and handled silently by page_fault_handler.  On success it returns here;
+    // on fatal fault it calls kill_current() which never returns.
+    if (frame->scause == SCAUSE_INST_PAGE_FAULT ||
+        frame->scause == SCAUSE_LOAD_PAGE_FAULT  ||
+        frame->scause == SCAUSE_STORE_PAGE_FAULT) {
+        page_fault_handler(frame);
+        return;
+    }
+
     printk("\nEXCEPTION: scause=0x%p stval=0x%p sepc=0x%p\n", frame->scause, frame->stval, frame->sepc);
     dump_exception_diagnostics(frame);
 
@@ -209,12 +219,6 @@ void handle_exception(trap_frame *frame) {
         case SCAUSE_ECALL_FROM_S:
             printk("  System call from supervisor mode\n");
             break;
-        case SCAUSE_INST_PAGE_FAULT:
-        case SCAUSE_LOAD_PAGE_FAULT:
-        case SCAUSE_STORE_PAGE_FAULT:
-            page_fault_handler(frame);
-            // break;
-            return; // return instead of break when handling page faults
         default:
             printk("  Unknown exception\n");
             break;
@@ -334,10 +338,44 @@ void page_fault_handler(trap_frame *frame) {
     /* ── 1. Must have a user-mode process ──────────────────────────────── */
     if (!current) {
         kill_current(frame, "page fault with no current process");
-        return; /* unreachable if kill_current panics */
+        return;
     }
 
-    /* ── 2. Look up the VMA containing the faulting address ────────────── */
+    uintptr_t page_va    = PGROUNDDOWN(faulting_va);
+    uintptr_t existing_pa = vmm_translate(current->pagetable, page_va);
+
+    /* ── 2. COW fast path: handle before VMA lookup ─────────────────────
+     *
+     * A page marked PTE_COW was previously writable — its legitimacy was
+     * established at the time it was first mapped.  No VMA check needed.
+     * This also covers heap/mmap regions that have no VMA entry.
+     */
+    if (existing_pa != 0 && scause == SCAUSE_STORE_PAGE_FAULT) {
+        uint64_t *pte_ptr = vmm_walk(current->pagetable, page_va, 0);
+        if (pte_ptr && (*pte_ptr & PTE_COW)) {
+            void *old_phys = (void *)existing_pa;
+            if (pmm_refcount(old_phys) == 1) {
+                /* Last reference — re-enable write in place */
+                *pte_ptr = (*pte_ptr & ~PTE_COW) | PTE_W;
+            } else {
+                /* Shared — allocate a private copy */
+                void *new_phys = pmm_alloc_page();
+                if (!new_phys) {
+                    kill_current(frame, "COW: out of physical memory");
+                    return;
+                }
+                memcpy(new_phys, old_phys, PGSIZE);
+                pmm_decref(old_phys);
+                /* PTE_FLAGS masks to bits [9:0] — do not OR in old PA bits */
+                *pte_ptr = PA_TO_PTE((uintptr_t)new_phys)
+                         | ((PTE_FLAGS(*pte_ptr) & ~(PTE_COW | PTE_W)) | PTE_W);
+            }
+            asm volatile("sfence.vma %0, zero" :: "r"(page_va));
+            return;   /* retry the faulting instruction */
+        }
+    }
+
+    /* ── 3. Look up the VMA for demand paging and protection checks ─────── */
     struct vm_area *vma = vma_find(current->vma_list, faulting_va);
     if (!vma) {
         printk("  Faulting VA=0x%p  sp=0x%p  sepc=0x%p\n",
@@ -347,26 +385,20 @@ void page_fault_handler(trap_frame *frame) {
         return;
     }
 
-    /* ── 3. Check VMA protection matches the fault type ─────────────────── */
+    /* ── 4. Check VMA protection matches the fault type ─────────────────── */
     uint32_t need = required_prot(scause);
     if (!(vma->prot & need)) {
         kill_current(frame, "VMA protection violation");
         return;
     }
 
-    /* ── 4. If already mapped, this is a real protection fault ──────────── */
-    uintptr_t page_va = PGROUNDDOWN(faulting_va);
-    uintptr_t existing_pa = vmm_translate(current->pagetable, page_va);
+    /* ── 5. Already mapped but not COW — real protection fault ──────────── */
     if (existing_pa != 0) {
-        /*
-         * Page is mapped but we faulted — this can happen on a write to a
-         * read-only page (future CoW). For now, treat as a protection fault.
-         */
         kill_current(frame, "protection fault on already-mapped page");
         return;
     }
 
-    /* ── 5. Demand-allocate a zeroed physical page ───────────────────────── */
+    /* ── 6. Demand-allocate a zeroed physical page ───────────────────────── */
     void *phys = pmm_alloc_page();
     if (!phys) {
         kill_current(frame, "out of physical memory");
@@ -374,18 +406,13 @@ void page_fault_handler(trap_frame *frame) {
     }
     memset(phys, 0, PGSIZE);
 
-    /* ── 6. Map the new page into the current page table ─────────────────── */
+    /* ── 7. Map the new page into the current page table ─────────────────── */
     uint64_t pte_perm = vma_prot_to_pte(vma->prot);
     if (vmm_map(current->pagetable, page_va, (uintptr_t)phys, pte_perm) != 0) {
         pmm_free_page(phys);
         kill_current(frame, "vmm_map failed during demand paging");
         return;
     }
-
-    /*
-     * TLB shootdown: vmm_map (via w_satp / sfence.vma) already flushes the
-     * local TLB, so the retry of the faulting instruction will succeed.
-     */
 }
 
 // ************************************ 

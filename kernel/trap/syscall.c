@@ -6,6 +6,7 @@
 #include "mm/kmalloc.h"
 #include "mm/pmm.h"
 #include "mm/vmm.h"
+#include "mm/vma.h"
 #include "process/process.h"
 #include "trap/trap.h"
 
@@ -171,6 +172,10 @@ void syscall_handler(trap_frame *frame) {
             ret = sys_brk((void *) arg0);
             break;
 
+        case SYS_waitpid:
+            ret = sys_waitpid((pid_t) arg0, (int *) arg1);
+            break;
+
         default:
             printk("Unknown system call: %d\n", syscall_num);
             ret = -1;
@@ -201,11 +206,16 @@ pid_t sys_fork(void) {
             vfs_ref(child->fds.files[i]);  // bump refcount if vfs supports it
     }
 
-    // Copy parent's address space
+    // Copy parent's address space (page table + VMA list)
     child->pagetable = vmm_copy_pagetable(current->pagetable);
     if (!child->pagetable) {
         proc_free(child);
-        return -1; // Unable to create child address space as copy of the parent
+        return -1;
+    }
+    if (vma_copy_all(&child->vma_list, current->vma_list) != 0) {
+        vmm_free_pagetable(child->pagetable);
+        proc_free(child);
+        return -1;
     }
 
     // Copy parent's trap frame and register state to the child
@@ -317,8 +327,11 @@ int sys_close(int fd) {
 }
 
 pid_t sys_wait(int *status) {
-    // Use the new proc_wait implementation for process reaping and blocking
     return proc_wait(status);
+}
+
+pid_t sys_waitpid(pid_t pid, int *status) {
+    return proc_waitpid(pid, status);
 }
 
 pid_t sys_getpid(void) {

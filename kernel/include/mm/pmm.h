@@ -12,3 +12,6 @@ void *pmm_alloc_pages(size_t n); // Allocate n contiguous pages
 void  pmm_free_pages(void *page, size_t n); // Free n contiguous pages
 size_t pmm_free_memory(void);    // Get amount of free memory in bytes
 size_t pmm_total_memory(void);   // Get total managed memory in bytes
+void     pmm_incref(void *page);    // Increment refcount (for COW sharing)
+void     pmm_decref(void *page);    // Decrement refcount; frees page when it reaches 0
+uint16_t pmm_refcount(void *page);  // Return current refcount

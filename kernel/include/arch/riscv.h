@@ -51,6 +51,7 @@
 #define PTE_G (1UL << 5) // Global
 #define PTE_A (1UL << 6) // Accessed
 #define PTE_D (1UL << 7) // Dirty
+#define PTE_COW (1UL << 8)   // Copy-on-write (software bit)
 
 // Page table entry manipulation
 #define PTE_PPN_SHIFT 10

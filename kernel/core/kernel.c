@@ -44,6 +44,7 @@ void run_all_tests(void) {
     libc_syscall_test_run();
     timer_test_run();
     kill_test_run();
+    cow_test_run();
 
     // printk("%d passed, %d failed\n", passed, failed);
 }

@@ -100,6 +100,7 @@ struct proc* proc_create(const char *name);
 void proc_exit(int code);
 void proc_kill(struct proc *p);
 int proc_wait(int *exit_code_out);
+int proc_waitpid(pid_t target_pid, int *exit_code_out);
 
 // Scheduling
 void scheduler_init(void);
