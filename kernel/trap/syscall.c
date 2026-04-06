@@ -173,7 +173,7 @@ void syscall_handler(trap_frame *frame) {
             break;
 
         case SYS_waitpid:
-            ret = sys_waitpid((pid_t) arg0, (int *) arg1);
+            ret = sys_waitpid((pid_t) arg0, (int *) arg1, (int) arg2);
             break;
 
         default:
@@ -330,8 +330,8 @@ pid_t sys_wait(int *status) {
     return proc_wait(status);
 }
 
-pid_t sys_waitpid(pid_t pid, int *status) {
-    return proc_waitpid(pid, status);
+pid_t sys_waitpid(pid_t pid, int *status, int options) {
+    return proc_waitpid(pid, status, options);
 }
 
 pid_t sys_getpid(void) {

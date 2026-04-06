@@ -450,11 +450,11 @@ void timer_handler(void) {
             current->total_time++;
             if (current->total_time >= current->time_slice) {
                 current->total_time = 0;
-                proc_yield(); // re-queues as PROC_READY — true preemption, not termination
+                proc_yield();
                 return;
             }
         }
-        proc_yield();
+        // time_slice == 0 means non-preemptible; do NOT yield here.
     }
 }
 

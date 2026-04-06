@@ -65,7 +65,6 @@ void proc_init(void) {
 
     // Prepare argv for /bin/echo
     static char *argv[] = { "sh", NULL };
-    // Set current to init so exec uses the right process
     current = init;
     if (exec("/bin/init", argv) < 0) {
         printk("[init] exec failed for /bin/init, falling back to /bin/sh\n");
@@ -73,7 +72,6 @@ void proc_init(void) {
         if (exec("/bin/sh", sh_argv) < 0)
             printk("[init] exec failed fallback to /bin/sh\n");
     }
-
     proc_ready(init);
     current = NULL;
 }
@@ -226,7 +224,13 @@ int proc_wait(int *exit_code_out) {
 
 // Wait for a specific child pid to exit.  Returns child's PID on success,
 // or -1 if the target pid is not a child of the current process.
-int proc_waitpid(pid_t target_pid, int *exit_code_out) {
+// options: 1 = WNOHANG (return 0 immediately if no qualifying child found).
+//          2 = WUNTRACED / 8 = WCONTINUED: accepted but no-op until SIGSTOP/SIGCONT are implemented.
+int proc_waitpid(pid_t target_pid, int *exit_code_out, int options) {
+    // POSIX: pid == -1 means wait for any child.
+    if (target_pid == -1)
+        return proc_wait(exit_code_out);
+
     if (!current) return -1;
     while (1) {
         int have_target = 0;
@@ -247,11 +251,14 @@ int proc_waitpid(pid_t target_pid, int *exit_code_out) {
                     proc_free(child);
                     return target_pid;
                 }
+                // WUNTRACED (options & 2): would report PROC_STOPPED children here once SIGSTOP is added.
+                // WCONTINUED (options & 8): would report cont_unreported children here once SIGCONT is added.
                 break;
             }
             child = child->sibling;
         }
         if (!have_target) return -1;  // not our child
+        if (options & 1) return 0;    // WNOHANG: no qualifying child found, don't block
         proc_sleep(current);
     }
 }
