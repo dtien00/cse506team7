@@ -207,6 +207,18 @@ void syscall_handler(trap_frame *frame) {
             ret = sys_sigprocmask((int)arg0, (uint32_t *)arg1, (uint32_t *)arg2);
             break;
 
+        case SYS_lseek:
+            ret = (uint64_t)(int64_t)sys_lseek((int)arg0, (off_t)arg1, (int)arg2);
+            break;
+
+        case SYS_chdir:
+            ret = (uint64_t)sys_chdir((const char *)arg0);
+            break;
+
+        case SYS_getcwd:
+            ret = (uint64_t)sys_getcwd((char *)arg0, (size_t)arg1);
+            break;
+
         default:
             printk("Unknown system call: %d\n", syscall_num);
             ret = -1;
@@ -250,6 +262,7 @@ pid_t sys_fork(void) {
     }
 
     child->signal_mask = current->signal_mask; // Fork child inherits parent's signal mask
+    memcpy(child->cwd, current->cwd, MAX_PATH); // Fork child inherits parent's working directory
 
     // Copy parent's trap frame and register state to the child
     if (current->trapframe) {
@@ -788,4 +801,130 @@ int sys_sigprocmask(int how, const uint32_t *set, uint32_t *oldset) {
     new_mask &= ~((1U << KERNEL_SIGKILL) | (1U << KERNEL_SIGSTOP));
     current->signal_mask = new_mask;
     return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* sys_lseek                                                           */
+/* ------------------------------------------------------------------ */
+
+off_t sys_lseek(int fd, off_t offset, int whence) {
+    file_t *f = fd_get(&current->fds, fd);
+    if (!f) return -1;
+    return (off_t)vfs_lseek(f, (size_t)offset, whence);
+}
+
+/* ------------------------------------------------------------------ */
+/* path_resolve — build an absolute, normalized path                   */
+/*                                                                     */
+/* Resolves 'input' relative to 'base' (cwd) into 'out' (MAX_PATH).  */
+/* Handles absolute paths, ".", "..", and consecutive slashes.        */
+/* Returns 0 on success, -1 if the result would overflow MAX_PATH.   */
+/* ------------------------------------------------------------------ */
+
+static int path_resolve(const char *base, const char *input, char *out) {
+    char tmp[MAX_PATH];
+    int pos = 0;
+
+    if (input[0] == '/') {
+        /* Absolute path — copy as-is into tmp for normalization */
+        int i = 0;
+        while (input[i] && pos < MAX_PATH - 1)
+            tmp[pos++] = input[i++];
+        tmp[pos] = '\0';
+    } else {
+        /* Relative path — prepend base */
+        int i = 0;
+        while (base[i] && pos < MAX_PATH - 1)
+            tmp[pos++] = base[i++];
+        /* Add separator if base doesn't already end with '/' */
+        if (pos > 0 && tmp[pos - 1] != '/' && pos < MAX_PATH - 1)
+            tmp[pos++] = '/';
+        i = 0;
+        while (input[i] && pos < MAX_PATH - 1)
+            tmp[pos++] = input[i++];
+        tmp[pos] = '\0';
+    }
+
+    /* Normalize: walk components into out[] */
+    out[0] = '/';
+    int opos = 1;
+    out[opos] = '\0';
+
+    char *p = tmp;
+    if (*p == '/') p++;  /* skip the leading '/' we already placed */
+
+    while (*p) {
+        /* Find end of component */
+        char *slash = p;
+        while (*slash && *slash != '/') slash++;
+        int clen = (int)(slash - p);
+
+        if (clen == 0) {
+            /* consecutive slash — skip */
+        } else if (clen == 1 && p[0] == '.') {
+            /* "." — current dir, skip */
+        } else if (clen == 2 && p[0] == '.' && p[1] == '.') {
+            /* ".." — go up one level */
+            if (opos > 1) {
+                opos--;  /* back past the last written char */
+                while (opos > 1 && out[opos - 1] != '/')
+                    opos--;
+                if (opos > 1) opos--;  /* remove the preceding '/' too */
+                out[opos] = '\0';
+            }
+            /* already at root — ".." is a no-op */
+        } else {
+            /* Normal component: append '/' + component */
+            if (opos + 1 + clen >= MAX_PATH) return -1;
+            if (opos > 1) out[opos++] = '/';
+            for (int i = 0; i < clen; i++)
+                out[opos++] = p[i];
+            out[opos] = '\0';
+        }
+
+        p = *slash ? slash + 1 : slash;
+    }
+
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* sys_chdir                                                           */
+/* ------------------------------------------------------------------ */
+
+int sys_chdir(const char *path) {
+    if (!current || !path) return -1;
+
+    set_csr_bit(sstatus, SSTATUS_SUM);
+    char kpath[MAX_PATH];
+    strncpy(kpath, path, MAX_PATH - 1);
+    kpath[MAX_PATH - 1] = '\0';
+    clear_csr_bit(sstatus, SSTATUS_SUM);
+
+    char resolved[MAX_PATH];
+    if (path_resolve(current->cwd, kpath, resolved) < 0)
+        return -1;
+
+    if (!vfs_is_dir(resolved))
+        return -1;
+
+    memcpy(current->cwd, resolved, MAX_PATH);
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* sys_getcwd                                                          */
+/* ------------------------------------------------------------------ */
+
+char *sys_getcwd(char *buf, size_t size) {
+    if (!current || !buf || size == 0) return NULL;
+
+    size_t cwd_len = strlen(current->cwd);
+    if (cwd_len + 1 > size) return NULL;  /* buffer too small */
+
+    set_csr_bit(sstatus, SSTATUS_SUM);
+    memcpy(buf, current->cwd, cwd_len + 1);
+    clear_csr_bit(sstatus, SSTATUS_SUM);
+
+    return buf;
 }

@@ -28,6 +28,9 @@ extern char _tarfs_end[];
 static tarfs_entry_t entries[TARFS_MAX_ENTRIES];
 static int           entry_count = 0;
 
+// Forward declaration so the ops initializer below can reference it.
+int tarfs_is_dir(mount_t *mnt, const char *rel_path);
+
 // Filesystem type for tarfs
 static fs_type_t tarfs_type = {
     .name = "tarfs",
@@ -39,7 +42,8 @@ static fs_type_t tarfs_type = {
         .write = NULL,     // Read-only
         .create = NULL,    // Read-only
         .unlink = NULL,    // Read-only
-        .mkdir = NULL,     // Read-only
+        .mkdir  = NULL,    // Read-only
+        .is_dir = tarfs_is_dir,
     },
     .next = NULL
 };
@@ -208,4 +212,41 @@ int tarfs_read(vnode_t *vnode, void *buf, size_t offset, size_t len) {
 
     tarfs_entry_t *entry = (tarfs_entry_t *)vnode->fs_data;
     return read_entry(entry, buf, offset, len);
+}
+
+/*
+ * tarfs_is_dir — check whether rel_path names an existing directory.
+ *
+ * tarfs only indexes regular files (typeflag '0'), not directory entries
+ * (typeflag '5').  A directory is considered to exist if any indexed entry
+ * has rel_path as a path component prefix, i.e. the directory contains at
+ * least one file.  The root of the mount ("" or empty) is always a directory.
+ *
+ * Uses a character-by-character prefix scan because the kernel string library
+ * does not provide strncmp.
+ */
+int tarfs_is_dir(mount_t *mnt, const char *rel_path) {
+    (void)mnt;
+    if (!rel_path || rel_path[0] == '\0')
+        return 1;  /* root of mount is always a directory */
+
+    /* Strip leading "./" from the query path */
+    if (rel_path[0] == '.' && rel_path[1] == '/')
+        rel_path += 2;
+
+    size_t qlen = strlen(rel_path);
+
+    for (int i = 0; i < entry_count; i++) {
+        const char *name = entries[i].header->name;
+        if (name[0] == '.' && name[1] == '/')
+            name += 2;
+
+        /* Entry lives in this directory if name starts with rel_path + '/' */
+        size_t j = 0;
+        while (j < qlen && name[j] == rel_path[j])
+            j++;
+        if (j == qlen && name[j] == '/')
+            return 1;
+    }
+    return 0;
 }
