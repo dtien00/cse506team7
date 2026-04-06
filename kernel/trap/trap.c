@@ -24,6 +24,7 @@ static const char *proc_state_name(proc_state_t s) {
         case PROC_RUNNING: return "RUNNING";
         case PROC_BLOCKED: return "BLOCKED";
         case PROC_ZOMBIE:  return "ZOMBIE";
+        case PROC_STOPPED: return "STOPPED";
         default:           return "?";
     }
 }
@@ -255,6 +256,19 @@ void trap_handler(trap_frame *frame) {
     // while the parent's page table was still active; without this switch the
     // parent's sret would execute under the child's (now freed) page table.
     if (current && !(frame->sstatus & SSTATUS_SPP)) {
+        // Deliver pending signals before every return to user mode.
+        // Catches processes signaled while running in tight loops (no syscalls).
+        uint32_t pending_stop = current->pending_signals & KERNEL_STOP_SIGS;
+        if (pending_stop) {
+            current->pending_signals &= ~pending_stop;
+            proc_stop(current);  // yields; resumes after SIGCONT
+        }
+        uint32_t unmasked = current->pending_signals & ~current->signal_mask;
+        if (unmasked & KERNEL_FATAL_SIGS) {
+            current->pending_signals = 0;
+            proc_exit(-1);       // never returns
+        }
+
         // Ensure sret reenables S-mode interrupts after returning to user.
         frame->sstatus |= SSTATUS_SPIE;
         vmm_switch(current->pagetable);
@@ -450,11 +464,11 @@ void timer_handler(void) {
             current->total_time++;
             if (current->total_time >= current->time_slice) {
                 current->total_time = 0;
-                proc_yield(); // re-queues as PROC_READY — true preemption, not termination
+                proc_yield();
                 return;
             }
         }
-        proc_yield();
+        // time_slice == 0 means non-preemptible; do NOT yield here.
     }
 }
 

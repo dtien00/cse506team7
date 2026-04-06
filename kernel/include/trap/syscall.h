@@ -21,6 +21,7 @@
 #define SYS_munmap   15
 #define SYS_brk      16
 #define SYS_waitpid  17
+#define SYS_sigprocmask 20
 #define SYS_pipe     22
 #define SYS_dup      23
 #define SYS_dup2     33
@@ -51,4 +52,5 @@ int sys_pipe(int pipefd[2]);
 int sys_dup(int oldfd);
 int sys_dup2(int oldfd, int newfd);
 int sys_kill(pid_t pid, int sig);
-pid_t sys_waitpid(pid_t pid, int *status);
+pid_t sys_waitpid(pid_t pid, int *status, int options);
+int sys_sigprocmask(int how, const uint32_t *set, uint32_t *oldset);

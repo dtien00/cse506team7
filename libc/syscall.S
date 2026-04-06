@@ -29,6 +29,7 @@
 .global link
 .global symlink
 .global readlink
+.global sigprocmask
 
 mmap:
     li a7, 14
@@ -185,3 +186,7 @@ readlink:
     ecall
     ret
 
+sigprocmask:
+    li a7, 20
+    ecall
+    ret
