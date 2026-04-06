@@ -10,6 +10,10 @@
  *  2. sigprocmask blocks SIGTERM: block SIGTERM, send it to self, survive;
  *     then fork a child that unblocks and kills itself with SIGTERM, verifying
  *     the signal was actually pending and delivered upon unmask.
+ *
+ *  3. Pending signals are NOT inherited by fork children (POSIX): fork while
+ *     SIGTERM is pending+blocked in the parent; child unblocks and survives,
+ *     confirming proc_create() correctly zeros pending_signals.
  */
 
 #include <sys/wait.h>
@@ -67,9 +71,9 @@ void run_test_signal(us_test_group_t *group) {
         TEST(group, "sigprocmask: fork for unblock test succeeded", pid >= 0);
 
         if (pid == 0) {
-            /* Child unblocks SIGTERM; the inherited pending signal delivers. */
+            /* Child unblocks SIGTERM, then explicitly sends it to itself. */
             sigprocmask(SIG_UNBLOCK, &set, NULL);
-            kill(getpid(), SIGTERM); /* belt-and-suspenders: also send explicitly */
+            kill(getpid(), SIGTERM); /* send explicitly — pending_signals not inherited */
             _exit(0);                /* unreachable if SIGTERM is delivered */
         }
 
@@ -79,6 +83,45 @@ void run_test_signal(us_test_group_t *group) {
             TEST(group, "sigprocmask: child killed by SIGTERM after unblock",
                  w == pid && WIFSIGNALED(status));
             /* Parent leaves SIGTERM blocked to avoid dying from pending signal. */
+        }
+    }
+
+    /* ── 3. Pending signals are NOT inherited by fork children (POSIX) ──────
+     * The parent still has a pending (blocked) SIGTERM from test 2.
+     * Fork a child that inherits the signal mask (SIGTERM blocked), then
+     * unblocks SIGTERM.  Because proc_create() zeros pending_signals, the
+     * child has nothing pending and survives.
+     * If the kernel incorrectly copied pending_signals, the child would be
+     * killed by the delivered SIGTERM and WIFSIGNALED(status) would be true.
+     * "The set of signals pending for the child shall be initialized to the
+     * empty set." — POSIX.1-2017 fork()
+     *
+     * Note: SIGTERM must be used here (not SIGUSR1) because only signals in
+     * KERNEL_FATAL_SIGS actually kill the process — SIGUSR1 is not fatal in
+     * this kernel and would not detect the regression.
+     */
+    {
+        sigset_t term_set;
+        sigemptyset(&term_set);
+        sigaddset(&term_set, SIGTERM);
+
+        /* SIGTERM is still blocked and pending in the parent from test 2 */
+        pid_t pid = fork();
+        TEST(group, "signal-no-inherit: fork succeeded", pid >= 0);
+
+        if (pid == 0) {
+            /* Unblock SIGTERM: if pending_signals was inherited, child dies here */
+            sigprocmask(SIG_UNBLOCK, &term_set, NULL);
+            /* Still alive — pending SIGTERM was NOT inherited */
+            _exit(0);
+        }
+
+        if (pid > 0) {
+            int status = 0;
+            pid_t w = waitpid(pid, &status, 0);
+            TEST(group, "signal-no-inherit: child survived unblocking SIGTERM (not inherited)",
+                 w == pid && WIFEXITED(status) && WEXITSTATUS(status) == 0);
+            /* Parent keeps SIGTERM blocked — it still has a pending SIGTERM */
         }
     }
 

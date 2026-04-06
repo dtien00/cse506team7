@@ -78,7 +78,7 @@ void proc_test_run(void) {
         int exit_code = 0;
         int waited_pid = proc_wait(&exit_code);
         TEST("wait: correct pid", waited_pid == 101);
-        TEST("wait: correct exit code", exit_code == 42);
+        TEST("wait: correct exit code", exit_code == (42 << 8));
         // After wait, child should be freed
         TEST("wait: child reaped", child->state == PROC_UNUSED);
         // No more children — proc_wait already cleared first_child

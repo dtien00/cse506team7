@@ -90,5 +90,28 @@ void run_test_cow(us_test_group_t *group) {
 #undef NFORKS
     }
 
+    /* ── Test 4: COW on stack-allocated variable ─────────────────────────── */
+    /* The shell's first action after fork is writing to its own stack (setting
+     * up the frame for the execve call).  This test verifies that a COW fault
+     * on a stack page is handled correctly: child gets a private copy, parent
+     * retains the original value. */
+    {
+        int local = 100;
+        pid_t pid = fork();
+        TEST(group, "cow: stack-var fork succeeded", pid >= 0);
+        if (pid == 0) {
+            local = 200;   /* triggers COW fault on the stack page */
+            _exit(local == 200 ? 0 : 1);
+        }
+        if (pid > 0) {
+            int status = 0;
+            waitpid(pid, &status, 0);
+            TEST(group, "cow: child stack write isolated from parent",
+                 WIFEXITED(status) && WEXITSTATUS(status) == 0);
+            TEST(group, "cow: parent stack variable unchanged after child write",
+                 local == 100);
+        }
+    }
+
     ut_group_end(group);
 }
