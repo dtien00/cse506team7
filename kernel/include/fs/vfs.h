@@ -12,9 +12,23 @@ struct filesystem_type;
 typedef enum {
     FILE_TARFS,
     FILE_TMPFS,
+    FILE_PIPE,
     FILE_STDIN,
     FILE_STDOUT
 } file_type_t;
+
+#define PIPE_CAPACITY 4096
+#define PIPE_END_READ  0x1
+#define PIPE_END_WRITE 0x2
+
+typedef struct pipe {
+    char buffer[PIPE_CAPACITY];
+    size_t read_pos;
+    size_t write_pos;
+    size_t count;
+    int readers;
+    int writers;
+} pipe_t;
 
 // VFS node - represents an inode in the VFS layer
 typedef struct vnode {
@@ -32,6 +46,8 @@ typedef struct file {
     tarfs_entry_t *entry;  // for FILE_TARFS
     file_type_t type;
     vnode_t *vnode;
+    pipe_t *pipe;
+    int pipe_flags;
     size_t offset;
     int ref_count;
 } file_t;

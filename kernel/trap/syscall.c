@@ -172,10 +172,22 @@ void syscall_handler(trap_frame *frame) {
             ret = sys_brk((void *) arg0);
             break;
 
+        case SYS_pipe:
+            ret = sys_pipe((int *) arg0);
+            break;
+
+        case SYS_dup:
+            ret = sys_dup((int) arg0);
+            break;
+
+        case SYS_dup2:
+            ret = sys_dup2((int) arg0, (int) arg1);
+            break;
+        
         case SYS_waitpid:
             ret = sys_waitpid((pid_t) arg0, (int *) arg1);
             break;
-
+        
         default:
             printk("Unknown system call: %d\n", syscall_num);
             ret = -1;
@@ -266,6 +278,8 @@ pid_t sys_fork(void) {
 ssize_t sys_read(int fd, void *buf, size_t count) {
     file_t *f = fd_get(&current->fds, fd);
     if (!f) return -1;
+    if (f->type == FILE_PIPE)
+        return vfs_read(f, buf, count);
     set_csr_bit(sstatus, SSTATUS_SUM);
     int n = vfs_read(f, buf, count);
     clear_csr_bit(sstatus, SSTATUS_SUM);
@@ -304,6 +318,8 @@ ssize_t sys_write(int fd, const void *buf, size_t count) {
         clear_csr_bit(sstatus, SSTATUS_SUM);
         return (ssize_t)count;
     }
+    if (f->type == FILE_PIPE)
+        return vfs_write(f, buf, count);
     if (!f) return -EBADF;
     set_csr_bit(sstatus, SSTATUS_SUM);
     ssize_t n = vfs_write(f, buf, count);
@@ -326,7 +342,98 @@ int sys_close(int fd) {
     return 0;
 }
 
+int sys_pipe(int pipefd[2]) {
+    if (!current || !pipefd) return -EFAULT;
+
+    pipe_t *p = (pipe_t *)kmalloc(sizeof(pipe_t));
+    if (!p) return -ENOMEM;
+    memset(p, 0, sizeof(*p));
+    p->readers = 1;
+    p->writers = 1;
+
+    file_t *read_end = (file_t *)kmalloc(sizeof(file_t));
+    if (!read_end) {
+        kfree(p);
+        return -ENOMEM;
+    }
+    memset(read_end, 0, sizeof(*read_end));
+    read_end->type = FILE_PIPE;
+    read_end->pipe = p;
+    read_end->pipe_flags = PIPE_END_READ;
+    read_end->ref_count = 1;
+
+    file_t *write_end = (file_t *)kmalloc(sizeof(file_t));
+    if (!write_end) {
+        kfree(read_end);
+        kfree(p);
+        return -ENOMEM;
+    }
+    memset(write_end, 0, sizeof(*write_end));
+    write_end->type = FILE_PIPE;
+    write_end->pipe = p;
+    write_end->pipe_flags = PIPE_END_WRITE;
+    write_end->ref_count = 1;
+
+    int read_fd = fd_alloc(&current->fds, read_end);
+    if (read_fd < 0) {
+        kfree(write_end);
+        kfree(read_end);
+        kfree(p);
+        return -EMFILE;
+    }
+
+    int write_fd = fd_alloc(&current->fds, write_end);
+    if (write_fd < 0) {
+        current->fds.files[read_fd] = NULL;
+        kfree(write_end);
+        kfree(read_end);
+        kfree(p);
+        return -EMFILE;
+    }
+
+    set_csr_bit(sstatus, SSTATUS_SUM);
+    pipefd[0] = read_fd;
+    pipefd[1] = write_fd;
+    clear_csr_bit(sstatus, SSTATUS_SUM);
+    return 0;
+}
+
+int sys_dup(int oldfd) {
+    if (!current) return -EBADF;
+
+    file_t *f = fd_get(&current->fds, oldfd);
+    if (!f) return -EBADF;
+
+    vfs_ref(f);
+    int newfd = fd_alloc(&current->fds, f);
+    if (newfd < 0) {
+        vfs_close(f);
+        return -EMFILE;
+    }
+
+    return newfd;
+}
+
+int sys_dup2(int oldfd, int newfd) {
+    if (!current) return -EBADF;
+    if (newfd < 0 || newfd >= MAX_FDS) return -EBADF;
+
+    file_t *f = fd_get(&current->fds, oldfd);
+    if (!f) return -EBADF;
+
+    if (oldfd == newfd) return newfd;
+
+    if (fd_get(&current->fds, newfd)) {
+        fd_close(&current->fds, newfd);
+    }
+
+    vfs_ref(f);
+    current->fds.files[newfd] = f;
+    return newfd;
+}
+
 pid_t sys_wait(int *status) {
+    // Use the new proc_wait implementation for process reaping and blocking
     return proc_wait(status);
 }
 
