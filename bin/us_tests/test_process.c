@@ -61,5 +61,39 @@ void run_test_process(us_test_group_t *group) {
     w = waitpid(9999, NULL, 0);
     TEST(group, "waitpid non-child PID returns -1", w == -1);
 
+    // --- fork: child resumes at fork call point, not at program entry ---
+    // The child writes a sentinel byte through a pipe immediately after fork.
+    // If fork were broken and the child restarted from main(), it would call
+    // pipe()/fork() again and never write to this pipe — the parent's read()
+    // would block indefinitely (exactly the hang the feedback described).
+    {
+        int pipefd[2];
+        int rc = pipe(pipefd);
+        TEST(group, "fork-resume: pipe created", rc == 0);
+        if (rc == 0) {
+            pid = fork();
+            TEST(group, "fork-resume: fork succeeded", pid >= 0);
+            if (pid == 0) {
+                close(pipefd[0]);
+                char sentinel = 0x42;
+                write(pipefd[1], &sentinel, 1);
+                close(pipefd[1]);
+                _exit(0);
+            }
+            if (pid > 0) {
+                close(pipefd[1]);
+                char buf = 0;
+                ssize_t n = read(pipefd[0], &buf, 1);
+                close(pipefd[0]);
+                TEST(group, "fork-resume: child wrote sentinel (resumed at fork, not at main)",
+                     n == 1 && buf == 0x42);
+                status = 0;
+                waitpid(pid, &status, 0);
+                TEST(group, "fork-resume: child exited cleanly after fork",
+                     WIFEXITED(status) && WEXITSTATUS(status) == 0);
+            }
+        }
+    }
+
     ut_group_end(group);
 }
