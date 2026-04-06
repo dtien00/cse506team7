@@ -62,6 +62,8 @@ void proc_init(void) {
     init->context.ra = (uint64_t)proc_entry;
     vma_init(&init->vma_list);
     fd_init(&init->fds);
+    init->cwd[0] = '/';
+    init->cwd[1] = '\0';
 
     // Prepare argv for /bin/echo
     static char *argv[] = { "sh", NULL };
@@ -102,6 +104,8 @@ struct proc* proc_create(const char *name) {
     p->context.ra = (uint64_t)proc_entry;
     p->trapframe = NULL;
     p->trapframe_owned = 0;
+    p->cwd[0] = '/';
+    p->cwd[1] = '\0';
 
     // Initialize VMA list
     vma_init(&p->vma_list);

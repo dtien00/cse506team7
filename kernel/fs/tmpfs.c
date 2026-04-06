@@ -483,7 +483,8 @@ static fs_type_t tmpfs_type = {
         .write = tmpfs_write,
         .create = tmpfs_create,
         .unlink = tmpfs_unlink,
-        .mkdir = tmpfs_mkdir,
+        .mkdir  = tmpfs_mkdir,
+        .is_dir = NULL,
     },
     .next = NULL
 };

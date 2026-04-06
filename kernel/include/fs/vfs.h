@@ -62,6 +62,7 @@ typedef struct filesystem_operations {
     int (*create)(struct mount *mnt, const char *path, uint32_t mode);
     int (*unlink)(struct mount *mnt, const char *path);
     int (*mkdir)(struct mount *mnt, const char *path, uint32_t mode);
+    int (*is_dir)(struct mount *mnt, const char *rel_path);
 } fs_ops_t;
 
 // Filesystem type
@@ -99,3 +100,4 @@ int vfs_create(const char *path, uint32_t mode);
 int vfs_unlink(const char *path);
 int vfs_mkdir(const char *path, uint32_t mode);
 int vfs_lseek(file_t *f, size_t offset, int whence);
+int vfs_is_dir(const char *path);

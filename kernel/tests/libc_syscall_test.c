@@ -35,6 +35,8 @@ static void test_setup_proc(void) {
     memset(&test_proc, 0, sizeof(test_proc));
     test_proc.pid = 99;
     fd_init(&test_proc.fds);   // sets up FILE_STDIN/FILE_STDOUT entries
+    test_proc.cwd[0] = '/';
+    test_proc.cwd[1] = '\0';
     current = &test_proc;
 }
 static void test_teardown_proc(void) {
@@ -215,17 +217,13 @@ static void test_syscall_numbers(void) {
     TEST("SYS_dup   == 23", SYS_dup   == 23);
     TEST("SYS_dup2  == 33", SYS_dup2  == 33);
 
-    /*
-     * KNOWN BUG: libc/syscall.S uses a7=8 for lseek — same as SYS_exec.
-     * Document it as a failing check so it's visible in test output.
-     *
-     * SYS_exec = 8, but lseek in syscall.S also uses 8.
-     * The correct lseek number would need to be >= 17.
-     */
-    printk("  [WARN] lseek in syscall.S uses a7=8 = SYS_exec — COLLISION\n");
-    printk("  [WARN] Calling lseek() from userspace will invoke exec()\n");
-    printk("  [WARN] getcwd in syscall.S uses a7=17 but kernel has no case 17\n");
-    printk("  [WARN] getdents64 in syscall.S uses a7=61 but kernel has no case 61\n");
+    /* Collision fixes verified */
+    TEST("SYS_lseek  == 18", SYS_lseek  == 18);
+    TEST("SYS_getcwd == 19", SYS_getcwd == 19);
+    TEST("SYS_chdir  == 49", SYS_chdir  == 49);
+    TEST("SYS_lseek != SYS_exec (no collision)",     SYS_lseek  != SYS_exec);
+    TEST("SYS_getcwd != SYS_waitpid (no collision)", SYS_getcwd != SYS_waitpid);
+    printk("  [INFO] getdents64 in syscall.S uses a7=61 — kernel handler not yet implemented\n");
 }
 
 /* ------------------------------------------------------------------ */
@@ -403,6 +401,64 @@ static void test_sys_pipe_ops(void) {
 }
 
 /* ------------------------------------------------------------------ */
+/* sys_lseek / sys_chdir / sys_getcwd                                  */
+/* ------------------------------------------------------------------ */
+
+static void test_sys_lseek_chdir_getcwd(void) {
+    printk("\n=== sys_lseek / sys_chdir / sys_getcwd ===\n");
+    test_setup_proc();
+
+    /* --- lseek --- */
+    file_t *f = vfs_open("/bin/sh");
+    if (f) {
+        int fd = fd_alloc(&current->fds, f);
+        if (fd >= 0) {
+            off_t pos = sys_lseek(fd, 0, 0 /* SEEK_SET */);
+            TEST("sys_lseek SEEK_SET 0 returns 0", pos == 0);
+
+            off_t cur = sys_lseek(fd, 0, 1 /* SEEK_CUR */);
+            TEST("sys_lseek SEEK_CUR 0 returns current pos", cur == 0);
+
+            off_t bad = sys_lseek(99, 0, 0);
+            TEST("sys_lseek invalid fd returns -1", bad == (off_t)-1);
+
+            sys_close(fd);
+        } else {
+            vfs_close(f);
+        }
+    } else {
+        printk("  [INFO] /bin/sh not found in tarfs; skipping lseek file tests\n");
+    }
+
+    /* --- getcwd --- */
+    char buf[256];
+    memset(buf, 0, sizeof(buf));
+    char *r = sys_getcwd(buf, sizeof(buf));
+    TEST("sys_getcwd returns non-NULL",  r != NULL);
+    TEST("sys_getcwd initial cwd is /", r != NULL && buf[0] == '/' && buf[1] == '\0');
+
+    char tiny[1];
+    TEST("sys_getcwd tiny buffer returns NULL", sys_getcwd(tiny, 1) == NULL);
+
+    /* --- chdir --- */
+    TEST("sys_chdir / succeeds",             sys_chdir("/") == 0);
+    TEST("sys_chdir nonexistent path fails", sys_chdir("/no_such_dir_xyz") < 0);
+
+    int rc = sys_chdir("/bin");
+    if (rc == 0) {
+        memset(buf, 0, sizeof(buf));
+        r = sys_getcwd(buf, sizeof(buf));
+        TEST("getcwd after chdir /bin returns /bin",
+             r != NULL && buf[0]=='/' && buf[1]=='b' && buf[2]=='i' && buf[3]=='n' && buf[4]=='\0');
+        sys_chdir("/");  /* reset */
+    } else {
+        printk("  [INFO] /bin not in tarfs; skipping chdir /bin test\n");
+    }
+
+    test_teardown_proc();
+}
+
+/* ------------------------------------------------------------------ */
 /* Entry point                                                          */
 /* ------------------------------------------------------------------ */
 
@@ -414,6 +470,7 @@ void libc_syscall_test_run(void) {
     printk("\n");
 
     test_syscall_numbers();
+    test_sys_lseek_chdir_getcwd();
     test_sys_write();
     test_sys_file_io();
     test_fd_init();

@@ -502,3 +502,30 @@ int vfs_lseek(file_t *f, size_t offset, int whence) {
     f->offset = new_offset;
     return new_offset;
 }
+
+/*
+ * vfs_is_dir — test whether 'path' is an existing directory.
+ * Returns 1 if path is a directory, 0 if not, -1 on error.
+ * The root path "/" is always a directory.
+ */
+int vfs_is_dir(const char *path) {
+    if (!path || path[0] == '\0') return -1;
+
+    /* Root is always a directory */
+    if (path[0] == '/' && path[1] == '\0') return 1;
+
+    mount_t *mnt = vfs_find_mount(path);
+    if (!mnt || !mnt->fs_type->ops.is_dir) return 0;
+
+    /* Compute rel_path the same way vfs_lookup does */
+    const char *rel_path = path;
+    size_t mnt_len = strlen(mnt->mountpoint);
+    if (mnt_len > 1) {
+        rel_path += mnt_len;
+        if (*rel_path == '/') rel_path++;
+    } else if (mnt->mountpoint[0] == '/' && path[0] == '/') {
+        rel_path++;
+    }
+
+    return mnt->fs_type->ops.is_dir(mnt, rel_path);
+}
