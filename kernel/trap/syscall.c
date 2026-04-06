@@ -9,6 +9,7 @@
 #include "mm/vma.h"
 #include "process/process.h"
 #include "trap/trap.h"
+#include "signal.h"
 
 
 #define MAP_FAILED ((void *) -1)
@@ -36,12 +37,26 @@ void syscall_handler(trap_frame *frame) {
         current->trapframe_owned = 0;
     }
 
-    // Check if this process has a fatal pending signal before handling anything.
-    // This catches processes that were signaled while running (not sleeping).
-    if (current && (current->pending_signals & KERNEL_FATAL_SIGS)) {
-        current->pending_signals = 0;
-        sys_exit(-1);
-        return; // unreachable — sys_exit calls proc_exit which never returns
+    if (current) {
+        // SIGSTOP: cannot be masked, handle before any other signal (POSIX)
+        uint32_t pending_stop = current->pending_signals & KERNEL_STOP_SIGS;
+        if (pending_stop) {
+            current->pending_signals &= ~pending_stop;
+            proc_stop(current);
+            // Execution resumes here after SIGCONT.
+            // Re-evaluate signals — new ones may have arrived while stopped.
+        }
+
+        // Check if this process has a fatal pending signal before handling anything.
+        // This catches processes that were signaled while running (not sleeping).
+        // Fatal signals: filtered by signal_mask (except SIGKILL which can't be masked,
+        // but we enforce that in sys_sigprocmask, so signal_mask bit 9 is always 0)
+        uint32_t unmasked = current->pending_signals & ~current->signal_mask;
+        if (unmasked & KERNEL_FATAL_SIGS) {
+            current->pending_signals = 0;
+            sys_exit(-1);
+            return; // unreachable — sys_exit calls proc_exit which never returns
+        }
     }
 
     // System call number is in a7
@@ -176,6 +191,9 @@ void syscall_handler(trap_frame *frame) {
             ret = sys_waitpid((pid_t) arg0, (int *) arg1, (int) arg2);
             break;
 
+        case SYS_sigprocmask:
+            ret = sys_sigprocmask((int)arg0, (uint32_t *)arg1, (uint32_t *)arg2);
+            break;
         default:
             printk("Unknown system call: %d\n", syscall_num);
             ret = -1;
@@ -217,6 +235,8 @@ pid_t sys_fork(void) {
         proc_free(child);
         return -1;
     }
+
+    child->signal_mask = current->signal_mask; // Fork child inherits parent's signal mask
 
     // Copy parent's trap frame and register state to the child
     if (current->trapframe) {
@@ -367,6 +387,25 @@ int sys_kill(pid_t pid, int sig) {
 
     // sig == 0: validity check only (POSIX), no signal sent
     if (sig == 0) return 0;
+    
+    // SIGCONT: resume a stopped process and clear any pending SIGSTOP
+    if (sig == SIGCONT) {
+        target->pending_signals &= ~KERNEL_STOP_SIGS;
+        if (target->state == PROC_STOPPED)
+            proc_unstop(target);
+        return 0;
+    }
+
+    // SIGSTOP cannot be masked (POSIX). Act immediately when possible.
+    if (sig == SIGSTOP) {
+        target->pending_signals &= ~(1U << KERNEL_SIGCONT); // discard pending CONT
+        if (target->state == PROC_READY || target->state == PROC_BLOCKED)
+            proc_stop(target);
+        else
+            // Target is RUNNING (unreachable single-core) — defer via pending bit
+            target->pending_signals |= KERNEL_STOP_SIGS;
+        return 0;
+    }
 
     // Set the signal bit in the target's pending bitmask
     target->pending_signals |= (1U << sig);
@@ -610,4 +649,35 @@ void *sys_sbrk(intptr_t increment) {
     }
 
     return old_break;
+}
+
+int sys_sigprocmask(int how, const uint32_t *set, uint32_t *oldset) {
+    if (!current) return -1;
+
+    // set and oldset are user-space pointers — must enable SUM before dereferencing.
+    set_csr_bit(sstatus, SSTATUS_SUM);
+
+    if (oldset)
+        *oldset = current->signal_mask;
+
+    uint32_t val = 0;
+    if (set)
+        val = *set;
+
+    clear_csr_bit(sstatus, SSTATUS_SUM);
+
+    if (!set) return 0;
+    uint32_t new_mask = current->signal_mask;
+
+    switch (how) {
+        case 0: new_mask |=  val; break;   // SIG_BLOCK   = 0
+        case 1: new_mask &= ~val; break;   // SIG_UNBLOCK = 1
+        case 2: new_mask  =  val; break;   // SIG_SETMASK = 2
+        default: return -1;
+    }
+
+    // SIGKILL (9) and SIGSTOP (19) can never be masked — POSIX requirement
+    new_mask &= ~((1U << KERNEL_SIGKILL) | (1U << KERNEL_SIGSTOP));
+    current->signal_mask = new_mask;
+    return 0;
 }

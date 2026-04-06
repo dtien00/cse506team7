@@ -1,7 +1,7 @@
 #include "signal.h"
 #include "unistd.h"
 
-/* kill() and getpid() are provided by the assembly wrappers in syscall.S */
+/* kill(), getpid(), and sigprocmask() are provided by the assembly wrappers in syscall.S */
 
 int raise(int sig) {
     return kill(getpid(), sig);
@@ -49,13 +49,6 @@ int sigdelset(sigset_t *set, int signum) {
 int sigismember(const sigset_t *set, int signum) {
     if (!set || signum < 1 || signum > 31) return -1;
     return (*set & (1UL << signum)) ? 1 : 0;
-}
-
-int sigprocmask(int how, const sigset_t *set, sigset_t *oldset) {
-    (void)how;
-    (void)set;
-    (void)oldset;
-    return 0;
 }
 
 int sigpending(sigset_t *set) {

@@ -10,10 +10,21 @@
 #define KSTACK_SIZE 4096
 
 // Kernel-internal signal numbers (mirrors libc/include/signal.h)
+#define KERNEL_SIGINT    2
 #define KERNEL_SIGKILL   9
+#define KERNEL_SIGPIPE  13
 #define KERNEL_SIGTERM  15
+#define KERNEL_SIGCONT  18
+#define KERNEL_SIGSTOP  19
 // Bitmask of signals that unconditionally terminate the process
-#define KERNEL_FATAL_SIGS ((1U << KERNEL_SIGKILL) | (1U << KERNEL_SIGTERM))
+// Signals whose kernel action is proc_exit()
+// SIGPIPE is here so when pipes deliver it, action is automatic.
+// SIGINT is here so when the terminal driver delivers it, action is automatic.
+#define KERNEL_FATAL_SIGS ((1U << KERNEL_SIGKILL) | (1U << KERNEL_SIGTERM) | \
+                           (1U << KERNEL_SIGINT)  | (1U << KERNEL_SIGPIPE))
+
+// SIGSTOP cannot be masked or ignored (POSIX)
+#define KERNEL_STOP_SIGS  (1U << KERNEL_SIGSTOP)
 
 extern struct proc *current;
 extern uint8_t kstacks[][KSTACK_SIZE];
@@ -44,6 +55,7 @@ typedef enum {
     PROC_RUNNING = 3,
     PROC_BLOCKED = 4,
     PROC_ZOMBIE = 5,
+    PROC_STOPPED = 6,
 } proc_state_t;
 
 struct proc {
@@ -69,6 +81,7 @@ struct proc {
     uint64_t total_time;
     uint64_t wake_tick;      // 0 = not sleeping; >0 = timer_ticks value at which to wake
     uint32_t pending_signals; // bitmask: bit N set means signal N is pending
+    uint32_t signal_mask;
     struct proc *next;
 
     // Kernel scheduler context (callee-saved regs, used by swtch)
@@ -120,6 +133,8 @@ void proc_dump(void);
 // Sleep/wakeup channel support
 void proc_sleep(void *chan);
 void proc_wakeup(void *chan);
+void proc_stop(struct proc *p);
+void proc_unstop(struct proc *p);
 
 // Utilities
 int exec(const char *path, char *const argv[]);

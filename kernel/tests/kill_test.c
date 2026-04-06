@@ -11,6 +11,7 @@
 #include "process/process.h"
 #include "kernel/printk.h"
 #include "tests/test.h"
+#include "signal.h"
 
 static int passed = 0;
 static int failed = 0;
@@ -113,6 +114,73 @@ void kill_test_run(void) {
         TEST("kill: ZOMBIE pending_signals unchanged", p4->pending_signals == 0);
 
         proc_free(p4);
+    }
+
+    // Test: SIGSTOP on a READY process → PROC_STOPPED
+    {
+        struct proc *p = proc_alloc();
+        p->state = PROC_READY;
+        p->signal_mask = 0;
+        // Must add to ready_queue for proc_stop to remove it
+        proc_ready(p);
+        sys_kill(p->pid, SIGSTOP);
+        TEST("SIGSTOP: READY proc becomes PROC_STOPPED", p->state == PROC_STOPPED);
+        proc_free(p);
+    }
+
+    // Test: SIGCONT on a STOPPED process → PROC_READY
+    {
+        struct proc *p = proc_alloc();
+        p->state = PROC_READY;
+        p->signal_mask = 0;
+        proc_ready(p);
+        sys_kill(p->pid, SIGSTOP);   // → PROC_STOPPED
+        sys_kill(p->pid, SIGCONT);   // → PROC_READY via proc_unstop
+        TEST("SIGCONT: STOPPED proc becomes PROC_READY", p->state == PROC_READY);
+        proc_free(p);
+    }
+
+    // Test: signal_mask blocks SIGTERM (bit stays unset in pending)
+    // NOTE: POSIX says masked signals REMAIN PENDING — this test verifies the bit IS set.
+    {
+        struct proc *p = proc_alloc();
+        p->state = PROC_READY;
+        p->signal_mask = (1U << KERNEL_SIGTERM);
+        proc_ready(p);
+        sys_kill(p->pid, SIGTERM);
+        TEST("signal_mask: SIGTERM pending bit IS set (mask checked at delivery)", 
+            p->pending_signals & (1U << KERNEL_SIGTERM));
+        // Delivery check should suppress it (mask filters at delivery, not send)
+        uint32_t unmasked = p->pending_signals & ~p->signal_mask;
+        TEST("signal_mask: SIGTERM filtered at delivery", !(unmasked & (1U << KERNEL_SIGTERM)));
+        proc_free(p);
+    }
+
+    // Test: SIGKILL is never filtered by signal_mask
+    {
+        struct proc *p = proc_alloc();
+        p->state = PROC_READY;
+        p->signal_mask = 0xFFFFFFFF; // try to mask everything
+        // sys_sigprocmask enforces this; set directly to test delivery path
+        p->signal_mask &= ~((1U << KERNEL_SIGKILL) | (1U << KERNEL_SIGSTOP));
+        proc_ready(p);
+        sys_kill(p->pid, SIGKILL);
+        uint32_t unmasked = p->pending_signals & ~p->signal_mask;
+        TEST("SIGKILL: passes delivery filter even with full mask",
+            unmasked & (1U << KERNEL_SIGKILL));
+        proc_free(p);
+    }
+
+    // Test: SIGINT goes through as fatal signal
+    {
+        struct proc *p = proc_alloc();
+        p->state = PROC_READY;
+        p->signal_mask = 0;
+        proc_ready(p);
+        sys_kill(p->pid, SIGINT);
+        TEST("SIGINT: pending bit set", p->pending_signals & (1U << KERNEL_SIGINT));
+        TEST("SIGINT: classified as fatal", (p->pending_signals & ~p->signal_mask) & KERNEL_FATAL_SIGS);
+        proc_free(p);
     }
 
     printk("\n========================================\n");

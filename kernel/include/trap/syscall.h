@@ -21,6 +21,7 @@
 #define SYS_munmap   15
 #define SYS_brk      16
 #define SYS_waitpid  17
+#define SYS_sigprocmask 20
 
 // Initialize syscall subsystem
 void syscall_init(void);
@@ -46,3 +47,4 @@ void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t off
 int sys_munmap(void *addr, size_t length);
 int sys_brk(void *addr);
 pid_t sys_waitpid(pid_t pid, int *status, int options);
+int sys_sigprocmask(int how, const uint32_t *set, uint32_t *oldset);

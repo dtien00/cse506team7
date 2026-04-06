@@ -203,7 +203,10 @@ int proc_wait(int *exit_code_out) {
                 // can access user pages.
                 if (exit_code_out) {
                     set_csr_bit(sstatus, SSTATUS_SUM);
-                    *exit_code_out = (child->exit_code & 0xff) << 8;
+                    if (child->exit_code < 0)
+                        *exit_code_out = (-child->exit_code) & 0x7f;
+                    else
+                        *exit_code_out = (child->exit_code & 0xff) << 8;
                     clear_csr_bit(sstatus, SSTATUS_SUM);
                 }
 
@@ -245,7 +248,13 @@ int proc_waitpid(pid_t target_pid, int *exit_code_out, int options) {
                     if (*link == child) *link = child->sibling;
                     if (exit_code_out) {
                         set_csr_bit(sstatus, SSTATUS_SUM);
-                        *exit_code_out = (child->exit_code & 0xff) << 8;
+                        // Negative exit_code means killed by signal (POSIX convention):
+                        //   signal death → low 7 bits = signal number (WIFSIGNALED)
+                        //   normal exit  → high byte  = exit status  (WIFEXITED)
+                        if (child->exit_code < 0)
+                            *exit_code_out = (-child->exit_code) & 0x7f;
+                        else
+                            *exit_code_out = (child->exit_code & 0xff) << 8;
                         clear_csr_bit(sstatus, SSTATUS_SUM);
                     }
                     proc_free(child);
@@ -277,6 +286,7 @@ void proc_dump(void) {
                 case PROC_RUNNING:  state_str = "RUNNING"; break;
                 case PROC_BLOCKED:  state_str = "BLOCKED"; break;
                 case PROC_ZOMBIE:   state_str = "ZOMBIE"; break;
+                case PROC_STOPPED:   state_str = "STOPPED"; break;
                 default:            state_str = "UNKNOWN"; break;
             }
             printk("%3d  %-9s  %s\n", proctab[i].pid, state_str, proctab[i].name);
