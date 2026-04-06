@@ -176,6 +176,16 @@ void handle_exception(trap_frame *frame) {
         return;
     }
 
+    // Handle page faults before printing diagnostics: COW faults are expected
+    // and handled silently by page_fault_handler.  On success it returns here;
+    // on fatal fault it calls kill_current() which never returns.
+    if (frame->scause == SCAUSE_INST_PAGE_FAULT ||
+        frame->scause == SCAUSE_LOAD_PAGE_FAULT  ||
+        frame->scause == SCAUSE_STORE_PAGE_FAULT) {
+        page_fault_handler(frame);
+        return;
+    }
+
     printk("\nEXCEPTION: scause=0x%p stval=0x%p sepc=0x%p\n", frame->scause, frame->stval, frame->sepc);
     dump_exception_diagnostics(frame);
 
@@ -209,12 +219,6 @@ void handle_exception(trap_frame *frame) {
         case SCAUSE_ECALL_FROM_S:
             printk("  System call from supervisor mode\n");
             break;
-        case SCAUSE_INST_PAGE_FAULT:
-        case SCAUSE_LOAD_PAGE_FAULT:
-        case SCAUSE_STORE_PAGE_FAULT:
-            page_fault_handler(frame);
-            // break;
-            return; // return instead of break when handling page faults
         default:
             printk("  Unknown exception\n");
             break;
@@ -320,12 +324,20 @@ static void kill_current(trap_frame *frame, const char *reason) {
 /* ── main page fault handler ─────────────────────────────────────────────
  *
  * Called from handle_exception() for the three page-fault scause codes.
+ * This function is invoked BEFORE any EXCEPTION diagnostic is printed, so
+ * faults handled successfully here produce no kernel output — in particular,
+ * COW store faults triggered by normal fork() usage are silent.
  *
  * Policy:
  *   1. Must have a current user-mode process.
- *   2. stval (faulting address) must fall inside a VMA with appropriate prot.
- *   3. If the page is already mapped, this is a protection violation → kill.
- *   4. Otherwise, demand-allocate a zeroed physical page and map it.
+ *   2. COW fast path (store fault on a PTE_COW page): promote to a private
+ *      writable copy (or re-enable write in-place if refcount == 1).
+ *      No VMA lookup needed — legitimacy was established at original map time.
+ *      This also covers heap/mmap pages that have no VMA entry.
+ *   3. stval (faulting address) must fall inside a VMA with appropriate prot.
+ *   4. If the page is already mapped but not COW, this is a real protection
+ *      violation → kill the process.
+ *   5. Otherwise, demand-allocate a zeroed physical page and map it.
  */
 void page_fault_handler(trap_frame *frame) {
     uintptr_t faulting_va = frame->stval;
@@ -334,10 +346,44 @@ void page_fault_handler(trap_frame *frame) {
     /* ── 1. Must have a user-mode process ──────────────────────────────── */
     if (!current) {
         kill_current(frame, "page fault with no current process");
-        return; /* unreachable if kill_current panics */
+        return;
     }
 
-    /* ── 2. Look up the VMA containing the faulting address ────────────── */
+    uintptr_t page_va    = PGROUNDDOWN(faulting_va);
+    uintptr_t existing_pa = vmm_translate(current->pagetable, page_va);
+
+    /* ── 2. COW fast path: handle before VMA lookup ─────────────────────
+     *
+     * A page marked PTE_COW was previously writable — its legitimacy was
+     * established at the time it was first mapped.  No VMA check needed.
+     * This also covers heap/mmap regions that have no VMA entry.
+     */
+    if (existing_pa != 0 && scause == SCAUSE_STORE_PAGE_FAULT) {
+        uint64_t *pte_ptr = vmm_walk(current->pagetable, page_va, 0);
+        if (pte_ptr && (*pte_ptr & PTE_COW)) {
+            void *old_phys = (void *)existing_pa;
+            if (pmm_refcount(old_phys) == 1) {
+                /* Last reference — re-enable write in place */
+                *pte_ptr = (*pte_ptr & ~PTE_COW) | PTE_W;
+            } else {
+                /* Shared — allocate a private copy */
+                void *new_phys = pmm_alloc_page();
+                if (!new_phys) {
+                    kill_current(frame, "COW: out of physical memory");
+                    return;
+                }
+                memcpy(new_phys, old_phys, PGSIZE);
+                pmm_decref(old_phys);
+                /* PTE_FLAGS masks to bits [9:0] — do not OR in old PA bits */
+                *pte_ptr = PA_TO_PTE((uintptr_t)new_phys)
+                         | ((PTE_FLAGS(*pte_ptr) & ~(PTE_COW | PTE_W)) | PTE_W);
+            }
+            asm volatile("sfence.vma %0, zero" :: "r"(page_va));
+            return;   /* retry the faulting instruction */
+        }
+    }
+
+    /* ── 3. Look up the VMA for demand paging and protection checks ─────── */
     struct vm_area *vma = vma_find(current->vma_list, faulting_va);
     if (!vma) {
         printk("  Faulting VA=0x%p  sp=0x%p  sepc=0x%p\n",
@@ -347,26 +393,20 @@ void page_fault_handler(trap_frame *frame) {
         return;
     }
 
-    /* ── 3. Check VMA protection matches the fault type ─────────────────── */
+    /* ── 4. Check VMA protection matches the fault type ─────────────────── */
     uint32_t need = required_prot(scause);
     if (!(vma->prot & need)) {
         kill_current(frame, "VMA protection violation");
         return;
     }
 
-    /* ── 4. If already mapped, this is a real protection fault ──────────── */
-    uintptr_t page_va = PGROUNDDOWN(faulting_va);
-    uintptr_t existing_pa = vmm_translate(current->pagetable, page_va);
+    /* ── 5. Already mapped but not COW — real protection fault ──────────── */
     if (existing_pa != 0) {
-        /*
-         * Page is mapped but we faulted — this can happen on a write to a
-         * read-only page (future CoW). For now, treat as a protection fault.
-         */
         kill_current(frame, "protection fault on already-mapped page");
         return;
     }
 
-    /* ── 5. Demand-allocate a zeroed physical page ───────────────────────── */
+    /* ── 6. Demand-allocate a zeroed physical page ───────────────────────── */
     void *phys = pmm_alloc_page();
     if (!phys) {
         kill_current(frame, "out of physical memory");
@@ -374,18 +414,13 @@ void page_fault_handler(trap_frame *frame) {
     }
     memset(phys, 0, PGSIZE);
 
-    /* ── 6. Map the new page into the current page table ─────────────────── */
+    /* ── 7. Map the new page into the current page table ─────────────────── */
     uint64_t pte_perm = vma_prot_to_pte(vma->prot);
     if (vmm_map(current->pagetable, page_va, (uintptr_t)phys, pte_perm) != 0) {
         pmm_free_page(phys);
         kill_current(frame, "vmm_map failed during demand paging");
         return;
     }
-
-    /*
-     * TLB shootdown: vmm_map (via w_satp / sfence.vma) already flushes the
-     * local TLB, so the retry of the faulting instruction will succeed.
-     */
 }
 
 // ************************************ 
@@ -394,25 +429,29 @@ void page_fault_handler(trap_frame *frame) {
 
 
 // Timer interrupt handler
-static uint64_t timer_ticks = 0;
+uint64_t timer_ticks = 0;
 
 void timer_handler(void) {
     timer_ticks++;
     sbi_set_timer(read_csr(time) + TIMER_INTERVAL);
+
+    // Wake any processes whose timed sleep deadline has expired.
+    for (int i = 0; i < MAX_PROCS; i++) {
+        struct proc *p = &proctab[i];
+        if (p->state == PROC_BLOCKED && p->wake_tick != 0 && timer_ticks >= p->wake_tick) {
+            p->wake_tick = 0;
+            proc_wakeup(p);  // p slept on itself (chan == p)
+        }
+    }
 
     // Only preempt when we're actually in a running process context.
     if (current != NULL && current->state == PROC_RUNNING) {
         if (current->time_slice > 0) {
             current->total_time++;
             if (current->total_time >= current->time_slice) {
-                printk("Timer: pid %d exceeded tick budget (%llu ticks), killing\n",
-                       current->pid, current->time_slice);
-                current->state = PROC_ZOMBIE;
-                current->exit_code = -1;
-                if (current->parent)
-                    proc_wakeup(current->parent);
-                // proc_yield() below will NOT re-queue a ZOMBIE
-                // (context_switch checks state == PROC_RUNNING before re-queuing)
+                current->total_time = 0;
+                proc_yield(); // re-queues as PROC_READY — true preemption, not termination
+                return;
             }
         }
         proc_yield();

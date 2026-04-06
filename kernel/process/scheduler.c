@@ -182,6 +182,13 @@ void proc_sleep(void *chan) {
     swtch(&prev->context, &scheduler_context);
     prev->chan = NULL; // After wakeup, clear channel for the resumed proc
     interrupts_on();
+    // After wakeup: if a fatal signal is pending, terminate this process.
+    // proc_exit() does not return — it calls proc_yield() which switches
+    // back to the scheduler.
+    if (prev->pending_signals & KERNEL_FATAL_SIGS) {
+        prev->pending_signals = 0;
+        proc_exit(-1);
+    }
 }
 
 void proc_wakeup(void *chan) {

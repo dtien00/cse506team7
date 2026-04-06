@@ -59,3 +59,9 @@ void interrupts_off(void);
 // Pass in one of the constants defined above to turn on corresponding interrupts
 void interrupts_enable(uint64_t bit);
 void interrupts_disable(uint64_t bit);
+
+// Global tick counter — incremented on every timer interrupt.
+// TICKS_PER_SEC ticks elapse per wall-clock second (QEMU virt 10 MHz timebase,
+// TIMER_INTERVAL = 1 000 000 cycles → 10 ticks/s).
+extern uint64_t timer_ticks;
+#define TICKS_PER_SEC 10ULL
