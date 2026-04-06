@@ -258,7 +258,19 @@ void vmm_init(void) {
       if (vmm_map(kernel_pagetable, pa, pa, PTE_R | PTE_W) != 0)
           printk("VMM: Failed to map PLIC page at %p\n", pa);
   }
-  
+
+  // Map PCIe ECAM: 0x30000000 - 0x31000000 (bus 0 only, 16MB covers all 256 devices)
+  for (uintptr_t pa = 0x30000000; pa < 0x31000000; pa += PGSIZE) {
+      if (vmm_map(kernel_pagetable, pa, pa, PTE_R | PTE_W) != 0)
+          printk("VMM: Failed to map PCIe ECAM page at %p\n", pa);
+  }
+
+  // Map PCI MMIO window: 0x40000000 - 0x50000000 (where BARs are assigned)
+  for (uintptr_t pa = 0x40000000; pa < 0x50000000; pa += PGSIZE) {
+      if (vmm_map(kernel_pagetable, pa, pa, PTE_R | PTE_W) != 0)
+          printk("VMM: Failed to map PCI MMIO page at %p\n", pa);
+  }
+
   printk("VMM: Kernel page table created\n");
   
   // Switch to kernel page table

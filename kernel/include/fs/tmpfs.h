@@ -41,6 +41,7 @@ int tmpfs_write(vnode_t *vnode, const void *buf, size_t offset, size_t len);
 int tmpfs_create(mount_t *mnt, const char *path, uint32_t mode);
 int tmpfs_unlink(mount_t *mnt, const char *path);
 int tmpfs_mkdir(mount_t *mnt, const char *path, uint32_t mode);
+int tmpfs_truncate(vnode_t *vnode);
 
 // Get the registered tmpfs filesystem type
 fs_type_t *tmpfs_get_type(void);

@@ -7,6 +7,37 @@
 
 static fs_type_t ext2_fs_type;
 
+// Helper: Write superblock back to disk (sector 2, 2 sectors)
+static void ext2_write_superblock(ext2_mount_data_t *mnt) {
+    uint8_t *sb_buf = (uint8_t *)kmalloc(1024);
+    if (!sb_buf) return;
+    memset(sb_buf, 0, 1024);
+    memcpy(sb_buf, mnt->sb, sizeof(ext2_superblock_t));
+    virtio_blk_write(2, sb_buf, 2);
+    kfree(sb_buf);
+}
+
+// Helper: Write group descriptor table back to disk (block 2 for 1KB blocks)
+static void ext2_write_gdt(ext2_mount_data_t *mnt) {
+    uint32_t gdt_block = (mnt->block_size == 1024) ? 2 : 1;
+    uint32_t gdt_size = mnt->groups_count * sizeof(ext2_group_desc_t);
+
+    // GDT may span multiple blocks; write one block at a time
+    uint32_t blocks_needed = (gdt_size + mnt->block_size - 1) / mnt->block_size;
+    uint8_t *buf = (uint8_t *)kmalloc(mnt->block_size);
+    if (!buf) return;
+
+    for (uint32_t b = 0; b < blocks_needed; b++) {
+        memset(buf, 0, mnt->block_size);
+        uint32_t off = b * mnt->block_size;
+        uint32_t copy = gdt_size - off;
+        if (copy > mnt->block_size) copy = mnt->block_size;
+        memcpy(buf, (uint8_t *)mnt->group_desc + off, copy);
+        block_cache_write(gdt_block + b, buf);
+    }
+    kfree(buf);
+}
+
 // Helper: Read an inode from disk
 static int ext2_read_inode(ext2_mount_data_t *mnt, uint32_t ino, ext2_inode_t *inode) {
     if (ino == 0) return -1;
@@ -127,11 +158,15 @@ static uint32_t ext2_alloc_block(ext2_mount_data_t *mnt) {
                         
                         // Write back bitmap
                         block_cache_write(bitmap_block, bitmap);
-                        
+
                         // Update group descriptor
                         mnt->group_desc[group].bg_free_blocks_count--;
                         mnt->sb->s_free_blocks_count--;
-                        
+
+                        // Persist superblock and GDT
+                        ext2_write_superblock(mnt);
+                        ext2_write_gdt(mnt);
+
                         kfree(bitmap);
                         return block_num;
                     }
@@ -178,11 +213,15 @@ static uint32_t ext2_alloc_inode(ext2_mount_data_t *mnt) {
                         
                         // Write back bitmap
                         block_cache_write(bitmap_block, bitmap);
-                        
+
                         // Update group descriptor
                         mnt->group_desc[group].bg_free_inodes_count--;
                         mnt->sb->s_free_inodes_count--;
-                        
+
+                        // Persist superblock and GDT
+                        ext2_write_superblock(mnt);
+                        ext2_write_gdt(mnt);
+
                         kfree(bitmap);
                         return ino;
                     }
@@ -253,7 +292,7 @@ int ext2_mount(mount_t *mnt, const char *source) {
                               ext2_mnt->sb->s_blocks_per_group - 1) / 
                              ext2_mnt->sb->s_blocks_per_group;
     
-    printk("ext2: block_size=%u, groups=%u, inodes=%u, blocks=%u\n",
+    printk("ext2: block_size=%d, groups=%d, inodes=%d, blocks=%d\n",
            ext2_mnt->block_size, ext2_mnt->groups_count,
            ext2_mnt->sb->s_inodes_count, ext2_mnt->sb->s_blocks_count);
     
@@ -304,7 +343,11 @@ int ext2_unmount(mount_t *mnt) {
     
     // Flush all cached blocks
     block_cache_flush();
-    
+
+    // Write superblock and GDT back to disk
+    ext2_write_superblock(ext2_mnt);
+    ext2_write_gdt(ext2_mnt);
+
     // Free mount data
     if (ext2_mnt->group_desc) kfree(ext2_mnt->group_desc);
     if (ext2_mnt->sb) kfree(ext2_mnt->sb);
@@ -788,7 +831,7 @@ int ext2_create(mount_t *mnt, const char *path, uint32_t mode) {
     kfree(parent_vnode);
     kfree(path_copy);
     
-    printk("ext2: created file %s (inode %u)\n", path, new_ino);
+    printk("ext2: created file %s (inode %d)\n", path, new_ino);
     return 0;
 }
 

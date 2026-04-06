@@ -34,6 +34,9 @@
 #define VIRTIO_STATUS_FEATURES_OK       8
 #define VIRTIO_STATUS_FAILED            128
 
+// VirtIO transport feature bits (in feature word 1)
+#define VIRTIO_F_VERSION_1              (1 << 0)  // bit 32 of full feature set; select=1, bit=0
+
 // VirtIO block device feature bits
 #define VIRTIO_BLK_F_SIZE_MAX           1
 #define VIRTIO_BLK_F_SEG_MAX            2
@@ -115,20 +118,43 @@ typedef struct virtio_blk_config {
     uint32_t blk_size;      // Block size
 } virtio_blk_config_t;
 
+// VirtIO PCI CommonCfg layout (VirtIO spec 1.1 section 4.1.4.3)
+typedef struct virtio_pci_common_cfg {
+    uint32_t device_feature_select;
+    uint32_t device_feature;
+    uint32_t driver_feature_select;
+    uint32_t driver_feature;
+    uint16_t config_msix_vector;
+    uint16_t num_queues;
+    uint8_t  device_status;
+    uint8_t  config_generation;
+    uint16_t queue_select;
+    uint16_t queue_size;
+    uint16_t queue_msix_vector;
+    uint16_t queue_enable;
+    uint16_t queue_notify_off;
+    uint64_t queue_desc;
+    uint64_t queue_driver;
+    uint64_t queue_device;
+} __attribute__((packed)) virtio_pci_common_cfg_t;
+
 // VirtIO block device state
 typedef struct virtio_blk_device {
-    volatile uint32_t *mmio_base;  // MMIO base address
-    virtq_desc_t *desc;            // Descriptor table
-    virtq_avail_t *avail;          // Available ring
-    virtq_used_t *used;            // Used ring
+    volatile virtio_pci_common_cfg_t *common_cfg;  // PCI CommonCfg region
+    uintptr_t notify_addr;                          // Notify register address
+    volatile uint32_t *dev_cfg;                    // Device-specific config region
+    volatile virtq_desc_t *desc;   // Descriptor table
+    volatile virtq_avail_t *avail; // Available ring
+    volatile virtq_used_t *used;   // Used ring
     uint16_t last_used_idx;        // Last processed used index
     uint64_t capacity;             // Device capacity in sectors
     uint32_t block_size;           // Block size (usually 512)
 } virtio_blk_dev_t;
 
 // Function declarations
-int virtio_blk_init(uintptr_t mmio_base);
+int virtio_blk_init(void);
 int virtio_blk_read(uint64_t sector, void *buf, size_t count);
 int virtio_blk_write(uint64_t sector, const void *buf, size_t count);
 int virtio_blk_flush(void);
 uint64_t virtio_blk_get_capacity(void);
+void virtio_blk_irq(void);  // called by trap handler on virtio IRQ

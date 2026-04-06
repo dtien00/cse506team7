@@ -10,6 +10,7 @@
 #include "lib/kstring.h"   // memset
 #include "drivers/plic.h"
 #include "drivers/uart.h"
+#include "drivers/virtio.h"
 
 #define TIMER_INTERVAL 1000000ULL // ~0.1 second at 10 MHz clock
 
@@ -143,18 +144,18 @@ static void handle_interrupt(trap_frame *frame) {
             timer_handler();
             break;
 
-        case SCAUSE_S_EXTERNAL_INT:
-            // printk("External interrupt\n");
+        case SCAUSE_S_EXTERNAL_INT: {
             uint32_t irq = plic_claim();
             if (irq == PLIC_UART_IRQ) {
-                // handle the interrupt - adds to the driver's char buffer which a waiting read() can query later
                 uart_handle_interrupt();
+            } else if (irq == PLIC_VIRTIO_IRQ) {
+                virtio_blk_irq();
             }
-            // complete the interrupt
             if (irq != 0) {
                 plic_complete(irq);
             }
             break;
+        }
 
         default:
             printk("Unknown interrupt: %d\n", interrupt_code);

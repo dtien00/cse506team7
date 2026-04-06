@@ -469,6 +469,15 @@ int tmpfs_mkdir(mount_t *mnt, const char *path, uint32_t mode) {
     return 0;
 }
 
+int tmpfs_truncate(vnode_t *vnode) {
+    if (!vnode) return -1;
+    tmpfs_inode_t *inode = (tmpfs_inode_t *)vnode->fs_data;
+    if (!inode || inode->type != TMPFS_TYPE_FILE) return -1;
+    inode->size = 0;
+    vnode->size = 0;
+    return 0;
+}
+
 // -----------------------------------------------------------------------------
 // tmpfs filesystem type registration
 // -----------------------------------------------------------------------------
@@ -484,6 +493,7 @@ static fs_type_t tmpfs_type = {
         .create = tmpfs_create,
         .unlink = tmpfs_unlink,
         .mkdir = tmpfs_mkdir,
+        .truncate = tmpfs_truncate,
     },
     .next = NULL
 };

@@ -167,7 +167,7 @@ int block_cache_flush_block(uint32_t block_num) {
     // Write to disk
     uint64_t sector = block_num * 2;
     if (virtio_blk_write(sector, cb->data, 2) != 0) {
-        printk("block_cache: failed to flush block %u\n", block_num);
+        printk("block_cache: failed to flush block %d\n", block_num);
         return -1;
     }
     

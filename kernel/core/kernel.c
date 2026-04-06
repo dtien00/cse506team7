@@ -9,6 +9,9 @@
 #include "fs/vfs.h"
 #include "fs/tarfs.h"
 #include "fs/tmpfs.h"
+#include "fs/ext2.h"
+#include "fs/block_cache.h"
+#include "drivers/virtio.h"
 #include "kernel/types.h"
 #include "drivers/drivers.h"
 #include "kernel/console.h"
@@ -111,6 +114,17 @@ void boot(uint64_t hart_id, uint64_t dtb) {
     if (vfs_mount(NULL, "/tmp", "tmpfs") < 0) {
         printk("FATAL: failed to mount tmpfs at '/tmp'\n");
         boot_fallback_to_idle();
+    }
+    // Initialize block storage and mount ext2 at /mnt
+    // Discovers virtio-blk via PCIe ECAM enumeration (vendor 0x1AF4, device 0x1042)
+    if (virtio_blk_init() < 0) {
+        printk("WARNING: virtio block device init failed, /mnt will be unavailable\n");
+    } else {
+        block_cache_init();
+        ext2_init();
+        if (vfs_mount(NULL, "/mnt", "ext2") < 0) {
+            printk("WARNING: failed to mount ext2 at '/mnt'\n");
+        }
     }
 
     syscall_init();

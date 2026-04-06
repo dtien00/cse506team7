@@ -235,13 +235,19 @@ vnode_t *vfs_lookup(const char *path) {
 }
 
 int vfs_create(const char *path, uint32_t mode) {
+    printk("path: %s\n", path);
     if (!path) return -1;
 
     mount_t *mnt = vfs_find_mount(path);
-    if (!mnt) return -1;
-
+    if (!mnt){
+        printk("mount not found.\n");
+        return -1;
+    }
     const char *rel_path = path + strlen(mnt->mountpoint);
     if (*rel_path == '/') rel_path++;
+
+    printk("mount: %s\n", mnt->mountpoint);
+    printk("mount type: %s\n", mnt->fs_type->name);
 
     if (mnt->fs_type->ops.create) {
         return mnt->fs_type->ops.create(mnt, rel_path, mode);
@@ -299,9 +305,23 @@ void vfs_ref(file_t *f) {
 
 file_t *vfs_open(const char *path, int flags) {
     vnode_t *vnode = vfs_lookup(path);
+
     if (!vnode) {
-        printk("vfs: file not found: %s\n", path);
-        return NULL;
+        printk("vfs: no vnode found.\n");
+        if (!(flags & O_CREAT)) {
+            printk("  ->  vfs: file not found: %s\n", path);
+            return NULL;
+        }
+        printk("Attempting to create new file ...\n");
+        if (vfs_create(path, 0644) < 0) {
+            printk("  ->  vfs: O_CREAT failed for: %s\n", path);
+            return NULL;
+        }
+        vnode = vfs_lookup(path);
+        if (!vnode) {
+            printk("  ->  vfs: lookup after create failed: %s\n", path);
+            return NULL;
+        }
     }
 
     file_t *f = kmalloc(sizeof(file_t));
@@ -315,8 +335,19 @@ file_t *vfs_open(const char *path, int flags) {
     f->vnode = vnode;
     f->offset = 0;
     f->ref_count = 1;
-    f->flags = flags;
+    f->flags = flags; // not used right now
     vnode->ref_count++;
+
+    if ((flags & O_TRUNC) && (flags & (O_WRONLY | O_RDWR))) {
+        if (vnode->mount && vnode->mount->fs_type->ops.truncate)
+            vnode->mount->fs_type->ops.truncate(vnode);
+    }
+
+    if (flags & O_APPEND){
+        f->offset = vnode->size;
+    }
+
+    printk("vfs: opened file '%s'\n", path);
 
     return f;
 }
