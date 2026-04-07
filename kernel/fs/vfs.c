@@ -5,7 +5,6 @@
 #include "kernel/types.h"
 #include "kernel/printk.h"
 #include "mm/kmalloc.h"
-#include "mm/pool.h"
 #include "lib/string.h"
 #include "process/process.h"
 #include "tty/term.h"
@@ -20,10 +19,6 @@
 
 static fs_type_t *fs_types = NULL;  // Linked list of registered filesystems
 static mount_t *mounts = NULL;      // Linked list of mount points
-
-// file-scope pool declarations for pool allocator
-POOL_DECLARE(fs_struct_pool);
-static dentry_t *vfs_root = NULL;
 
 static void vfs_dump_mounts(void) {
     mount_t *curr = mounts;
@@ -47,8 +42,6 @@ static void vfs_dump_mounts(void) {
 void vfs_init(void) {
     fs_types = NULL;
     mounts = NULL;
-    dentry_pool_init();
-    POOL_INIT(fs_struct_pool, fs_struct_t, 64); // as max number of processes is 64
     printk("vfs: initialized\n");
 }
 
@@ -128,23 +121,18 @@ int vfs_mount(const char *source, const char *target, const char *fstype) {
     mnt->next = NULL;
 
     // Call filesystem-specific mount operation
-    vnode_t *root_vnode = fs->ops.mount(mnt, source);
-    if (!root_vnode) {
-        printk("vfs: mount failed for '%s'\n", fstype);
-        kfree(mnt);
-        return -1;
+    if (fs->ops.mount) {
+        int ret = fs->ops.mount(mnt, source);
+        if (ret < 0) {
+            printk("vfs: mount operation failed for '%s'\n", fstype);
+            kfree(mnt);
+            return -1;
+        }
     }
-
-    // create root dentry for this mount and store it on the mount itself
-    mnt->root = dentry_alloc("/", root_vnode, NULL);
 
     // Add to mount list
     mnt->next = mounts;
     mounts = mnt;
-
-    // global VFS root is the root of the "/" mount
-    if (strcmp(target, "/") == 0)
-        vfs_root = mnt->root;
 
     printk("vfs: mounted '%s' at '%s' (type: %s)\n",
            source ? source : "none", target, fstype);
@@ -220,9 +208,7 @@ mount_t *vfs_find_mount(const char *path) {
 // VFS-level operations
 // -----------------------------------------------------------------------------
 
-dentry_t *vfs_get_root(void) { return vfs_root; }
-
-dentry_t *vfs_lookup(const char *path) {
+vnode_t *vfs_lookup(const char *path) {
     if (!path) return NULL;
 
     mount_t *mnt = vfs_find_mount(path);
@@ -244,40 +230,12 @@ dentry_t *vfs_lookup(const char *path) {
         rel_path++;  // Skip leading slash for root mount
     }
 
-    // ask the filesystem if this thing exists → vnode
-    vnode_t *vnode = mnt->fs_type->ops.lookup(mnt, rel_path);
-    if (!vnode) return NULL;
-
-    // extract last component name
-    const char *last = path;
-    for (const char *p = path; *p; p++)
-        if (*p == '/' && *(p + 1)) last = p + 1;
-    const char *name = (path[0] == '/' && path[1] == '\0') ? "/" : last;
-
-    // determine parent
-    dentry_t *parent = NULL;
-    // d_parent: root is its own parent; everything else recurses up
-    if (path[0] == '/' && path[1] == '\0') {
-        parent = NULL;   // we are root
-    } else {
-        char parent_path[256];
-        if (dentry_get_parent_path(path, parent_path, sizeof(parent_path)) < 0)
-            return NULL;  // root
-
-        parent = vfs_lookup(parent_path);   // d_ref = 0
-        if (!parent) parent = vfs_root;
-        dentry_get(parent);                 // child owns a ref to parent
+    // Call filesystem-specific lookup
+    if (mnt->fs_type->ops.lookup) {
+        return mnt->fs_type->ops.lookup(mnt, rel_path);
     }
 
-    // create dentry
-    // dentry_alloc: sets d_ref=0, copies name, sets d_parent
-    dentry_t *d = dentry_alloc(name, vnode, parent);
-    if (!d) {
-        if (parent) dentry_put(parent);   // undo the get on failure
-        kfree(vnode);
-        return NULL;
-    }
-    return d; // d_ref still 0, unowned — caller calls dentry_get if keeping it
+    return NULL;
 }
 
 int vfs_create(const char *path, uint32_t mode) {
@@ -340,12 +298,12 @@ void vfs_ref(file_t *f) {
 }
 
 // -----------------------------------------------------------------------------
-// File operations
+// File operations (backward compatible with existing code)
 // -----------------------------------------------------------------------------
 
 file_t *vfs_open(const char *path) {
-    dentry_t *dentry = vfs_lookup(path);
-    if (!dentry) {
+    vnode_t *vnode = vfs_lookup(path);
+    if (!vnode) {
         printk("vfs: file not found: %s\n", path);
         return NULL;
     }
@@ -353,25 +311,26 @@ file_t *vfs_open(const char *path) {
     file_t *f = kmalloc(sizeof(file_t));
     if (!f) {
         printk("vfs: kmalloc failed in vfs_open\n");
-        dentry_put(dentry);
+        kfree(vnode);
         return NULL;
     }
 
     // Determine file type from filesystem name
-    if (strcmp(dentry->d_vnode->fs_type->name, "tmpfs") == 0) {
+    if (strcmp(vnode->fs_type->name, "tmpfs") == 0) {
         f->type = FILE_TMPFS;
-    } else if (strcmp(dentry->d_vnode->fs_type->name, "tarfs") == 0) {
+    } else if (strcmp(vnode->fs_type->name, "tarfs") == 0) {
         f->type = FILE_TARFS;
     } else {
         f->type = FILE_TARFS;  // Default fallback
     }
 
+    f->entry = NULL;
+    f->vnode = vnode;
     f->pipe = NULL;
     f->pipe_flags = 0;
     f->offset = 0;
     f->ref_count = 1;
-    dentry_get(dentry);
-    f->dentry = dentry;
+    vnode->ref_count++;
 
     return f;
 }
@@ -379,13 +338,8 @@ file_t *vfs_open(const char *path) {
 void vfs_close(file_t *f) {
     if (!f) return;
 
-    if (f->ref_count <= 0) {
-        printk("vfs: double-close detected (ref_count=%d)\n", f->ref_count);
-        return;
-    }
-
     f->ref_count--;
-    if (f->ref_count == 0) {
+    if (f->ref_count <= 0) {
         if (f->type == FILE_PIPE && f->pipe) {
             pipe_t *p = f->pipe;
             if (f->pipe_flags & PIPE_END_READ) {
@@ -399,9 +353,11 @@ void vfs_close(file_t *f) {
                 kfree(p);
             }
         }
-        if (f->dentry) {
-            dentry_put(f->dentry);
-            f->dentry = NULL;
+        if (f->vnode) {
+            f->vnode->ref_count--;
+            if (f->vnode->ref_count <= 0) {
+                kfree(f->vnode);
+            }
         }
         kfree(f);
     }
@@ -413,8 +369,8 @@ int vfs_read(file_t *f, void *buf, size_t len) {
     switch (f->type) {
         case FILE_TARFS:
         case FILE_TMPFS: {
-            if (f->dentry->d_vnode && f->dentry->d_vnode->mount && f->dentry->d_vnode->mount->fs_type->ops.read) {
-                int n = f->dentry->d_vnode->mount->fs_type->ops.read(f->dentry->d_vnode, buf, f->offset, len);
+            if (f->vnode && f->vnode->mount && f->vnode->mount->fs_type->ops.read) {
+                int n = f->vnode->mount->fs_type->ops.read(f->vnode, buf, f->offset, len);
                 if (n > 0)
                     f->offset += (size_t)n;
                 return n;
@@ -499,8 +455,8 @@ int vfs_write(file_t *f, const void *buf, size_t len) {
         }
 
         case FILE_TMPFS: {
-            if (f->dentry->d_vnode && f->dentry->d_vnode->mount && f->dentry->d_vnode->mount->fs_type->ops.write) {
-                int n = f->dentry->d_vnode->mount->fs_type->ops.write(f->dentry->d_vnode, buf, f->offset, len);
+            if (f->vnode && f->vnode->mount && f->vnode->mount->fs_type->ops.write) {
+                int n = f->vnode->mount->fs_type->ops.write(f->vnode, buf, f->offset, len);
                 if (n > 0)
                     f->offset += (size_t)n;
                 return n;
@@ -530,8 +486,8 @@ int vfs_lseek(file_t *f, size_t offset, int whence) {
             new_offset = f->offset + offset;
             break;
         case SEEK_END:
-            if (f->dentry && f->dentry->d_vnode)
-                new_offset = f->dentry->d_vnode->size + offset;
+            if (f->vnode)
+                new_offset = f->vnode->size + offset;
             else
                 return -1;
             break;
@@ -540,7 +496,7 @@ int vfs_lseek(file_t *f, size_t offset, int whence) {
     }
 
     // Bound seek by vnode size for regular VFS-backed files.
-    if (f->dentry && f->dentry->d_vnode && new_offset > f->dentry->d_vnode->size)
+    if (f->vnode && new_offset > f->vnode->size)
         return -1;
 
     f->offset = new_offset;
@@ -553,106 +509,23 @@ int vfs_lseek(file_t *f, size_t offset, int whence) {
  * The root path "/" is always a directory.
  */
 int vfs_is_dir(const char *path) {
-    dentry_t *d = vfs_lookup(path);
-    return d && d->d_vnode->type == VNODE_DIR;
-}
+    if (!path || path[0] == '\0') return -1;
 
-// -----------------------------------------------------------------------------
-// fs_struct operations (at a process level)
-// -----------------------------------------------------------------------------
+    /* Root is always a directory */
+    if (path[0] == '/' && path[1] == '\0') return 1;
 
-void fs_struct_dump(const fs_struct_t *fs) {
-    if (!fs) {
-        printk("[fs_struct] NULL\n");
-        return;
+    mount_t *mnt = vfs_find_mount(path);
+    if (!mnt || !mnt->fs_type->ops.is_dir) return 0;
+
+    /* Compute rel_path the same way vfs_lookup does */
+    const char *rel_path = path;
+    size_t mnt_len = strlen(mnt->mountpoint);
+    if (mnt_len > 1) {
+        rel_path += mnt_len;
+        if (*rel_path == '/') rel_path++;
+    } else if (mnt->mountpoint[0] == '/' && path[0] == '/') {
+        rel_path++;
     }
 
-    char root_path[256];
-    char cwd_path[256];
-
-    if (!fs->root) {
-        printk("[fs_struct] root=NULL\n");
-    } else {
-        dentry_build_path(fs->root, fs->root, root_path, 256);
-        printk("[fs_struct] root=%s (dentry=%p, d_ref=%d)\n",
-               root_path, fs->root, fs->root->d_ref);
-    }
-
-    if (!fs->cwd) {
-        printk("[fs_struct] cwd=NULL\n");
-    } else {
-        dentry_build_path(fs->cwd, fs->root, cwd_path, 256);
-        printk("[fs_struct] cwd=%s (dentry=%p, d_ref=%d)\n",
-               cwd_path, fs->cwd, fs->cwd->d_ref);
-    }
-}
-
-fs_struct_t *fs_struct_alloc(void) {
-    fs_struct_t *fs = POOL_ALLOC(fs_struct_pool, fs_struct_t);
-    if (fs) { fs->root = NULL; fs->cwd = NULL; }
-    return fs;
-}
-
-fs_struct_t *fs_struct_copy(fs_struct_t *src) {
-    if (!src) return NULL;
-    fs_struct_t *fs = POOL_ALLOC(fs_struct_pool, fs_struct_t);
-    if (!fs) return NULL;
-    fs->root = src->root;
-    fs->cwd  = src->cwd;
-    dentry_get(fs->root);   // root slot owns a ref
-    dentry_get(fs->cwd);    // cwd slot owns a ref — even if same dentry as root
-    return fs;
-}
-
-void fs_struct_free(fs_struct_t *fs) {
-    if (!fs) return;
-    dentry_put(fs->cwd);    // release cwd slot's ref
-    dentry_put(fs->root);   // release root slot's ref
-    POOL_FREE(fs_struct_pool, fs);
-}
-
-// vfs.c — implementations
-
-int fs_struct_set_cwd(fs_struct_t *fs, const char *abs_path) {
-    if (!fs || !abs_path) return -1;
-
-    dentry_t *d = vfs_lookup(abs_path);
-    if (!d) return -ENOENT;
-
-    if (d->d_vnode->type != VNODE_DIR) {
-        dentry_put(d);
-        return -ENOTDIR;
-    }
-
-    dentry_get(d);          // cwd slot acquires ownership
-    dentry_put(fs->cwd);    // release old slot
-    fs->cwd = d;
-    return 0;
-}
-
-int fs_struct_set_root(fs_struct_t *fs, const char *abs_path) {
-    if (!fs || !abs_path) return -1;
-
-    dentry_t *d = vfs_lookup(abs_path);
-    if (!d) return -ENOENT;
-
-    if (d->d_vnode->type != VNODE_DIR) {
-        dentry_put(d);
-        return -ENOTDIR;
-    }
-
-    dentry_get(d);
-    dentry_put(fs->root);
-    fs->root = d;
-    return 0;
-}
-
-int fs_struct_get_cwd(fs_struct_t *fs, char *buf, size_t size) {
-    if (!fs) return -1;
-    return dentry_build_path(fs->cwd, fs->root, buf, size);
-}
-
-int fs_struct_get_root(fs_struct_t *fs, char *buf, size_t size) {
-    if (!fs) return -1;
-    return dentry_build_path(fs->root, fs->root, buf, size);
+    return mnt->fs_type->ops.is_dir(mnt, rel_path);
 }

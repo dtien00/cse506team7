@@ -4,11 +4,11 @@
 #include "mm/vmm.h"
 #include "trap/trap.h"
 #include "fs/file.h"
-#include "fs/vfs.h"
 
 #define MAX_PROCS 64
 #define MAX_NAME 16
 #define KSTACK_SIZE 4096
+#define MAX_PATH    256
 
 // Kernel-internal signal numbers (mirrors libc/include/signal.h)
 #define KERNEL_SIGINT    2
@@ -100,10 +100,8 @@ struct proc {
     // File Descriptor table
     fd_table_t fds;
 
-    fs_struct_t *fs;
-
     // Working directory (absolute path, always starts with '/')
-    // char cwd[MAX_PATH];
+    char cwd[MAX_PATH];
 };
 
 extern struct proc proctab[];
