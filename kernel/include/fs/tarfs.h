@@ -43,8 +43,7 @@ void tarfs_init(void);
 struct filesystem_type *tarfs_get_type(void);
 
 // VFS interface
-int tarfs_mount(struct mount *mnt, const char *source);
+struct vnode *tarfs_mount(struct mount *mnt, const char *source);
 int tarfs_unmount(struct mount *mnt);
 struct vnode *tarfs_lookup(struct mount *mnt, const char *path);
 int tarfs_read(struct vnode *vnode, void *buf, size_t offset, size_t len);
-int tarfs_is_dir(struct mount *mnt, const char *rel_path);

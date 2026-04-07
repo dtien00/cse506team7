@@ -5,11 +5,11 @@
 // Physical Memory Manager using bitmap allocation
 // Each bit represents one 4KB page
 
-static uint8_t *bitmap = NULL;
-static uint16_t *refcounts;
-static uintptr_t mem_start_addr = 0;
-static size_t total_pages = 0;
-static size_t free_pages = 0;
+static uint8_t * volatile bitmap = NULL;
+static uint16_t * volatile refcounts;
+static volatile uintptr_t mem_start_addr = 0;
+static volatile size_t total_pages = 0;
+static volatile size_t free_pages = 0;
 
 // Helper: set a bit in the bitmap
 static inline void bitmap_set(size_t bit) {
