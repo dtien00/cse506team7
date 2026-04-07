@@ -38,6 +38,7 @@ static void proc_entry(void) {
 struct proc* proc_alloc(void) {
     for (int i = 0; i < MAX_PROCS; i++) {
         if (proctab[i].state == PROC_UNUSED) {
+            memset(&proctab[i], 0, sizeof(proctab[i]));
             proctab[i].state = PROC_CREATED;   // mark as taken immediately
             return &proctab[i];
         }
