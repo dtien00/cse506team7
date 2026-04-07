@@ -129,14 +129,13 @@ struct proc *proc_next_ready(void) {
 
 void proc_block(struct proc *p) {
     p->state = PROC_BLOCKED;
-    if (ready_queue && ready_queue->pid == p->pid) {
+    if (ready_queue == p) {
         ready_queue = ready_queue->next;
-        p->next = NULL;
     } else {
         struct proc *cur = ready_queue;
         struct proc *prev = NULL;
         while (cur) {
-            if (cur->pid == p->pid) {
+            if (cur == p) {
                 prev->next = cur->next;
                 break;
             }
@@ -144,6 +143,7 @@ void proc_block(struct proc *p) {
             cur = cur->next;
         }
     }
+    p->next = NULL;
     if (blocked_queue == NULL) {
         blocked_queue = p;
     } else {
@@ -154,12 +154,12 @@ void proc_block(struct proc *p) {
 }
 
 void proc_unblock(struct proc *p) {
-    if (blocked_queue && blocked_queue->pid == p->pid) {
+    if (blocked_queue == p) {
         blocked_queue = blocked_queue->next;
     } else {
         struct proc *c = blocked_queue;
         while (c && c->next) {
-            if (c->next->pid == p->pid) {
+            if (c->next == p) {
                 c->next = c->next->next;
                 break;
             }
@@ -216,12 +216,12 @@ void proc_wakeup(void *chan) {
 void proc_stop(struct proc *p) {
     // Remove from ready_queue if present
     if (p->state == PROC_READY) {
-        if (ready_queue && ready_queue->pid == p->pid) {
+        if (ready_queue == p) {
             ready_queue = ready_queue->next;
         } else {
             struct proc *cur = ready_queue, *prev = NULL;
             while (cur) {
-                if (cur->pid == p->pid) { prev->next = cur->next; break; }
+                if (cur == p) { prev->next = cur->next; break; }
                 prev = cur; cur = cur->next;
             }
         }
@@ -229,12 +229,12 @@ void proc_stop(struct proc *p) {
     }
     // Remove from blocked_queue if present
     else if (p->state == PROC_BLOCKED) {
-        if (blocked_queue && blocked_queue->pid == p->pid) {
+        if (blocked_queue == p) {
             blocked_queue = blocked_queue->next;
         } else {
             struct proc *c = blocked_queue;
             while (c && c->next) {
-                if (c->next->pid == p->pid) { c->next = c->next->next; break; }
+                if (c->next == p) { c->next = c->next->next; break; }
                 c = c->next;
             }
         }
