@@ -24,6 +24,7 @@
 #include "mm/pmm.h"
 #include "mm/vmm.h"
 #include "tests/test.h"
+#include "errno.h"
 #include "lib/string.h"
 
 static int passed = 0;
@@ -34,6 +35,8 @@ static void test_setup_proc(void) {
     memset(&test_proc, 0, sizeof(test_proc));
     test_proc.pid = 99;
     fd_init(&test_proc.fds);   // sets up FILE_STDIN/FILE_STDOUT entries
+    test_proc.cwd[0] = '/';
+    test_proc.cwd[1] = '\0';
     current = &test_proc;
 }
 static void test_teardown_proc(void) {
@@ -210,18 +213,17 @@ static void test_syscall_numbers(void) {
     TEST("SYS_mmap  == 14", SYS_mmap  == 14);
     TEST("SYS_munmap == 15",SYS_munmap == 15);
     TEST("SYS_brk   == 16", SYS_brk   == 16);
+    TEST("SYS_pipe  == 22", SYS_pipe  == 22);
+    TEST("SYS_dup   == 23", SYS_dup   == 23);
+    TEST("SYS_dup2  == 33", SYS_dup2  == 33);
 
-    /*
-     * KNOWN BUG: libc/syscall.S uses a7=8 for lseek — same as SYS_exec.
-     * Document it as a failing check so it's visible in test output.
-     *
-     * SYS_exec = 8, but lseek in syscall.S also uses 8.
-     * The correct lseek number would need to be >= 17.
-     */
-    printk("  [WARN] lseek in syscall.S uses a7=8 = SYS_exec — COLLISION\n");
-    printk("  [WARN] Calling lseek() from userspace will invoke exec()\n");
-    printk("  [WARN] getcwd in syscall.S uses a7=17 but kernel has no case 17\n");
-    printk("  [WARN] getdents64 in syscall.S uses a7=61 but kernel has no case 61\n");
+    /* Collision fixes verified */
+    TEST("SYS_lseek  == 18", SYS_lseek  == 18);
+    TEST("SYS_getcwd == 19", SYS_getcwd == 19);
+    TEST("SYS_chdir  == 49", SYS_chdir  == 49);
+    TEST("SYS_lseek != SYS_exec (no collision)",     SYS_lseek  != SYS_exec);
+    TEST("SYS_getcwd != SYS_waitpid (no collision)", SYS_getcwd != SYS_waitpid);
+    printk("  [INFO] getdents64 in syscall.S uses a7=61 — kernel handler not yet implemented\n");
 }
 
 /* ------------------------------------------------------------------ */
@@ -273,6 +275,190 @@ static void test_fd_init(void) {
 }
 
 /* ------------------------------------------------------------------ */
+/* sys_dup / sys_dup2                                                 */
+/* ------------------------------------------------------------------ */
+
+static void test_sys_dup_ops(void) {
+    printk("\n=== sys_dup / sys_dup2 ===\n");
+
+    test_setup_proc();
+
+    int dup_stdout = sys_dup(1);
+    TEST("sys_dup(stdout) returns first free fd", dup_stdout == 3);
+    TEST("dup'd fd points at same file object",
+         dup_stdout >= 0 && fd_get(&current->fds, dup_stdout) == fd_get(&current->fds, 1));
+
+    file_t *stdout_file = fd_get(&current->fds, 1);
+    TEST("dup increments ref_count",
+         stdout_file != NULL && stdout_file->ref_count == 2);
+
+    int same_fd = sys_dup2(1, 1);
+    TEST("sys_dup2(fd, fd) returns fd", same_fd == 1);
+    TEST("dup2(fd, fd) leaves ref_count unchanged",
+         stdout_file != NULL && stdout_file->ref_count == 2);
+
+    int replace_fd = sys_dup2(0, dup_stdout);
+    TEST("sys_dup2(stdin, 3) returns target fd", replace_fd == dup_stdout);
+    TEST("target fd now aliases stdin",
+         replace_fd >= 0 && fd_get(&current->fds, replace_fd) == fd_get(&current->fds, 0));
+    TEST("replacing dup target drops old stdout alias ref",
+         stdout_file != NULL && stdout_file->ref_count == 1);
+
+    file_t *stdin_file = fd_get(&current->fds, 0);
+    TEST("dup2 increments new aliased file ref_count",
+         stdin_file != NULL && stdin_file->ref_count == 2);
+
+    TEST("sys_dup invalid oldfd returns error", sys_dup(99) < 0);
+    TEST("sys_dup2 invalid oldfd returns error", sys_dup2(99, 4) < 0);
+    TEST("sys_dup2 invalid newfd returns error", sys_dup2(0, MAX_FDS) < 0);
+
+    test_teardown_proc();
+}
+
+/* ------------------------------------------------------------------ */
+/* sys_pipe                                                            */
+/* ------------------------------------------------------------------ */
+
+static void test_sys_pipe_ops(void) {
+    printk("\n=== sys_pipe ===\n");
+    char buf[32];
+
+    test_setup_proc();
+
+    int pipefd[2] = {-1, -1};
+    int rc = sys_pipe(pipefd);
+    TEST("sys_pipe returns 0", rc == 0);
+    TEST("pipe read fd is first free slot", pipefd[0] == 3);
+    TEST("pipe write fd is next free slot", pipefd[1] == 4);
+    TEST("pipe ends are distinct", pipefd[0] != pipefd[1]);
+
+    file_t *read_end = fd_get(&current->fds, pipefd[0]);
+    file_t *write_end = fd_get(&current->fds, pipefd[1]);
+    TEST("pipe read end exists", read_end != NULL && read_end->type == FILE_PIPE);
+    TEST("pipe write end exists", write_end != NULL && write_end->type == FILE_PIPE);
+    TEST("pipe ends share same backing pipe",
+         read_end != NULL && write_end != NULL && read_end->pipe == write_end->pipe);
+    TEST("pipe read end is marked read-only",
+         read_end != NULL && (read_end->pipe_flags & PIPE_END_READ) != 0);
+    TEST("pipe write end is marked write-only",
+         write_end != NULL && (write_end->pipe_flags & PIPE_END_WRITE) != 0);
+
+    memset(buf, 0, sizeof(buf));
+    TEST("sys_read on pipe write end fails", sys_read(pipefd[1], buf, 1) < 0);
+    TEST("sys_write on pipe read end fails", sys_write(pipefd[0], "x", 1) < 0);
+
+    const char *msg = "hello pipe";
+    ssize_t nw = sys_write(pipefd[1], msg, strlen(msg));
+    TEST("sys_write to pipe writes full payload", nw == (ssize_t)strlen(msg));
+
+    memset(buf, 0, sizeof(buf));
+    ssize_t nr = sys_read(pipefd[0], buf, 5);
+    TEST("sys_read from pipe can read a partial payload", nr == 5);
+    buf[5] = '\0';
+    TEST("pipe preserves first partial chunk", strcmp(buf, "hello") == 0);
+
+    memset(buf, 0, sizeof(buf));
+    nr = sys_read(pipefd[0], buf, strlen(msg) - 5);
+    TEST("sys_read from pipe reads remaining payload", nr == (ssize_t)(strlen(msg) - 5));
+    TEST("pipe preserves remaining bytes", strcmp(buf, " pipe") == 0);
+
+    int dup_read = sys_dup(pipefd[0]);
+    TEST("sys_dup(pipe read end) returns next free fd", dup_read == 5);
+    TEST("dup'd pipe read end aliases same file object",
+         dup_read >= 0 && fd_get(&current->fds, dup_read) == read_end);
+
+    int dup_write_target = sys_dup2(pipefd[1], 1);
+    TEST("sys_dup2(pipe write end, 1) returns target fd", dup_write_target == 1);
+    TEST("fd 1 now aliases pipe write end", fd_get(&current->fds, 1) == write_end);
+
+    sys_close(pipefd[1]);
+    sys_close(1);
+
+    memset(buf, 0, sizeof(buf));
+    nr = sys_read(pipefd[0], buf, sizeof(buf));
+    TEST("read after closing all writers returns EOF", nr == 0);
+
+    sys_close(dup_read);
+    sys_close(pipefd[0]);
+
+    test_teardown_proc();
+
+    test_setup_proc();
+
+    pipefd[0] = -1;
+    pipefd[1] = -1;
+    rc = sys_pipe(pipefd);
+    TEST("second sys_pipe returns 0", rc == 0);
+    TEST("second pipe allocates read fd 3", pipefd[0] == 3);
+    TEST("second pipe allocates write fd 4", pipefd[1] == 4);
+
+    sys_close(pipefd[0]);
+    TEST("write after closing all readers returns EPIPE",
+         sys_write(pipefd[1], "z", 1) == -EPIPE);
+
+    sys_close(pipefd[1]);
+    test_teardown_proc();
+}
+
+/* ------------------------------------------------------------------ */
+/* sys_lseek / sys_chdir / sys_getcwd                                  */
+/* ------------------------------------------------------------------ */
+
+static void test_sys_lseek_chdir_getcwd(void) {
+    printk("\n=== sys_lseek / sys_chdir / sys_getcwd ===\n");
+    test_setup_proc();
+
+    /* --- lseek --- */
+    file_t *f = vfs_open("/bin/sh");
+    if (f) {
+        int fd = fd_alloc(&current->fds, f);
+        if (fd >= 0) {
+            off_t pos = sys_lseek(fd, 0, 0 /* SEEK_SET */);
+            TEST("sys_lseek SEEK_SET 0 returns 0", pos == 0);
+
+            off_t cur = sys_lseek(fd, 0, 1 /* SEEK_CUR */);
+            TEST("sys_lseek SEEK_CUR 0 returns current pos", cur == 0);
+
+            off_t bad = sys_lseek(99, 0, 0);
+            TEST("sys_lseek invalid fd returns -1", bad == (off_t)-1);
+
+            sys_close(fd);
+        } else {
+            vfs_close(f);
+        }
+    } else {
+        printk("  [INFO] /bin/sh not found in tarfs; skipping lseek file tests\n");
+    }
+
+    /* --- getcwd --- */
+    char buf[256];
+    memset(buf, 0, sizeof(buf));
+    char *r = sys_getcwd(buf, sizeof(buf));
+    TEST("sys_getcwd returns non-NULL",  r != NULL);
+    TEST("sys_getcwd initial cwd is /", r != NULL && buf[0] == '/' && buf[1] == '\0');
+
+    char tiny[1];
+    TEST("sys_getcwd tiny buffer returns NULL", sys_getcwd(tiny, 1) == NULL);
+
+    /* --- chdir --- */
+    TEST("sys_chdir / succeeds",             sys_chdir("/") == 0);
+    TEST("sys_chdir nonexistent path fails", sys_chdir("/no_such_dir_xyz") < 0);
+
+    int rc = sys_chdir("/bin");
+    if (rc == 0) {
+        memset(buf, 0, sizeof(buf));
+        r = sys_getcwd(buf, sizeof(buf));
+        TEST("getcwd after chdir /bin returns /bin",
+             r != NULL && buf[0]=='/' && buf[1]=='b' && buf[2]=='i' && buf[3]=='n' && buf[4]=='\0');
+        sys_chdir("/");  /* reset */
+    } else {
+        printk("  [INFO] /bin not in tarfs; skipping chdir /bin test\n");
+    }
+
+    test_teardown_proc();
+}
+
+/* ------------------------------------------------------------------ */
 /* Entry point                                                          */
 /* ------------------------------------------------------------------ */
 
@@ -284,9 +470,12 @@ void libc_syscall_test_run(void) {
     printk("\n");
 
     test_syscall_numbers();
+    test_sys_lseek_chdir_getcwd();
     test_sys_write();
     test_sys_file_io();
     test_fd_init();
+    test_sys_dup_ops();
+    test_sys_pipe_ops();
     test_sys_getpid();
     test_sys_mmap();
 

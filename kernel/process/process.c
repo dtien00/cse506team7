@@ -62,10 +62,11 @@ void proc_init(void) {
     init->context.ra = (uint64_t)proc_entry;
     vma_init(&init->vma_list);
     fd_init(&init->fds);
+    init->cwd[0] = '/';
+    init->cwd[1] = '\0';
 
     // Prepare argv for /bin/echo
     static char *argv[] = { "sh", NULL };
-    // Set current to init so exec uses the right process
     current = init;
     if (exec("/bin/init", argv) < 0) {
         printk("[init] exec failed for /bin/init, falling back to /bin/sh\n");
@@ -73,7 +74,6 @@ void proc_init(void) {
         if (exec("/bin/sh", sh_argv) < 0)
             printk("[init] exec failed fallback to /bin/sh\n");
     }
-
     proc_ready(init);
     current = NULL;
 }
@@ -104,6 +104,8 @@ struct proc* proc_create(const char *name) {
     p->context.ra = (uint64_t)proc_entry;
     p->trapframe = NULL;
     p->trapframe_owned = 0;
+    p->cwd[0] = '/';
+    p->cwd[1] = '\0';
 
     // Initialize VMA list
     vma_init(&p->vma_list);
@@ -205,7 +207,10 @@ int proc_wait(int *exit_code_out) {
                 // can access user pages.
                 if (exit_code_out) {
                     set_csr_bit(sstatus, SSTATUS_SUM);
-                    *exit_code_out = child->exit_code;
+                    if (child->exit_code < 0)
+                        *exit_code_out = (-child->exit_code) & 0x7f;
+                    else
+                        *exit_code_out = (child->exit_code & 0xff) << 8;
                     clear_csr_bit(sstatus, SSTATUS_SUM);
                 }
 
@@ -224,6 +229,53 @@ int proc_wait(int *exit_code_out) {
     }
 }
 
+// Wait for a specific child pid to exit.  Returns child's PID on success,
+// or -1 if the target pid is not a child of the current process.
+// options: 1 = WNOHANG (return 0 immediately if no qualifying child found).
+//          2 = WUNTRACED / 8 = WCONTINUED: accepted but no-op until SIGSTOP/SIGCONT are implemented.
+int proc_waitpid(pid_t target_pid, int *exit_code_out, int options) {
+    // POSIX: pid == -1 means wait for any child.
+    if (target_pid == -1)
+        return proc_wait(exit_code_out);
+
+    if (!current) return -1;
+    while (1) {
+        int have_target = 0;
+        struct proc *child = current->first_child;
+        while (child) {
+            if (child->pid == target_pid) {
+                have_target = 1;
+                if (child->state == PROC_ZOMBIE) {
+                    // Remove from parent's child list
+                    struct proc **link = &current->first_child;
+                    while (*link && *link != child) link = &(*link)->sibling;
+                    if (*link == child) *link = child->sibling;
+                    if (exit_code_out) {
+                        set_csr_bit(sstatus, SSTATUS_SUM);
+                        // Negative exit_code means killed by signal (POSIX convention):
+                        //   signal death → low 7 bits = signal number (WIFSIGNALED)
+                        //   normal exit  → high byte  = exit status  (WIFEXITED)
+                        if (child->exit_code < 0)
+                            *exit_code_out = (-child->exit_code) & 0x7f;
+                        else
+                            *exit_code_out = (child->exit_code & 0xff) << 8;
+                        clear_csr_bit(sstatus, SSTATUS_SUM);
+                    }
+                    proc_free(child);
+                    return target_pid;
+                }
+                // WUNTRACED (options & 2): would report PROC_STOPPED children here once SIGSTOP is added.
+                // WCONTINUED (options & 8): would report cont_unreported children here once SIGCONT is added.
+                break;
+            }
+            child = child->sibling;
+        }
+        if (!have_target) return -1;  // not our child
+        if (options & 1) return 0;    // WNOHANG: no qualifying child found, don't block
+        proc_sleep(current);
+    }
+}
+
 void proc_dump(void) {
     printk("\nProcess table:\n");
     printk("PID  State      Name\n");
@@ -238,6 +290,7 @@ void proc_dump(void) {
                 case PROC_RUNNING:  state_str = "RUNNING"; break;
                 case PROC_BLOCKED:  state_str = "BLOCKED"; break;
                 case PROC_ZOMBIE:   state_str = "ZOMBIE"; break;
+                case PROC_STOPPED:   state_str = "STOPPED"; break;
                 default:            state_str = "UNKNOWN"; break;
             }
             printk("%3d  %-9s  %s\n", proctab[i].pid, state_str, proctab[i].name);

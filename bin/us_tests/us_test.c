@@ -30,13 +30,17 @@ void run_test_malloc(us_test_group_t *group);
 void run_test_file_io(us_test_group_t *group);
 void run_test_process(us_test_group_t *group);
 void run_test_write(us_test_group_t *group);
+void run_test_syscall(us_test_group_t *group);
+void run_test_cow(us_test_group_t *group);
+void run_test_sched(us_test_group_t *group);
+void run_test_signal(us_test_group_t *group);
 
 int main(void) {
     us_test_group_t groups[] = {
-        {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}
+        {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}
     };
 
-    ut_suite_begin("libc Userspace Test Suite");
+    ut_suite_begin("SBUnix Userspace Test Suite");
 
     run_test_printf(&groups[0]);
     run_test_string(&groups[1]);
@@ -46,6 +50,10 @@ int main(void) {
     run_test_file_io(&groups[5]);
     run_test_process(&groups[6]);
     run_test_write(&groups[7]);
+    run_test_syscall(&groups[8]);
+    run_test_cow(&groups[9]);
+    run_test_sched(&groups[10]);
+    run_test_signal(&groups[11]);
 
     return ut_suite_end(groups, (int)(sizeof(groups) / sizeof(groups[0])));
 }

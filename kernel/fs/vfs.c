@@ -1,9 +1,12 @@
 #include "fs/tarfs.h"
 #include "fs/vfs.h"
+#include "errno.h"
+#include "arch/riscv.h"
 #include "kernel/types.h"
 #include "kernel/printk.h"
 #include "mm/kmalloc.h"
 #include "lib/string.h"
+#include "process/process.h"
 #include "tty/term.h"
 
 #define SEEK_SET 0
@@ -323,6 +326,8 @@ file_t *vfs_open(const char *path) {
 
     f->entry = NULL;
     f->vnode = vnode;
+    f->pipe = NULL;
+    f->pipe_flags = 0;
     f->offset = 0;
     f->ref_count = 1;
     vnode->ref_count++;
@@ -335,6 +340,19 @@ void vfs_close(file_t *f) {
 
     f->ref_count--;
     if (f->ref_count <= 0) {
+        if (f->type == FILE_PIPE && f->pipe) {
+            pipe_t *p = f->pipe;
+            if (f->pipe_flags & PIPE_END_READ) {
+                p->readers--;
+            }
+            if (f->pipe_flags & PIPE_END_WRITE) {
+                p->writers--;
+            }
+            proc_wakeup(p);
+            if (p->readers <= 0 && p->writers <= 0) {
+                kfree(p);
+            }
+        }
         if (f->vnode) {
             f->vnode->ref_count--;
             if (f->vnode->ref_count <= 0) {
@@ -363,6 +381,34 @@ int vfs_read(file_t *f, void *buf, size_t len) {
         case FILE_STDIN:
             return term_read(&console_term, buf, (uint32_t)len);
 
+        case FILE_PIPE: {
+            pipe_t *p = f->pipe;
+            char *dst = (char *)buf;
+            size_t nread = 0;
+
+            if (!p || !(f->pipe_flags & PIPE_END_READ))
+                return -1;
+
+            while (nread < len) {
+                while (p->count == 0) {
+                    if (p->writers <= 0) {
+                        return (int)nread;
+                    }
+                    proc_sleep(p);
+                }
+
+                set_csr_bit(sstatus, SSTATUS_SUM);
+                dst[nread] = p->buffer[p->read_pos];
+                clear_csr_bit(sstatus, SSTATUS_SUM);
+                nread++;
+                p->read_pos = (p->read_pos + 1) % PIPE_CAPACITY;
+                p->count--;
+                proc_wakeup(p);
+            }
+
+            return (int)nread;
+        }
+
         default:
             return -1;
     }
@@ -374,6 +420,38 @@ int vfs_write(file_t *f, const void *buf, size_t len) {
     switch (f->type) {
         case FILE_STDOUT: {
             return term_write(&console_term, buf, (uint32_t)len);
+        }
+
+        case FILE_PIPE: {
+            pipe_t *p = f->pipe;
+            const char *src = (const char *)buf;
+            size_t nwritten = 0;
+
+            if (!p || !(f->pipe_flags & PIPE_END_WRITE))
+                return -1;
+
+            while (nwritten < len) {
+                if (p->readers <= 0) {
+                    return nwritten > 0 ? (int)nwritten : -EPIPE;
+                }
+
+                while (p->count == PIPE_CAPACITY) {
+                    if (p->readers <= 0) {
+                        return nwritten > 0 ? (int)nwritten : -EPIPE;
+                    }
+                    proc_sleep(p);
+                }
+
+                set_csr_bit(sstatus, SSTATUS_SUM);
+                p->buffer[p->write_pos] = src[nwritten];
+                clear_csr_bit(sstatus, SSTATUS_SUM);
+                nwritten++;
+                p->write_pos = (p->write_pos + 1) % PIPE_CAPACITY;
+                p->count++;
+                proc_wakeup(p);
+            }
+
+            return (int)nwritten;
         }
 
         case FILE_TMPFS: {
@@ -423,4 +501,31 @@ int vfs_lseek(file_t *f, size_t offset, int whence) {
 
     f->offset = new_offset;
     return new_offset;
+}
+
+/*
+ * vfs_is_dir — test whether 'path' is an existing directory.
+ * Returns 1 if path is a directory, 0 if not, -1 on error.
+ * The root path "/" is always a directory.
+ */
+int vfs_is_dir(const char *path) {
+    if (!path || path[0] == '\0') return -1;
+
+    /* Root is always a directory */
+    if (path[0] == '/' && path[1] == '\0') return 1;
+
+    mount_t *mnt = vfs_find_mount(path);
+    if (!mnt || !mnt->fs_type->ops.is_dir) return 0;
+
+    /* Compute rel_path the same way vfs_lookup does */
+    const char *rel_path = path;
+    size_t mnt_len = strlen(mnt->mountpoint);
+    if (mnt_len > 1) {
+        rel_path += mnt_len;
+        if (*rel_path == '/') rel_path++;
+    } else if (mnt->mountpoint[0] == '/' && path[0] == '/') {
+        rel_path++;
+    }
+
+    return mnt->fs_type->ops.is_dir(mnt, rel_path);
 }

@@ -84,7 +84,7 @@ void proc_yield(void) {
     if (current == NULL) return;
     struct proc *prev = current;
     current = NULL;
-    if (prev->state != PROC_ZOMBIE)
+    if (prev->state != PROC_ZOMBIE && prev->state != PROC_STOPPED)
         proc_ready(prev); // sets state + enqueues
     swtch(&prev->context, &scheduler_context);
 }
@@ -182,6 +182,26 @@ void proc_sleep(void *chan) {
     swtch(&prev->context, &scheduler_context);
     prev->chan = NULL; // After wakeup, clear channel for the resumed proc
     interrupts_on();
+
+    // After wakeup: if a fatal signal is pending, terminate this process.
+    // proc_exit() does not return — it calls proc_yield() which switches
+    // back to the scheduler.
+
+    // SIGSTOP: process was woken (e.g., by SIGKILL delivery) but also has a
+    // pending stop. Stop takes priority — re-block as STOPPED before checking fatal.
+    uint32_t pending_stop = prev->pending_signals & KERNEL_STOP_SIGS;
+    if (pending_stop) {
+        prev->pending_signals &= ~pending_stop;
+        proc_stop(prev);
+        // Resumes here after SIGCONT.
+    }
+
+    // Fatal signals - respect signal mask
+    uint32_t unmasked = prev->pending_signals & ~prev->signal_mask;
+    if (unmasked & KERNEL_FATAL_SIGS) {
+        prev->pending_signals = 0;
+        proc_exit(-1);
+    }
 }
 
 void proc_wakeup(void *chan) {
@@ -191,4 +211,50 @@ void proc_wakeup(void *chan) {
             proc_unblock(p);
         }
     }
+}
+
+void proc_stop(struct proc *p) {
+    // Remove from ready_queue if present
+    if (p->state == PROC_READY) {
+        if (ready_queue && ready_queue->pid == p->pid) {
+            ready_queue = ready_queue->next;
+        } else {
+            struct proc *cur = ready_queue, *prev = NULL;
+            while (cur) {
+                if (cur->pid == p->pid) { prev->next = cur->next; break; }
+                prev = cur; cur = cur->next;
+            }
+        }
+        p->next = NULL;
+    }
+    // Remove from blocked_queue if present
+    else if (p->state == PROC_BLOCKED) {
+        if (blocked_queue && blocked_queue->pid == p->pid) {
+            blocked_queue = blocked_queue->next;
+        } else {
+            struct proc *c = blocked_queue;
+            while (c && c->next) {
+                if (c->next->pid == p->pid) { c->next = c->next->next; break; }
+                c = c->next;
+            }
+        }
+        p->next = NULL;
+        // Also clear wake_tick so timer_handler doesn't try to wake a stopped proc
+        p->wake_tick = 0;
+    }
+
+    p->state = PROC_STOPPED;
+
+    if (p == current) {
+        struct proc *prev = current;
+        current = NULL;
+        swtch(&prev->context, &scheduler_context);
+        // Execution resumes here after proc_unstop → scheduler picks us up
+    }
+}
+
+
+void proc_unstop(struct proc *p) {
+    if (p->state != PROC_STOPPED) return;
+    proc_ready(p);  // sets PROC_READY and appends to ready_queue
 }

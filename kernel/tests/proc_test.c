@@ -78,7 +78,7 @@ void proc_test_run(void) {
         int exit_code = 0;
         int waited_pid = proc_wait(&exit_code);
         TEST("wait: correct pid", waited_pid == 101);
-        TEST("wait: correct exit code", exit_code == 42);
+        TEST("wait: correct exit code", exit_code == (42 << 8));
         // After wait, child should be freed
         TEST("wait: child reaped", child->state == PROC_UNUSED);
         // No more children — proc_wait already cleared first_child
@@ -211,4 +211,123 @@ void proc_test_run(void) {
     printk("  Results: %d passed, %d failed\n", passed, failed);
     printk("========================================\n");
 
+}
+
+// Tests for the extended proc_waitpid() POSIX compliance:
+//   - pid == -1 delegates to proc_wait() (any child)
+//   - WNOHANG (options & 1) returns 0 instead of blocking when no zombie found
+//   - WUNTRACED | WNOHANG and WCONTINUED | WNOHANG are silently accepted
+//   - Non-child PID returns -1
+// All tests are deterministic (no scheduler handoff); proc_sleep() is never called.
+void proc_waitpid_test_run(void) {
+    printk("\n========================================\n");
+    printk("       proc_waitpid() POSIX Tests\n");
+    printk("========================================\n\n");
+
+    struct proc *wp_saved = current;
+
+    // Set up a fake parent so proc_waitpid can walk first_child.
+    struct proc *parent = proc_alloc();
+    TEST("waitpid: parent alloc", parent != NULL);
+    if (!parent) {
+        current = wp_saved;
+        return;
+    }
+    parent->state = PROC_CREATED;
+    current = parent;
+
+    // --- Test 1: specific PID — zombie child is reaped ---
+    printk("=== Test: specific PID zombie reap ===\n");
+    struct proc *zombie = proc_alloc();
+    TEST("waitpid: zombie child alloc", zombie != NULL);
+    if (zombie) {
+        zombie->state = PROC_ZOMBIE;
+        zombie->exit_code = 7;
+        zombie->parent = parent;
+        zombie->sibling = NULL;
+        parent->first_child = zombie;
+        pid_t zid = zombie->pid;
+
+        int code = -1;
+        pid_t r = proc_waitpid(zid, &code, 0);
+        TEST("waitpid: returns child pid", r == zid);
+        // POSIX wait-status: exit code packed as (code & 0xff) << 8
+        TEST("waitpid: exit code encoded correctly", code == (7 << 8));
+        TEST("waitpid: child reaped (UNUSED)", zombie->state == PROC_UNUSED);
+        parent->first_child = NULL;
+    }
+
+    // --- Test 2: pid == -1 delegates to proc_wait() (any child) ---
+    printk("=== Test: pid == -1 delegates to any-child ===\n");
+    struct proc *any_child = proc_alloc();
+    TEST("waitpid: any-child alloc", any_child != NULL);
+    if (any_child) {
+        any_child->state = PROC_ZOMBIE;
+        any_child->exit_code = 3;
+        any_child->parent = parent;
+        any_child->sibling = NULL;
+        parent->first_child = any_child;
+        pid_t acid = any_child->pid;
+
+        int code = -1;
+        pid_t r = proc_waitpid(-1, &code, 0);
+        TEST("waitpid(-1): returns child pid", r == acid);
+        TEST("waitpid(-1): exit code correct", code == (3 << 8));
+        TEST("waitpid(-1): child reaped", any_child->state == PROC_UNUSED);
+        parent->first_child = NULL;
+    }
+
+    // --- Test 3: WNOHANG — live (non-zombie) child returns 0, doesn't block ---
+    printk("=== Test: WNOHANG on live child ===\n");
+    struct proc *live = proc_alloc();
+    TEST("waitpid: live child alloc", live != NULL);
+    if (live) {
+        live->state = PROC_READY;
+        live->parent = parent;
+        live->sibling = NULL;
+        parent->first_child = live;
+
+        pid_t r = proc_waitpid(live->pid, NULL, 1 /* WNOHANG */);
+        TEST("waitpid WNOHANG: returns 0 (no block)", r == 0);
+        TEST("waitpid WNOHANG: child still alive", live->state != PROC_UNUSED);
+
+        parent->first_child = NULL;
+        proc_free(live);
+    }
+
+    // --- Test 4: non-child PID returns -1 ---
+    printk("=== Test: non-child PID returns -1 ===\n");
+    parent->first_child = NULL;
+    pid_t r4 = proc_waitpid(9999, NULL, 0);
+    TEST("waitpid: non-child returns -1", r4 == -1);
+
+    // --- Test 5: WUNTRACED|WNOHANG and WCONTINUED|WNOHANG silently accepted ---
+    // No stopped/continued processes exist yet; WNOHANG fires and returns 0.
+    printk("=== Test: WUNTRACED/WCONTINUED flags silently accepted ===\n");
+    struct proc *live2 = proc_alloc();
+    TEST("waitpid: live2 child alloc", live2 != NULL);
+    if (live2) {
+        live2->state = PROC_READY;
+        live2->parent = parent;
+        live2->sibling = NULL;
+        parent->first_child = live2;
+
+        // WUNTRACED (2) | WNOHANG (1) = 3
+        pid_t r5a = proc_waitpid(live2->pid, NULL, 2 | 1);
+        TEST("waitpid WUNTRACED|WNOHANG: returns 0 (not -1, not crash)", r5a == 0);
+
+        // WCONTINUED (8) | WNOHANG (1) = 9
+        pid_t r5b = proc_waitpid(live2->pid, NULL, 8 | 1);
+        TEST("waitpid WCONTINUED|WNOHANG: returns 0 (not -1, not crash)", r5b == 0);
+
+        parent->first_child = NULL;
+        proc_free(live2);
+    }
+
+    proc_free(parent);
+    current = wp_saved;
+
+    printk("\n========================================\n");
+    printk("  Results: %d passed, %d failed\n", passed, failed);
+    printk("========================================\n\n");
 }

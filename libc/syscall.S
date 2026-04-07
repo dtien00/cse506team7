@@ -29,6 +29,7 @@
 .global link
 .global symlink
 .global readlink
+.global sigprocmask
 
 mmap:
     li a7, 14
@@ -100,10 +101,10 @@ getgid:
     ecall
     ret
 
-//lseek:
-//    li a7, 8
-//    ecall
-//    ret
+lseek:
+    li a7, 18
+    ecall
+    ret
 
 pipe:
     li a7, 22
@@ -126,7 +127,7 @@ chdir:
     ret
 
 getcwd:
-    li a7, 17
+    li a7, 19
     ecall
     ret
 
@@ -185,3 +186,7 @@ readlink:
     ecall
     ret
 
+sigprocmask:
+    li a7, 20
+    ecall
+    ret
