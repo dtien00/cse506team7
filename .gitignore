@@ -9,3 +9,5 @@ flat_kernel/
 .DS_Store
 .claude/
 build/*
+dump/*
+*.md
