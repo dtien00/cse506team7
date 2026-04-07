@@ -36,7 +36,7 @@ static void test_setup_proc(void) {
     test_proc.pid = 99;
     fd_init(&test_proc.fds);   // sets up FILE_STDIN/FILE_STDOUT entries
     test_proc.fs = fs_struct_alloc();
-    fs_struct_set_root(test_proc.fs, "/");
+    fs_struct_set_root(test_proc.fs, vfs_get_root());
     current = &test_proc;
 }
 static void test_teardown_proc(void) {
