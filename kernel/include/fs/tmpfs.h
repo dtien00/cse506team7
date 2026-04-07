@@ -33,7 +33,7 @@ typedef struct tmpfs_mount_data {
 
 // Function declarations
 void tmpfs_init(void);
-vnode_t *tmpfs_mount(mount_t *mnt, const char *source);
+int tmpfs_mount(mount_t *mnt, const char *source);
 int tmpfs_unmount(mount_t *mnt);
 vnode_t *tmpfs_lookup(mount_t *mnt, const char *path);
 int tmpfs_read(vnode_t *vnode, void *buf, size_t offset, size_t len);

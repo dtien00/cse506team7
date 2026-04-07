@@ -8,4 +8,4 @@ compile.sh
 flat_kernel/
 .DS_Store
 .claude/
-build/**
+build/*

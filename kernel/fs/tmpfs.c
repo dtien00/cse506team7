@@ -192,20 +192,20 @@ static int tmpfs_remove_child(tmpfs_inode_t *parent, tmpfs_inode_t *child) {
 // tmpfs filesystem operations
 // -----------------------------------------------------------------------------
 
-vnode_t *tmpfs_mount(mount_t *mnt, const char *source) {
-    if (!mnt) return NULL;
+int tmpfs_mount(mount_t *mnt, const char *source) {
+    if (!mnt) return -1;
 
     tmpfs_mount_data_t *mnt_data = kzalloc(sizeof(tmpfs_mount_data_t));
     if (!mnt_data) {
         printk("tmpfs: failed to allocate mount data\n");
-        return NULL;
+        return -1;
     }
 
     // Create root directory
     mnt_data->root = tmpfs_alloc_inode(mnt_data, "/", TMPFS_TYPE_DIR, 0755);
     if (!mnt_data->root) {
         kfree(mnt_data);
-        return NULL;
+        return -1;
     }
 
     mnt_data->next_ino = 2;  // Root is inode 1, start at 2
@@ -213,19 +213,8 @@ vnode_t *tmpfs_mount(mount_t *mnt, const char *source) {
 
     mnt->fs_data = mnt_data;
 
-    vnode_t *root = kzalloc(sizeof(vnode_t));
-    if (!root) { tmpfs_free_inode(mnt_data, mnt_data->root); kfree(mnt_data); return NULL; }
-    root->ino       = 1;
-    root->mode      = 0755;
-    root->size      = 0;
-    root->ref_count = 0;
-    root->mount     = mnt;
-    root->fs_data   = mnt_data->root;
-    root->fs_type   = mnt->fs_type;
-    root->type      = VNODE_DIR;
-
     printk("tmpfs: mounted successfully\n");
-    return root;
+    return 0;
 }
 
 int tmpfs_unmount(mount_t *mnt) {
@@ -262,7 +251,6 @@ vnode_t *tmpfs_lookup(mount_t *mnt, const char *path) {
     vnode->mount = mnt;
     vnode->fs_data = inode;
     vnode->fs_type = mnt->fs_type;
-    vnode->type = (inode->type == TMPFS_TYPE_DIR) ? VNODE_DIR : VNODE_REG;
 
     return vnode;
 }
@@ -496,6 +484,7 @@ static fs_type_t tmpfs_type = {
         .create = tmpfs_create,
         .unlink = tmpfs_unlink,
         .mkdir  = tmpfs_mkdir,
+        .is_dir = NULL,
     },
     .next = NULL
 };

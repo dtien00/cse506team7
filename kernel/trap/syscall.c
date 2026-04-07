@@ -24,7 +24,6 @@
 
 #define MAX_ARGS 64
 #define KARG_MAX 256
-#define MAX_PATH    256
 
 void syscall_init(void) { printk("Syscall: Initialized\n"); }
 
@@ -263,13 +262,7 @@ pid_t sys_fork(void) {
     }
 
     child->signal_mask = current->signal_mask; // Fork child inherits parent's signal mask
-    child->fs = fs_struct_copy(current->fs);
-    if (!child->fs) {
-        vma_free_all(child->vma_list);
-        vmm_free_pagetable(child->pagetable);
-        proc_free(child);
-        return -1;
-    }
+    memcpy(child->cwd, current->cwd, MAX_PATH); // Fork child inherits parent's working directory
 
     // Copy parent's trap frame and register state to the child
     if (current->trapframe) {
@@ -908,14 +901,15 @@ int sys_chdir(const char *path) {
     kpath[MAX_PATH - 1] = '\0';
     clear_csr_bit(sstatus, SSTATUS_SUM);
 
-    char cwd_str[MAX_PATH];
-    dentry_build_path(current->fs->cwd, vfs_get_root(), cwd_str, MAX_PATH);
-
     char resolved[MAX_PATH];
-    if (path_resolve(cwd_str, kpath, resolved) < 0)
+    if (path_resolve(current->cwd, kpath, resolved) < 0)
         return -1;
 
-    return fs_struct_set_cwd(current->fs, resolved);  // VFS owns everything below
+    if (!vfs_is_dir(resolved))
+        return -1;
+
+    memcpy(current->cwd, resolved, MAX_PATH);
+    return 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -923,18 +917,13 @@ int sys_chdir(const char *path) {
 /* ------------------------------------------------------------------ */
 
 char *sys_getcwd(char *buf, size_t size) {
-    if (!current || !buf || size == 0 || !current->fs) return NULL;
+    if (!current || !buf || size == 0) return NULL;
 
-    // Build the absolute path from the cwd dentry chain
-    char kbuf[MAX_PATH];
-    if (fs_struct_get_cwd(current->fs, kbuf, MAX_PATH) < 0)
-        return NULL;
-
-    size_t cwd_len = strlen(kbuf);
-    if (cwd_len + 1 > size) return NULL;   // user buffer too small
+    size_t cwd_len = strlen(current->cwd);
+    if (cwd_len + 1 > size) return NULL;  /* buffer too small */
 
     set_csr_bit(sstatus, SSTATUS_SUM);
-    memcpy(buf, kbuf, cwd_len + 1);
+    memcpy(buf, current->cwd, cwd_len + 1);
     clear_csr_bit(sstatus, SSTATUS_SUM);
 
     return buf;
