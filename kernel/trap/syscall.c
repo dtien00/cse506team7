@@ -159,6 +159,10 @@ void syscall_handler(trap_frame *frame) {
             ret = sys_getpid();
             break;
 
+        case SYS_getppid:
+            ret = sys_getppid();
+            break;
+
         case SYS_sbrk:
             ret = (uint64_t) sys_sbrk((intptr_t) arg0);
             break;
@@ -484,6 +488,14 @@ pid_t sys_getpid(void) {
         return p->pid;
     }
     return -1;
+}
+
+pid_t sys_getppid(void) {
+    struct proc *p = proc_current();
+    if (p != NULL && p->parent != NULL) {
+        return p->parent->pid;
+    }
+    return 0;   /* POSIX: init (PID 1) has no parent → return 0 */
 }
 
 // void *sys_sbrk(intptr_t increment) {

@@ -95,5 +95,87 @@ void run_test_process(us_test_group_t *group) {
         }
     }
 
+    /* --- getppid: basic sanity --- */
+    TEST(group, "getppid returns positive for non-init", getppid() > 0);
+
+    /* --- getppid after fork: child's ppid == parent's pid --- */
+    {
+        pid_t parent_pid = getpid();
+        int pipefd[2];
+        pipe(pipefd);
+        pid_t ch = fork();
+        if (ch == 0) {
+            close(pipefd[0]);
+            pid_t child_ppid = getppid();
+            write(pipefd[1], &child_ppid, sizeof(child_ppid));
+            close(pipefd[1]);
+            _exit(0);
+        }
+        close(pipefd[1]);
+        pid_t received = 0;
+        read(pipefd[0], &received, sizeof(received));
+        close(pipefd[0]);
+        waitpid(ch, NULL, 0);
+        TEST(group, "getppid: child ppid == parent pid", received == parent_pid);
+    }
+
+    /* --- getppid: double fork — grandchild ppid == child pid --- */
+    {
+        int pipefd[2];
+        pipe(pipefd);
+        pid_t ch = fork();
+        if (ch == 0) {
+            close(pipefd[0]);
+            pid_t child_pid = getpid();
+            pid_t gch = fork();
+            if (gch == 0) {
+                pid_t gc_ppid = getppid();
+                write(pipefd[1], &gc_ppid,   sizeof(gc_ppid));
+                write(pipefd[1], &child_pid, sizeof(child_pid));
+                _exit(0);
+            }
+            waitpid(gch, NULL, 0);
+            close(pipefd[1]);
+            _exit(0);
+        }
+        close(pipefd[1]);
+        pid_t gc_ppid = 0, reported_child_pid = 0;
+        read(pipefd[0], &gc_ppid,            sizeof(gc_ppid));
+        read(pipefd[0], &reported_child_pid,  sizeof(reported_child_pid));
+        close(pipefd[0]);
+        waitpid(ch, NULL, 0);
+        TEST(group, "getppid: grandchild ppid == child pid",
+             gc_ppid == reported_child_pid);
+    }
+
+    /* --- getppid: orphan reparented to init (ppid==1) --- */
+    {
+        int pipefd[2];
+        pipe(pipefd);
+        pid_t ch = fork();
+        if (ch == 0) {
+            close(pipefd[0]);
+            pid_t gch = fork();
+            if (gch == 0) {
+                /* grandchild: wait for parent (ch) to exit first */
+                sleep(1);
+                pid_t my_ppid = getppid();
+                write(pipefd[1], &my_ppid, sizeof(my_ppid));
+                close(pipefd[1]);
+                _exit(0);
+            }
+            /* ch exits immediately, orphaning grandchild */
+            close(pipefd[1]);
+            _exit(0);
+        }
+        close(pipefd[1]);
+        waitpid(ch, NULL, 0);   /* reap ch; grandchild is now orphaned */
+        pid_t orphan_ppid = 0;
+        read(pipefd[0], &orphan_ppid, sizeof(orphan_ppid));
+        close(pipefd[0]);
+        TEST(group, "getppid: orphan reparented to init (ppid==1)",
+             orphan_ppid == 1);
+    }
+
     ut_group_end(group);
 }

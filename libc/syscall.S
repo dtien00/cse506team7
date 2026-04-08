@@ -10,6 +10,7 @@
 .global wait
 .global execve
 .global getpid
+.global getppid
 .global getuid
 .global getgid
 .global lseek
@@ -88,6 +89,11 @@ execve:
 
 getpid:
     li a7, 9
+    ecall
+    ret
+
+getppid:
+    li a7, 21
     ecall
     ret
 

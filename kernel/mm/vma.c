@@ -282,3 +282,26 @@ void vma_dump(struct vm_area *vma_list) {
         vma = vma->next;
     }
 }
+
+/*
+ * vma_find_growsdown - find a GROWSDOWN VMA whose current start is above addr.
+ *
+ * Returns the first VMA that has VMA_GROWSDOWN set and whose start is strictly
+ * greater than addr (i.e. addr is below the current stack bottom).
+ *
+ * Does NOT enforce any maximum stack size — that policy check (e.g. against
+ * USTACK_SIZE) is the caller's responsibility so that this function stays
+ * independent of arch-specific constants.
+ *
+ * Called from page_fault_handler() in trap.c when vma_find() returns NULL,
+ * before the process is killed, to transparently grow the user stack downward.
+ */
+struct vm_area *vma_find_growsdown(struct vm_area *vma_list, uintptr_t addr) {
+    for (struct vm_area *v = vma_list; v; v = v->next) {
+        if (!(v->flags & VMA_GROWSDOWN))
+            continue;
+        if (addr < v->start)
+            return v;
+    }
+    return NULL;
+}

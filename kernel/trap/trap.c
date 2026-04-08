@@ -400,6 +400,47 @@ void page_fault_handler(trap_frame *frame) {
     /* ── 3. Look up the VMA for demand paging and protection checks ─────── */
     struct vm_area *vma = vma_find(current->vma_list, faulting_va);
     if (!vma) {
+        /* ── 3a. GROWSDOWN: transparent stack expansion ──────────────────
+         *
+         * The faulting address is not in any existing VMA.  Check whether
+         * it falls just below a VMA_GROWSDOWN region (the user stack) and
+         * within the allowed maximum growth range (USTACK_SIZE from top).
+         * If so, extend the stack VMA downward and map a fresh page; the
+         * faulting instruction will be retried automatically by hardware.
+         */
+        struct vm_area *stack_vma =
+            vma_find_growsdown(current->vma_list, faulting_va);
+        if (stack_vma) {
+            /* Enforce maximum stack size: the stack top (stack_vma->end) is
+             * the anchor.  The floor is end - USTACK_SIZE.  Faults below the
+             * floor are a genuine stack overflow — kill the process. */
+            uintptr_t stack_floor = (stack_vma->end > USTACK_SIZE)
+                                    ? stack_vma->end - USTACK_SIZE : 0;
+            if (faulting_va < stack_floor) {
+                kill_current(frame, "stack overflow: exceeded maximum stack size");
+                return;
+            }
+
+            uintptr_t new_page   = PGROUNDDOWN(faulting_va);
+            stack_vma->start     = new_page;   /* extend VMA downward */
+
+            void *phys = pmm_alloc_page();
+            if (!phys) {
+                kill_current(frame, "stack growth: out of physical memory");
+                return;
+            }
+            memset(phys, 0, PGSIZE);
+            uint64_t pte_perm = vma_prot_to_pte(stack_vma->prot);
+            if (vmm_map(current->pagetable, new_page,
+                        (uintptr_t)phys, pte_perm) != 0) {
+                pmm_free_page(phys);
+                kill_current(frame, "stack growth: vmm_map failed");
+                return;
+            }
+            return;   /* retry the faulting instruction */
+        }
+
+        /* No GROWSDOWN VMA matched — genuine bad access */
         printk("  Faulting VA=0x%p  sp=0x%p  sepc=0x%p\n",
                faulting_va, frame->sp, frame->sepc);
         vma_dump(current->vma_list);

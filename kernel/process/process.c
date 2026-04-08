@@ -472,20 +472,26 @@ int exec(const char *path, char *const argv[]) {
     }
 
     // 5. Allocate and map user stack (just below KERNBASE)
-    uintptr_t stack_top  = KERNBASE;
-    uintptr_t stack_base = stack_top - USTACK_SIZE;
-    for (uintptr_t va = stack_base; va < stack_top; va += PGSIZE) {
+    // Only pre-allocate the topmost page (where argv strings are placed).
+    // Deeper stack frames are demand-allocated by the page fault handler
+    // via VMA_GROWSDOWN, up to USTACK_SIZE (1 MB) total.
+    uintptr_t stack_top          = KERNBASE;
+    uintptr_t initial_stack_base = stack_top - PGSIZE;
+
+    {
         void *pg = pmm_alloc_page();
         if (!pg) goto fail_vma;
         memset(pg, 0, PGSIZE);
-        if (vmm_map(new_pt, va, (uintptr_t)pg, PTE_R | PTE_W | PTE_U) < 0) {
+        if (vmm_map(new_pt, initial_stack_base, (uintptr_t)pg, PTE_R | PTE_W | PTE_U) < 0) {
             pmm_free_page(pg);
             goto fail_vma;
         }
     }
-    
-    // Create VMA for the stack
-    struct vm_area *stack_vma = vma_create(stack_base, stack_top,
+
+    // VMA starts at the single pre-allocated page; grows down on fault.
+    // vma->end (KERNBASE) is the anchor used by vma_find_growsdown() to
+    // compute the floor: end - USTACK_SIZE = 0x7FF00000.
+    struct vm_area *stack_vma = vma_create(initial_stack_base, stack_top,
                                            VMA_PROT_READ | VMA_PROT_WRITE,
                                            VMA_PRIVATE | VMA_GROWSDOWN,
                                            VMA_TYPE_STACK);
