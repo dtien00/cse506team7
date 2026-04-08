@@ -3,7 +3,7 @@
 #include "fs/vfs.h"
 // process level manager
 
-#define MAX_FDS 16  // or however many per process
+#define MAX_FDS 64  // or however many per process
 
 // File descriptor table (lives in process_t)
 typedef struct fd_table {
