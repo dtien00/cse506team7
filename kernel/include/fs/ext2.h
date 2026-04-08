@@ -160,7 +160,7 @@ typedef struct ext2_mount_data {
 
 // Function declarations
 void ext2_init(void);
-int ext2_mount(mount_t *mnt, const char *source);
+vnode_t *ext2_mount(mount_t *mnt, const char *source);
 int ext2_unmount(mount_t *mnt);
 vnode_t *ext2_lookup(mount_t *mnt, const char *path);
 int ext2_read(vnode_t *vnode, void *buf, size_t offset, size_t len);

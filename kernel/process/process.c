@@ -8,7 +8,7 @@
 #include "mm/kmalloc.h"   // needed for kmalloc/kfree in exec()
 #include "mm/vma.h"
 #include "types.h"
-#include "lib/kstring.h"
+#include "lib/string.h"
 #include "elf/elf.h"
 #include "fs/file.h"
 
@@ -16,6 +16,7 @@
 #define SEEK_SET 0
 #endif
 
+static uint32_t next_pid = 1;
 
 /* Forward declaration — defined later in this file. */
 void proc_start_user(struct proc *p, uint64_t entry, uint64_t user_sp);
@@ -38,6 +39,7 @@ static void proc_entry(void) {
 struct proc* proc_alloc(void) {
     for (int i = 0; i < MAX_PROCS; i++) {
         if (proctab[i].state == PROC_UNUSED) {
+            memset(&proctab[i], 0, sizeof(proctab[i]));
             proctab[i].state = PROC_CREATED;   // mark as taken immediately
             return &proctab[i];
         }
@@ -52,17 +54,16 @@ void proc_init(void) {
         proctab[i].next = NULL;
     }
 
-    struct proc *init = proc_alloc();
-    int idx = init - proctab;
-    memset(init, 0, sizeof(*init));
-    init->pid = 1;
-    strncpy(init->name, "init", MAX_NAME - 1);
-    init->state = PROC_READY;
-    init->context.sp = (uint64_t)&kstacks[idx][KSTACK_SIZE];
-    init->context.ra = (uint64_t)proc_entry;
-    vma_init(&init->vma_list);
+    // next_pid is 1 at file scope, so proc_create assigns pid=1 to init
+    struct proc *init = proc_create("init");
+    next_pid = 2;  // next real process gets pid 2
+
+    // proc_create leaves fds and cwd/pwd in fs to the caller
     fd_init(&init->fds);
 
+    init->fs = fs_struct_alloc();
+    fs_struct_set_root(init->fs, "/");   // set where "/" is
+    fs_struct_set_cwd(init->fs, "/");    // set where we are
     // Prepare argv for /bin/init
     static char *argv[] = { "init", NULL };
     // Set current to init so exec uses the right process
@@ -73,7 +74,6 @@ void proc_init(void) {
         if (exec("/bin/sh", sh_argv) < 0)
             printk("[init] exec failed fallback to /bin/sh\n");
     }
-
     proc_ready(init);
     current = NULL;
 }
@@ -96,7 +96,6 @@ struct proc* proc_create(const char *name) {
     int idx = p - proctab;
     memset(p, 0, sizeof(*p));
 
-    static uint32_t next_pid = 2;
     p->pid = next_pid++;
     strncpy(p->name, name, MAX_NAME - 1);
     p->state = PROC_CREATED;
@@ -132,6 +131,11 @@ void proc_destroy(struct proc *p) {
     }
     p->trapframe = NULL;
     p->trapframe_owned = 0;
+
+    if (p->fs) {
+        fs_struct_free(p->fs);
+        p->fs = NULL;
+    }
 
     fd_destroy(&p->fds);
 }
@@ -205,7 +209,10 @@ int proc_wait(int *exit_code_out) {
                 // can access user pages.
                 if (exit_code_out) {
                     set_csr_bit(sstatus, SSTATUS_SUM);
-                    *exit_code_out = child->exit_code;
+                    if (child->exit_code < 0)
+                        *exit_code_out = (-child->exit_code) & 0x7f;
+                    else
+                        *exit_code_out = (child->exit_code & 0xff) << 8;
                     clear_csr_bit(sstatus, SSTATUS_SUM);
                 }
 
@@ -224,6 +231,53 @@ int proc_wait(int *exit_code_out) {
     }
 }
 
+// Wait for a specific child pid to exit.  Returns child's PID on success,
+// or -1 if the target pid is not a child of the current process.
+// options: 1 = WNOHANG (return 0 immediately if no qualifying child found).
+//          2 = WUNTRACED / 8 = WCONTINUED: accepted but no-op until SIGSTOP/SIGCONT are implemented.
+int proc_waitpid(pid_t target_pid, int *exit_code_out, int options) {
+    // POSIX: pid == -1 means wait for any child.
+    if (target_pid == -1)
+        return proc_wait(exit_code_out);
+
+    if (!current) return -1;
+    while (1) {
+        int have_target = 0;
+        struct proc *child = current->first_child;
+        while (child) {
+            if (child->pid == target_pid) {
+                have_target = 1;
+                if (child->state == PROC_ZOMBIE) {
+                    // Remove from parent's child list
+                    struct proc **link = &current->first_child;
+                    while (*link && *link != child) link = &(*link)->sibling;
+                    if (*link == child) *link = child->sibling;
+                    if (exit_code_out) {
+                        set_csr_bit(sstatus, SSTATUS_SUM);
+                        // Negative exit_code means killed by signal (POSIX convention):
+                        //   signal death → low 7 bits = signal number (WIFSIGNALED)
+                        //   normal exit  → high byte  = exit status  (WIFEXITED)
+                        if (child->exit_code < 0)
+                            *exit_code_out = (-child->exit_code) & 0x7f;
+                        else
+                            *exit_code_out = (child->exit_code & 0xff) << 8;
+                        clear_csr_bit(sstatus, SSTATUS_SUM);
+                    }
+                    proc_free(child);
+                    return target_pid;
+                }
+                // WUNTRACED (options & 2): would report PROC_STOPPED children here once SIGSTOP is added.
+                // WCONTINUED (options & 8): would report cont_unreported children here once SIGCONT is added.
+                break;
+            }
+            child = child->sibling;
+        }
+        if (!have_target) return -1;  // not our child
+        if (options & 1) return 0;    // WNOHANG: no qualifying child found, don't block
+        proc_sleep(current);
+    }
+}
+
 void proc_dump(void) {
     printk("\nProcess table:\n");
     printk("PID  State      Name\n");
@@ -238,6 +292,7 @@ void proc_dump(void) {
                 case PROC_RUNNING:  state_str = "RUNNING"; break;
                 case PROC_BLOCKED:  state_str = "BLOCKED"; break;
                 case PROC_ZOMBIE:   state_str = "ZOMBIE"; break;
+                case PROC_STOPPED:   state_str = "STOPPED"; break;
                 default:            state_str = "UNKNOWN"; break;
             }
             printk("%3d  %-9s  %s\n", proctab[i].pid, state_str, proctab[i].name);
@@ -328,12 +383,12 @@ void proc_start_user(struct proc *p, uint64_t entry, uint64_t user_sp) {
 
 int exec(const char *path, char *const argv[]) {
     // 1. Open the binary
-    file_t *f = vfs_open(path, 0); // just use 0 for now
+    file_t *f = file_open(path);
     if (!f) return -1;
 
     // 2. Read and validate the ELF64 header
     elf_header_t ehdr;
-    if (vfs_read(f, &ehdr, sizeof(ehdr)) != (int)sizeof(ehdr))
+    if (file_read(f, &ehdr, sizeof(ehdr)) != (int)sizeof(ehdr))
         goto fail_file;
     if (ehdr.e_ident[0] != 0x7F || ehdr.e_ident[1] != 'E' ||
         ehdr.e_ident[2] != 'L'  || ehdr.e_ident[3] != 'F' ||
@@ -353,9 +408,9 @@ int exec(const char *path, char *const argv[]) {
     // 4. Load each PT_LOAD segment into the new page table
     for (int i = 0; i < ehdr.e_phnum; i++) {
         elf_prog_header_t phdr;
-        if (vfs_lseek(f, (size_t)(ehdr.e_phoff + (uint64_t)i * sizeof(phdr)), SEEK_SET) < 0)
+        if (file_lseek(f, (size_t)(ehdr.e_phoff + (uint64_t)i * sizeof(phdr)), SEEK_SET) < 0)
             goto fail_pt;
-        if (vfs_read(f, &phdr, sizeof(phdr)) != (int)sizeof(phdr))
+        if (file_read(f, &phdr, sizeof(phdr)) != (int)sizeof(phdr))
             goto fail_pt;
         if (phdr.p_type != PT_LOAD)
             continue;
@@ -385,7 +440,7 @@ int exec(const char *path, char *const argv[]) {
         }
 
         // Seek to segment data in file, then copy into the mapped PA range
-        if (vfs_lseek(f, (size_t)phdr.p_offset, SEEK_SET) < 0)
+        if (file_lseek(f, (size_t)phdr.p_offset, SEEK_SET) < 0)
             goto fail_vma;
         size_t remaining = (size_t)phdr.p_filesz;
         uintptr_t va     = phdr.p_vaddr;
@@ -395,7 +450,7 @@ int exec(const char *path, char *const argv[]) {
             if (!pa) goto fail_vma;
             size_t chunk = PGSIZE - (va & (PGSIZE - 1));
             if (chunk > remaining) chunk = remaining;
-            if (vfs_read(f, (void *)pa, chunk) != (int)chunk)
+            if (file_read(f, (void *)pa, chunk) != (int)chunk)
                 goto fail_vma;
             va        += chunk;
             remaining -= chunk;
@@ -417,20 +472,26 @@ int exec(const char *path, char *const argv[]) {
     }
 
     // 5. Allocate and map user stack (just below KERNBASE)
-    uintptr_t stack_top  = KERNBASE;
-    uintptr_t stack_base = stack_top - USTACK_SIZE;
-    for (uintptr_t va = stack_base; va < stack_top; va += PGSIZE) {
+     // Only pre-allocate the topmost page (where argv strings are placed).
+    // Deeper stack frames are demand-allocated by the page fault handler
+    // via VMA_GROWSDOWN, up to USTACK_SIZE (1 MB) total.
+    uintptr_t stack_top          = KERNBASE;
+    uintptr_t initial_stack_base = stack_top - PGSIZE;
+
+    {
         void *pg = pmm_alloc_page();
         if (!pg) goto fail_vma;
         memset(pg, 0, PGSIZE);
-        if (vmm_map(new_pt, va, (uintptr_t)pg, PTE_R | PTE_W | PTE_U) < 0) {
+        if (vmm_map(new_pt, initial_stack_base, (uintptr_t)pg, PTE_R | PTE_W | PTE_U) < 0) {
             pmm_free_page(pg);
             goto fail_vma;
         }
     }
-    
-    // Create VMA for the stack
-    struct vm_area *stack_vma = vma_create(stack_base, stack_top,
+
+    // VMA starts at the single pre-allocated page; grows down on fault.
+    // vma->end (KERNBASE) is the anchor used by vma_find_growsdown() to
+    // compute the floor: end - USTACK_SIZE = 0x7FF00000.
+    struct vm_area *stack_vma = vma_create(initial_stack_base, stack_top,
                                            VMA_PROT_READ | VMA_PROT_WRITE,
                                            VMA_PRIVATE | VMA_GROWSDOWN,
                                            VMA_TYPE_STACK);
@@ -504,7 +565,7 @@ int exec(const char *path, char *const argv[]) {
 
     // current->pagetable is already active after commit above.
 
-    vfs_close(f);
+    file_close(f);
     return 0;
 
 fail_vma:
@@ -512,6 +573,6 @@ fail_vma:
 fail_pt:
     vmm_free_pagetable(new_pt);
 fail_file:
-    vfs_close(f);
+    file_close(f);
     return -1;
 }

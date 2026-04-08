@@ -10,6 +10,7 @@
 .global wait
 .global execve
 .global getpid
+.global getppid
 .global getuid
 .global getgid
 .global lseek
@@ -24,12 +25,14 @@
 .global mkdir
 .global chmod
 .global fchmod
-.global getdents64
+.global fs_getdents
 .global unlink
 .global kill
 .global link
 .global symlink
 .global readlink
+.global sigprocmask
+
 
 mmap:
     li a7, 14
@@ -91,6 +94,11 @@ getpid:
     ecall
     ret
 
+getppid:
+    li a7, 21
+    ecall
+    ret
+
 getuid:
     li a7, 24
     ecall
@@ -132,7 +140,7 @@ chdir:
     ret
 
 getcwd:
-    li a7, 17
+    li a7, 27
     ecall
     ret
 
@@ -161,13 +169,13 @@ fchmod:
     ecall
     ret
 
-getdents64:
+fs_getdents:
     li a7, 61
     ecall
     ret
 
 unlink:
-    li a7, 87
+    li a7, 18
     ecall
     ret
 
@@ -191,3 +199,7 @@ readlink:
     ecall
     ret
 
+sigprocmask:
+    li a7, 26
+    ecall
+    ret

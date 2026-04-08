@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # flatten.sh
 # Copies "." into "./flat_kernel/", but flattens "./kernel/**" into "./flat_kernel/kernel/"
+# Kernel header files are prefixed with "k" to avoid collisions with libc headers.
 
 rm -rf ./flat_kernel
 
@@ -45,9 +46,10 @@ find "$KERNEL_SRC" -type f | while read -r filepath; do
     filename="$(basename "$filepath")"
     ext="${filename##*.}"
 
-    # .h files go into include/, everything else into kernel/
+    # .h files go into include/ with a "k" prefix; everything else into kernel/
     if [ "$ext" = "h" ]; then
         destdir="$KERNEL_INC_DEST"
+        filename="k${filename}"
     else
         destdir="$KERNEL_DEST"
     fi
@@ -77,21 +79,21 @@ done
 echo "Rewriting #include paths in $KERNEL_DEST ..."
 
 find "$KERNEL_DEST" -type f -name "*.c" | while read -r filepath; do
-    # In .c files: #include "any/path/file.h" -> #include "include/file.h"
-    perl -i -pe 's{#include\s*"[^"]*?([^"/]+\.h)"}{#include "include/$1"}g' "$filepath"
+    # In .c files: #include "any/path/file.h" -> #include "include/kfile.h"
+    perl -i -pe 's{#include\s*"[^"]*?([^"/]+\.h)"}{#include "include/k$1"}g' "$filepath"
 done
 
-find "$KERNEL_INC_DEST" -type f -name "*.h" | while read -r filepath; do
-    # In .h files: #include "any/path/file.h" -> #include "file.h"
-    perl -i -pe 's{#include\s*"[^"]*?([^"/]+\.h)"}{#include "$1"}g' "$filepath"
+find "$KERNEL_INC_DEST" -type f -name "k*.h" | while read -r filepath; do
+    # In .h files: #include "any/path/file.h" -> #include "kfile.h"
+    perl -i -pe 's{#include\s*"[^"]*?([^"/]+\.h)"}{#include "k$1"}g' "$filepath"
 done
 
 # ── Rewrite #includes in tools/ files that reference kernel headers ──────────
 echo "Rewriting #include paths in $DEST/tools ..."
 
 find "$DEST/tools" -type f \( -name "*.c" -o -name "*.h" \) | while read -r filepath; do
-    # ../kernel/include/fs/file.h  ->  ../kernel/include/file.h
-    perl -i -pe 's{#include\s*"\.\./kernel/[^"]*?([^"/]+\.h)"}{#include "../kernel/include/$1"}g' "$filepath"
+    # ../kernel/include/fs/file.h  ->  ../kernel/include/kfile.h
+    perl -i -pe 's{#include\s*"\.\./kernel/[^"]*?([^"/]+\.h)"}{#include "../kernel/include/k$1"}g' "$filepath"
 done
 
 echo "Done. Flat copy is in '$DEST'."

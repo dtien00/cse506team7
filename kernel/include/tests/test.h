@@ -16,6 +16,7 @@
 void mem_test_run(void);
 void fs_test_run(void);
 void proc_test_run(void);
+void proc_waitpid_test_run(void);
 void sched_test_run(void);
 void sched_timeslice_test_run(void);
 void sched_priority_test_run(void);
@@ -23,3 +24,6 @@ void sched_fairness_test_run(void);
 void sched_idle_test_run(void);
 void libc_syscall_test_run(void);
 void timer_test_run(void);
+void kill_test_run(void);
+void cow_test_run(void);
+void stack_growth_test_run(void);

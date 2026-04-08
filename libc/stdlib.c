@@ -36,10 +36,32 @@ static int char_to_digit(char c, int base) {
     return (digit < base) ? digit : -1;
 }
 
+static const char* parse_unsigned_prefix(const char *s, int *base, int *consumed_zero) {
+    *consumed_zero = 0;
+
+    if (*base == 0) {
+        if (*s == '0') {
+            if (s[1] == 'x' || s[1] == 'X') {
+                *base = 16;
+                return s + 2;
+            }
+            *base = 8;
+            *consumed_zero = 1;
+            return s + 1;
+        }
+        *base = 10;
+    } else if (*base == 16 && *s == '0' && (s[1] == 'x' || s[1] == 'X')) {
+        return s + 2;
+    }
+
+    return s;
+}
+
 long strtol(const char* nptr, char** endptr, int base) {
     const char* s = nptr;
     long result = 0;
     int negative = 0;
+    int consumed_zero = 0;
     
     while (isspace(*s)) s++;
     
@@ -50,21 +72,7 @@ long strtol(const char* nptr, char** endptr, int base) {
         s++;
     }
     
-    if (base == 0) {
-        if (*s == '0') {
-            if (s[1] == 'x' || s[1] == 'X') {
-                base = 16;
-                s += 2;
-            } else {
-                base = 8;
-                s++;
-            }
-        } else {
-            base = 10;
-        }
-    } else if (base == 16 && *s == '0' && (s[1] == 'x' || s[1] == 'X')) {
-        s += 2;
-    }
+    s = parse_unsigned_prefix(s, &base, &consumed_zero);
     
     const char* start = s;
     while (*s) {
@@ -75,7 +83,11 @@ long strtol(const char* nptr, char** endptr, int base) {
     }
     
     if (endptr) {
-        *endptr = (char*)(s > start ? s : nptr);
+        if (s > start || consumed_zero) {
+            *endptr = (char*)s;
+        } else {
+            *endptr = (char*)nptr;
+        }
     }
     
     return negative ? -result : result;
@@ -84,6 +96,7 @@ long strtol(const char* nptr, char** endptr, int base) {
 unsigned long strtoul(const char* nptr, char** endptr, int base) {
     const char* s = nptr;
     unsigned long result = 0;
+    int consumed_zero = 0;
     
     while (isspace(*s)) s++;
     
@@ -91,21 +104,7 @@ unsigned long strtoul(const char* nptr, char** endptr, int base) {
         s++;
     }
     
-    if (base == 0) {
-        if (*s == '0') {
-            if (s[1] == 'x' || s[1] == 'X') {
-                base = 16;
-                s += 2;
-            } else {
-                base = 8;
-                s++;
-            }
-        } else {
-            base = 10;
-        }
-    } else if (base == 16 && *s == '0' && (s[1] == 'x' || s[1] == 'X')) {
-        s += 2;
-    }
+    s = parse_unsigned_prefix(s, &base, &consumed_zero);
     
     const char* start = s;
     while (*s) {
@@ -116,7 +115,11 @@ unsigned long strtoul(const char* nptr, char** endptr, int base) {
     }
     
     if (endptr) {
-        *endptr = (char*)(s > start ? s : nptr);
+        if (s > start || consumed_zero) {
+            *endptr = (char*)s;
+        } else {
+            *endptr = (char*)nptr;
+        }
     }
     
     return result;
@@ -126,6 +129,7 @@ long long strtoll(const char* nptr, char** endptr, int base) {
     const char* s = nptr;
     long long result = 0;
     int negative = 0;
+    int consumed_zero = 0;
     
     while (isspace(*s)) s++;
     
@@ -136,21 +140,7 @@ long long strtoll(const char* nptr, char** endptr, int base) {
         s++;
     }
     
-    if (base == 0) {
-        if (*s == '0') {
-            if (s[1] == 'x' || s[1] == 'X') {
-                base = 16;
-                s += 2;
-            } else {
-                base = 8;
-                s++;
-            }
-        } else {
-            base = 10;
-        }
-    } else if (base == 16 && *s == '0' && (s[1] == 'x' || s[1] == 'X')) {
-        s += 2;
-    }
+    s = parse_unsigned_prefix(s, &base, &consumed_zero);
     
     const char* start = s;
     while (*s) {
@@ -161,7 +151,11 @@ long long strtoll(const char* nptr, char** endptr, int base) {
     }
     
     if (endptr) {
-        *endptr = (char*)(s > start ? s : nptr);
+        if (s > start || consumed_zero) {
+            *endptr = (char*)s;
+        } else {
+            *endptr = (char*)nptr;
+        }
     }
     
     return negative ? -result : result;
@@ -170,6 +164,7 @@ long long strtoll(const char* nptr, char** endptr, int base) {
 unsigned long long strtoull(const char* nptr, char** endptr, int base) {
     const char* s = nptr;
     unsigned long long result = 0;
+    int consumed_zero = 0;
     
     while (isspace(*s)) s++;
     
@@ -177,21 +172,7 @@ unsigned long long strtoull(const char* nptr, char** endptr, int base) {
         s++;
     }
     
-    if (base == 0) {
-        if (*s == '0') {
-            if (s[1] == 'x' || s[1] == 'X') {
-                base = 16;
-                s += 2;
-            } else {
-                base = 8;
-                s++;
-            }
-        } else {
-            base = 10;
-        }
-    } else if (base == 16 && *s == '0' && (s[1] == 'x' || s[1] == 'X')) {
-        s += 2;
-    }
+    s = parse_unsigned_prefix(s, &base, &consumed_zero);
     
     const char* start = s;
     while (*s) {
@@ -202,7 +183,11 @@ unsigned long long strtoull(const char* nptr, char** endptr, int base) {
     }
     
     if (endptr) {
-        *endptr = (char*)(s > start ? s : nptr);
+        if (s > start || consumed_zero) {
+            *endptr = (char*)s;
+        } else {
+            *endptr = (char*)nptr;
+        }
     }
     
     return result;

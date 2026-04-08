@@ -4,7 +4,7 @@
 #include "kernel/printk.h"
 #include "mm/kmalloc.h"
 #include "mm/pmm.h"
-#include "lib/kstring.h"
+#include "lib/string.h"
 #include "process/process.h"
 #include "arch/riscv.h"
 

@@ -77,3 +77,8 @@ int vma_copy_all(struct vm_area **dest_list, struct vm_area *src_list);
 
 // Debug: print all VMAs
 void vma_dump(struct vm_area *vma_list);
+
+// Find a GROWSDOWN VMA whose current start is strictly above addr.
+// Returns the VMA if addr is below the current stack bottom, NULL otherwise.
+// The caller is responsible for enforcing maximum stack size limits.
+struct vm_area *vma_find_growsdown(struct vm_area *vma_list, uintptr_t addr);

@@ -1,14 +1,16 @@
 #include "trap/syscall.h"
 #include "arch/riscv.h"
-#include "kerrno.h"
+#include "errno.h"
 #include "kernel/printk.h"
-#include "lib/kstring.h"
+#include "lib/string.h"
 #include "mm/kmalloc.h"
 #include "mm/pmm.h"
 #include "mm/vmm.h"
+#include "mm/vma.h"
 #include "process/process.h"
 #include "trap/trap.h"
 #include "fs/block_cache.h"
+#include "signal.h"
 
 
 #define MAP_FAILED ((void *) -1)
@@ -23,6 +25,7 @@
 
 #define MAX_ARGS 64
 #define KARG_MAX 256
+#define MAX_PATH    256
 
 void syscall_init(void) { printk("Syscall: Initialized\n"); }
 
@@ -34,6 +37,28 @@ void syscall_handler(trap_frame *frame) {
             kfree(current->trapframe);
         current->trapframe = frame;
         current->trapframe_owned = 0;
+    }
+
+    if (current) {
+        // SIGSTOP: cannot be masked, handle before any other signal (POSIX)
+        uint32_t pending_stop = current->pending_signals & KERNEL_STOP_SIGS;
+        if (pending_stop) {
+            current->pending_signals &= ~pending_stop;
+            proc_stop(current);
+            // Execution resumes here after SIGCONT.
+            // Re-evaluate signals — new ones may have arrived while stopped.
+        }
+
+        // Check if this process has a fatal pending signal before handling anything.
+        // This catches processes that were signaled while running (not sleeping).
+        // Fatal signals: filtered by signal_mask (except SIGKILL which can't be masked,
+        // but we enforce that in sys_sigprocmask, so signal_mask bit 9 is always 0)
+        uint32_t unmasked = current->pending_signals & ~current->signal_mask;
+        if (unmasked & KERNEL_FATAL_SIGS) {
+            current->pending_signals = 0;
+            sys_exit(-1);
+            return; // unreachable — sys_exit calls proc_exit which never returns
+        }
     }
 
     // System call number is in a7
@@ -135,20 +160,28 @@ void syscall_handler(trap_frame *frame) {
             ret = sys_getpid();
             break;
 
+        case SYS_getppid:
+            ret = sys_getppid();
+            break;
+
         case SYS_sbrk:
             ret = (uint64_t) sys_sbrk((intptr_t) arg0);
             break;
 
         case SYS_sleep:
+            printk("  [kernel] syscall_handler: dispatching SYS_sleep(%d)\n", (int)arg0);
             ret = sys_sleep((int) arg0);
+            printk("  [kernel] syscall_handler: SYS_sleep returned %d\n", ret);
             break;
 
         case SYS_uptime:
+            printk("  [kernel] syscall_handler: dispatching SYS_uptime\n");
             ret = sys_uptime();
+            printk("  [kernel] syscall_handler: SYS_uptime returned %d\n", ret);
             break;
 
         case SYS_kill:
-            ret = sys_kill((pid_t) arg0);
+            ret = sys_kill((pid_t) arg0, (int) arg1);
             break;
 
         case SYS_mmap:
@@ -165,7 +198,7 @@ void syscall_handler(trap_frame *frame) {
             break;
 
         case SYS_lseek:
-            ret = sys_lseek((int) arg0, (off_t) arg1, (int) arg2);
+            ret = (uint64_t)(int64_t)sys_lseek((int) arg0, (off_t) arg1, (int) arg2);
             break;
 
         case SYS_unlink:
@@ -178,6 +211,38 @@ void syscall_handler(trap_frame *frame) {
 
         case SYS_sync:
             ret = sys_sync();
+            break;
+
+        case SYS_pipe:
+            ret = sys_pipe((int *) arg0);
+            break;
+
+        case SYS_dup:
+            ret = sys_dup((int) arg0);
+            break;
+
+        case SYS_dup2:
+            ret = sys_dup2((int) arg0, (int) arg1);
+            break;
+
+        case SYS_waitpid:
+            ret = sys_waitpid((pid_t) arg0, (int *) arg1, (int) arg2);
+            break;
+
+        case SYS_sigprocmask:
+            ret = sys_sigprocmask((int)arg0, (uint32_t *)arg1, (uint32_t *)arg2);
+            break;
+
+        case SYS_chdir:
+            ret = (uint64_t)sys_chdir((const char *)arg0);
+            break;
+
+        case SYS_getcwd:
+            ret = (uint64_t)sys_getcwd((char *)arg0, (size_t)arg1);
+            break;
+
+        case SYS_fs_getdents:
+            ret = sys_fs_getdents((int)arg0, (void *)arg1, (uint32_t)arg2);
             break;
 
         default:
@@ -207,14 +272,28 @@ pid_t sys_fork(void) {
     for (int i = 0; i < MAX_FDS; i++) {
         child->fds.files[i] = current->fds.files[i];
         if (child->fds.files[i])
-            vfs_ref(child->fds.files[i]);  // bump refcount if vfs supports it
+            file_ref(child->fds.files[i]);  // bump refcount if vfs supports it
     }
 
-    // Copy parent's address space
+    // Copy parent's address space (page table + VMA list)
     child->pagetable = vmm_copy_pagetable(current->pagetable);
     if (!child->pagetable) {
         proc_free(child);
-        return -1; // Unable to create child address space as copy of the parent
+        return -1;
+    }
+    if (vma_copy_all(&child->vma_list, current->vma_list) != 0) {
+        vmm_free_pagetable(child->pagetable);
+        proc_free(child);
+        return -1;
+    }
+
+    child->signal_mask = current->signal_mask; // Fork child inherits parent's signal mask
+    child->fs = fs_struct_copy(current->fs);
+    if (!child->fs) {
+        vma_free_all(child->vma_list);
+        vmm_free_pagetable(child->pagetable);
+        proc_free(child);
+        return -1;
     }
 
     // Copy parent's trap frame and register state to the child
@@ -265,29 +344,15 @@ pid_t sys_fork(void) {
 ssize_t sys_read(int fd, void *buf, size_t count) {
     file_t *f = fd_get(&current->fds, fd);
     if (!f) return -1;
+    if (f->type == FILE_PIPE)
+        return file_read(f, buf, count);
     set_csr_bit(sstatus, SSTATUS_SUM);
-    int n = vfs_read(f, buf, count);
+    int n = file_read(f, buf, count);
     clear_csr_bit(sstatus, SSTATUS_SUM);
     return n;
 }
 
 ssize_t sys_write(int fd, const void *buf, size_t count) {
-    // // For now, just print to console if fd is 1 (stdout)
-    // if (fd == 1 || fd == 2) {
-    //     const char *str = (const char *) buf;
-    //     // buf is a user-space pointer (PTE_U set).  S-mode cannot load from
-    //     // user pages unless sstatus.SUM=1.  Set it for the duration of the
-    //     // copy, then clear it to restore the default deny policy.
-    //     set_csr_bit(sstatus, SSTATUS_SUM);
-    //     for (size_t i = 0; i < count; i++) {
-    //         printk("%c", str[i]);
-    //     }
-    //     clear_csr_bit(sstatus, SSTATUS_SUM);
-    //     return (ssize_t)count;
-    // }
-    //
-    // printk("sys_write(%d, %p, %d) not implemented\n", fd, buf, count);
-    // return -1;
     if (count == 0) return 0;
     if (!current || fd < 0 || fd >= MAX_FDS) return -EBADF;
 
@@ -303,18 +368,55 @@ ssize_t sys_write(int fd, const void *buf, size_t count) {
         clear_csr_bit(sstatus, SSTATUS_SUM);
         return (ssize_t)count;
     }
-    if (!f) return -EBADF;
+    if (f->type == FILE_PIPE)
+        return file_write(f, buf, count);
     set_csr_bit(sstatus, SSTATUS_SUM);
-    ssize_t n = vfs_write(f, buf, count);
+    ssize_t n = file_write(f, buf, count);
     clear_csr_bit(sstatus, SSTATUS_SUM);
     return n;
 }
 
 int sys_open(const char *path, int flags) {
+    if (!current || !path) return -EINVAL;
+
+    // SUM open only for the copy — nothing else
     set_csr_bit(sstatus, SSTATUS_SUM);
-    file_t *f = vfs_open(path, flags);
+    char kpath[MAX_PATH];
+    strncpy(kpath, path, MAX_PATH - 1);
+    kpath[MAX_PATH - 1] = '\0';
     clear_csr_bit(sstatus, SSTATUS_SUM);
-    if (!f) return -1;
+
+    // Resolve path relative to cwd before doing anything else
+    char cwd[MAX_PATH];
+    if (fs_struct_get_cwd(current->fs, cwd, MAX_PATH) < 0) return -ENAMETOOLONG;
+    char resolved[MAX_PATH];
+    if (path_resolve(cwd, kpath, resolved) < 0) return -ENAMETOOLONG;
+
+    // If O_CREAT is set and the file doesn't exist, create it
+    if (flags & O_CREAT) {
+        dentry_t *d = vfs_lookup(resolved);
+        if (!d) {
+            if (vfs_create(resolved, 0644) < 0) return -ENOENT;
+        } else {
+            dentry_put(d);
+        }
+    }
+
+    file_t *f = file_open(resolved);
+    if (!f) return -ENOENT;
+
+    f->flags = flags;
+
+    // O_TRUNC: discard existing content
+    if ((flags & O_TRUNC) && (flags & (O_WRONLY | O_RDWR))) {
+        if (f->vnode && f->vnode->mount && f->vnode->mount->fs_type->ops.truncate)
+            f->vnode->mount->fs_type->ops.truncate(f->vnode);
+    }
+
+    // O_APPEND: start writes at end of file
+    if (flags & O_APPEND)
+        f->offset = f->vnode ? f->vnode->size : 0;
+
     return fd_alloc(&current->fds, f);
 }
 
@@ -325,9 +427,103 @@ int sys_close(int fd) {
     return 0;
 }
 
+int sys_pipe(int pipefd[2]) {
+    if (!current || !pipefd) return -EFAULT;
+
+    pipe_t *p = (pipe_t *)kmalloc(sizeof(pipe_t));
+    if (!p) return -ENOMEM;
+    memset(p, 0, sizeof(*p));
+    p->readers = 1;
+    p->writers = 1;
+
+    file_t *read_end = (file_t *)kmalloc(sizeof(file_t));
+    if (!read_end) {
+        kfree(p);
+        return -ENOMEM;
+    }
+    memset(read_end, 0, sizeof(*read_end));
+    read_end->type = FILE_PIPE;
+    read_end->pipe = p;
+    read_end->pipe_flags = PIPE_END_READ;
+    read_end->ref_count = 1;
+
+    file_t *write_end = (file_t *)kmalloc(sizeof(file_t));
+    if (!write_end) {
+        kfree(read_end);
+        kfree(p);
+        return -ENOMEM;
+    }
+    memset(write_end, 0, sizeof(*write_end));
+    write_end->type = FILE_PIPE;
+    write_end->pipe = p;
+    write_end->pipe_flags = PIPE_END_WRITE;
+    write_end->ref_count = 1;
+
+    int read_fd = fd_alloc(&current->fds, read_end);
+    if (read_fd < 0) {
+        kfree(write_end);
+        kfree(read_end);
+        kfree(p);
+        return -EMFILE;
+    }
+
+    int write_fd = fd_alloc(&current->fds, write_end);
+    if (write_fd < 0) {
+        current->fds.files[read_fd] = NULL;
+        kfree(write_end);
+        kfree(read_end);
+        kfree(p);
+        return -EMFILE;
+    }
+
+    set_csr_bit(sstatus, SSTATUS_SUM);
+    pipefd[0] = read_fd;
+    pipefd[1] = write_fd;
+    clear_csr_bit(sstatus, SSTATUS_SUM);
+    return 0;
+}
+
+int sys_dup(int oldfd) {
+    if (!current) return -EBADF;
+
+    file_t *f = fd_get(&current->fds, oldfd);
+    if (!f) return -EBADF;
+
+    file_ref(f);
+    int newfd = fd_alloc(&current->fds, f);
+    if (newfd < 0) {
+        file_close(f);
+        return -EMFILE;
+    }
+
+    return newfd;
+}
+
+int sys_dup2(int oldfd, int newfd) {
+    if (!current) return -EBADF;
+    if (newfd < 0 || newfd >= MAX_FDS) return -EBADF;
+
+    file_t *f = fd_get(&current->fds, oldfd);
+    if (!f) return -EBADF;
+
+    if (oldfd == newfd) return newfd;
+
+    if (fd_get(&current->fds, newfd)) {
+        fd_close(&current->fds, newfd);
+    }
+
+    file_ref(f);
+    current->fds.files[newfd] = f;
+    return newfd;
+}
+
 pid_t sys_wait(int *status) {
     // Use the new proc_wait implementation for process reaping and blocking
     return proc_wait(status);
+}
+
+pid_t sys_waitpid(pid_t pid, int *status, int options) {
+    return proc_waitpid(pid, status, options);
 }
 
 pid_t sys_getpid(void) {
@@ -338,6 +534,14 @@ pid_t sys_getpid(void) {
     return -1;
 }
 
+pid_t sys_getppid(void) {
+    struct proc *p = proc_current();
+    if (p != NULL && p->parent != NULL) {
+        return p->parent->pid;
+    }
+    return 0;   /* POSIX: init (PID 1) has no parent → return 0 */
+}
+
 // void *sys_sbrk(intptr_t increment) {
 //     printk("sys_sbrk(%ld) not implemented\n", increment);
 //     return (void *) -1;
@@ -345,18 +549,62 @@ pid_t sys_getpid(void) {
 
 int sys_sleep(int seconds) {
     if (seconds <= 0) return 0;
-    current->wake_tick = timer_ticks + (uint64_t)seconds * TICKS_PER_SEC;
+    uint64_t wake = timer_ticks + (uint64_t)seconds * TICKS_PER_SEC;
+    printk("  [kernel] sys_sleep: seconds=%d timer_ticks=%lu wake_tick=%lu\n",
+           seconds, (unsigned long)timer_ticks, (unsigned long)wake);
+    current->wake_tick = wake;
+    printk("  [kernel] sys_sleep: calling proc_sleep (going to sleep)\n");
     proc_sleep(current);   // sleep on self; timer_handler calls proc_wakeup(p)
+    printk("  [kernel] sys_sleep: woke up, timer_ticks=%lu\n", (unsigned long)timer_ticks);
     return 0;
 }
 
 int sys_uptime(void) {
+    printk("  [kernel] sys_uptime: timer_ticks=%lu\n", (unsigned long)timer_ticks);
     return (int)timer_ticks;
 }
 
-int sys_kill(pid_t pid) {
-    printk("sys_kill(%d) not implemented\n", pid);
-    return -1;
+int sys_kill(pid_t pid, int sig) {
+    if (sig < 0 || sig > 31) return -1;
+
+    struct proc *target = proc_find(pid);
+    if (!target || target->state == PROC_UNUSED || target->state == PROC_ZOMBIE)
+        return -1;
+
+    // sig == 0: validity check only (POSIX), no signal sent
+    if (sig == 0) return 0;
+    
+    // SIGCONT: resume a stopped process and clear any pending SIGSTOP
+    if (sig == SIGCONT) {
+        target->pending_signals &= ~KERNEL_STOP_SIGS;
+        if (target->state == PROC_STOPPED)
+            proc_unstop(target);
+        return 0;
+    }
+
+    // SIGSTOP cannot be masked (POSIX). Act immediately when possible.
+    if (sig == SIGSTOP) {
+        target->pending_signals &= ~(1U << KERNEL_SIGCONT); // discard pending CONT
+        if (target->state == PROC_READY || target->state == PROC_BLOCKED)
+            proc_stop(target);
+        else
+            // Target is RUNNING (unreachable single-core) — defer via pending bit
+            target->pending_signals |= KERNEL_STOP_SIGS;
+        return 0;
+    }
+
+    // Set the signal bit in the target's pending bitmask
+    target->pending_signals |= (1U << sig);
+
+    // Wake a blocked (sleeping) target so it re-enters the scheduler
+    // and checks pending_signals before resuming user mode.
+    // Use proc_unblock() directly rather than proc_wakeup() because
+    // proc_wakeup() only matches processes sleeping on a specific channel
+    // (e.g. it would miss a process blocked on terminal I/O with chan != target).
+    if (target->state == PROC_BLOCKED)
+        proc_unblock(target);
+
+    return 0;
 }
 
 void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset) {
@@ -591,41 +839,137 @@ void *sys_sbrk(intptr_t increment) {
 
 off_t sys_lseek(int fd, off_t offset, int whence) {
     if (!current) return -1;
-    
+
     file_t *f = fd_get(&current->fds, fd);
     if (!f) {
         printk("sys_lseek: invalid fd %d\n", fd);
         return -1;
     }
-    
+
     // Don't allow seeking on stdin/stdout/stderr
     if (f->type == FILE_STDIN || f->type == FILE_STDOUT) {
         return -1;
     }
-    
-    return vfs_lseek(f, offset, whence);
+
+    return (off_t)file_lseek(f, (size_t)offset, whence);
 }
 
 int sys_unlink(const char *path) {
     if (!current) return -1;
-    
+
     set_csr_bit(sstatus, SSTATUS_SUM);
-    int ret = vfs_unlink(path);
+    char kpath[MAX_PATH];
+    strncpy(kpath, path, MAX_PATH - 1);
+    kpath[MAX_PATH - 1] = '\0';
     clear_csr_bit(sstatus, SSTATUS_SUM);
-    
-    return ret;
+
+    return vfs_unlink(kpath);
 }
 
 int sys_mkdir(const char *path, mode_t mode) {
     if (!current) return -1;
-    
+
     set_csr_bit(sstatus, SSTATUS_SUM);
-    int ret = vfs_mkdir(path, mode);
+    char kpath[MAX_PATH];
+    strncpy(kpath, path, MAX_PATH - 1);
+    kpath[MAX_PATH - 1] = '\0';
     clear_csr_bit(sstatus, SSTATUS_SUM);
-    
-    return ret;
+
+    return vfs_mkdir(kpath, mode);
 }
 
 int sys_sync(void) {
     return block_cache_flush();
+}
+
+int sys_sigprocmask(int how, const uint32_t *set, uint32_t *oldset) {
+    if (!current) return -1;
+
+    // set and oldset are user-space pointers — must enable SUM before dereferencing.
+    set_csr_bit(sstatus, SSTATUS_SUM);
+
+    if (oldset)
+        *oldset = current->signal_mask;
+
+    uint32_t val = 0;
+    if (set)
+        val = *set;
+
+    clear_csr_bit(sstatus, SSTATUS_SUM);
+
+    if (!set) return 0;
+    uint32_t new_mask = current->signal_mask;
+
+    switch (how) {
+        case 0: new_mask |=  val; break;   // SIG_BLOCK   = 0
+        case 1: new_mask &= ~val; break;   // SIG_UNBLOCK = 1
+        case 2: new_mask  =  val; break;   // SIG_SETMASK = 2
+        default: return -1;
+    }
+
+    // SIGKILL (9) and SIGSTOP (19) can never be masked — POSIX requirement
+    new_mask &= ~((1U << KERNEL_SIGKILL) | (1U << KERNEL_SIGSTOP));
+    current->signal_mask = new_mask;
+    return 0;
+}
+
+int sys_chdir(const char *path) {
+    if (!current || !path) return -EINVAL;
+
+    set_csr_bit(sstatus, SSTATUS_SUM);
+    char kpath[MAX_PATH];
+    strncpy(kpath, path, MAX_PATH - 1);
+    kpath[MAX_PATH - 1] = '\0';
+    clear_csr_bit(sstatus, SSTATUS_SUM);
+
+    return vfs_chdir(kpath);
+}
+
+char *sys_getcwd(char *buf, size_t size) {
+    if (!current || !buf || size == 0 || !current->fs) return NULL;
+
+    // Build the absolute path from the cwd dentry chain
+    char kbuf[MAX_PATH];
+    if (fs_struct_get_cwd(current->fs, kbuf, MAX_PATH) < 0)
+        return NULL;
+
+    size_t cwd_len = strlen(kbuf);
+    if (cwd_len + 1 > size) return NULL;   // user buffer too small
+
+    set_csr_bit(sstatus, SSTATUS_SUM);
+    memcpy(buf, kbuf, cwd_len + 1);
+    clear_csr_bit(sstatus, SSTATUS_SUM);
+
+    return buf;
+}
+
+// Fills user buffer `dirp` with fs_dent records for the directory
+// referenced by `fd`.  Returns bytes written, 0 at end-of-directory, -errno.
+int sys_fs_getdents(int fd, void *dirp, uint32_t count)
+{
+    if (!current || !dirp) return -EINVAL;
+
+    file_t *f = fd_get(&current->fds, fd);
+    if (!f || f->type != FILE_VNODE)              return -EBADF;
+    if (!f->vnode || f->vnode->type != VNODE_DIR) return -ENOTDIR;
+
+    if (count == 0) return 0;
+
+    char *kbuf = kmalloc(count);
+    if (!kbuf) return -ENOMEM;
+
+    uint32_t entries_read = 0;
+    int n = vfs_readdir(f->vnode, (uint32_t)f->offset,
+                        kbuf, count, &entries_read);
+
+    if (n > 0) {
+        f->offset += entries_read;
+
+        set_csr_bit(sstatus, SSTATUS_SUM);
+        memcpy(dirp, kbuf, (size_t)n);
+        clear_csr_bit(sstatus, SSTATUS_SUM);
+    }
+
+    kfree(kbuf);
+    return n;
 }

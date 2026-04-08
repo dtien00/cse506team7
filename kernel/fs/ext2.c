@@ -3,7 +3,7 @@
 #include "drivers/virtio.h"
 #include "kernel/printk.h"
 #include "mm/kmalloc.h"
-#include "lib/kstring.h"
+#include "lib/string.h"
 
 static fs_type_t ext2_fs_type;
 
@@ -237,102 +237,137 @@ static uint32_t ext2_alloc_inode(ext2_mount_data_t *mnt) {
 }
 
 // Mount ext2 filesystem
-int ext2_mount(mount_t *mnt, const char *source) {
+vnode_t *ext2_mount(mount_t *mnt, const char *source) {
     printk("ext2: mounting filesystem\n");
-    
+
     // Allocate mount data
     ext2_mount_data_t *ext2_mnt = (ext2_mount_data_t *)kmalloc(sizeof(ext2_mount_data_t));
     if (!ext2_mnt) {
         printk("ext2: failed to allocate mount data\n");
-        return -1;
+        return NULL;
     }
     
     // Allocate and read superblock (at byte 1024 = block 1 for 1KB blocks)
     ext2_mnt->sb = (ext2_superblock_t *)kmalloc(sizeof(ext2_superblock_t));
     if (!ext2_mnt->sb) {
         kfree(ext2_mnt);
-        return -1;
+        return NULL;
     }
-    
+
     // Read superblock (it's at sector 2, since 1024 bytes / 512 bytes per sector = 2)
     uint8_t *sb_buf = (uint8_t *)kmalloc(1024);
     if (!sb_buf) {
         kfree(ext2_mnt->sb);
         kfree(ext2_mnt);
-        return -1;
+        return NULL;
     }
-    
+
     if (virtio_blk_read(2, sb_buf, 2) != 0) {
         printk("ext2: failed to read superblock\n");
         kfree(sb_buf);
         kfree(ext2_mnt->sb);
         kfree(ext2_mnt);
-        return -1;
+        return NULL;
     }
-    
+
     memcpy(ext2_mnt->sb, sb_buf, sizeof(ext2_superblock_t));
     kfree(sb_buf);
-    
+
     // Verify magic number
     if (ext2_mnt->sb->s_magic != EXT2_SUPER_MAGIC) {
         printk("ext2: invalid magic number 0x%x (expected 0x%x)\n",
                ext2_mnt->sb->s_magic, EXT2_SUPER_MAGIC);
         kfree(ext2_mnt->sb);
         kfree(ext2_mnt);
-        return -1;
+        return NULL;
     }
-    
+
     // Calculate block size
     ext2_mnt->block_size = 1024 << ext2_mnt->sb->s_log_block_size;
     ext2_mnt->inodes_per_group = ext2_mnt->sb->s_inodes_per_group;
     ext2_mnt->blocks_per_group = ext2_mnt->sb->s_blocks_per_group;
-    
+
     // Calculate number of block groups
-    ext2_mnt->groups_count = (ext2_mnt->sb->s_blocks_count + 
-                              ext2_mnt->sb->s_blocks_per_group - 1) / 
+    ext2_mnt->groups_count = (ext2_mnt->sb->s_blocks_count +
+                              ext2_mnt->sb->s_blocks_per_group - 1) /
                              ext2_mnt->sb->s_blocks_per_group;
-    
+
     printk("ext2: block_size=%d, groups=%d, inodes=%d, blocks=%d\n",
            ext2_mnt->block_size, ext2_mnt->groups_count,
            ext2_mnt->sb->s_inodes_count, ext2_mnt->sb->s_blocks_count);
-    
+
     // Read block group descriptor table
     // It starts immediately after the superblock
     uint32_t gdt_block = (ext2_mnt->block_size == 1024) ? 2 : 1;
     uint32_t gdt_size = ext2_mnt->groups_count * sizeof(ext2_group_desc_t);
-    
+
     ext2_mnt->group_desc = (ext2_group_desc_t *)kmalloc(gdt_size);
     if (!ext2_mnt->group_desc) {
         kfree(ext2_mnt->sb);
         kfree(ext2_mnt);
-        return -1;
+        return NULL;
     }
-    
+
     // Read group descriptors (use BLOCK_SIZE since cache uses 1KB blocks)
     uint8_t *gdt_buf = (uint8_t *)kmalloc(1024);
     if (!gdt_buf) {
         kfree(ext2_mnt->group_desc);
         kfree(ext2_mnt->sb);
         kfree(ext2_mnt);
-        return -1;
+        return NULL;
     }
-    
+
     if (block_cache_read(gdt_block, gdt_buf) != 0) {
         printk("ext2: failed to read group descriptors\n");
         kfree(gdt_buf);
         kfree(ext2_mnt->group_desc);
         kfree(ext2_mnt->sb);
         kfree(ext2_mnt);
-        return -1;
+        return NULL;
     }
-    
+
     memcpy(ext2_mnt->group_desc, gdt_buf, gdt_size);
     kfree(gdt_buf);
-    
+
     mnt->fs_data = ext2_mnt;
-    
+
+    // Read root inode and return root vnode
+    ext2_inode_t *root_inode = (ext2_inode_t *)kmalloc(sizeof(ext2_inode_t));
+    if (!root_inode) {
+        kfree(ext2_mnt->group_desc);
+        kfree(ext2_mnt->sb);
+        kfree(ext2_mnt);
+        return NULL;
+    }
+
+    if (ext2_read_inode(ext2_mnt, EXT2_ROOT_INO, root_inode) != 0) {
+        printk("ext2: failed to read root inode\n");
+        kfree(root_inode);
+        kfree(ext2_mnt->group_desc);
+        kfree(ext2_mnt->sb);
+        kfree(ext2_mnt);
+        return NULL;
+    }
+
+    vnode_t *root_vnode = (vnode_t *)kmalloc(sizeof(vnode_t));
+    if (!root_vnode) {
+        kfree(root_inode);
+        kfree(ext2_mnt->group_desc);
+        kfree(ext2_mnt->sb);
+        kfree(ext2_mnt);
+        return NULL;
+    }
+
+    root_vnode->ino = EXT2_ROOT_INO;
+    root_vnode->mode = root_inode->i_mode;
+    root_vnode->size = root_inode->i_size;
+    root_vnode->ref_count = 0;
+    root_vnode->mount = mnt;
+    root_vnode->fs_data = root_inode;
+    root_vnode->fs_type = mnt->fs_type;
+
     printk("ext2: mounted successfully\n");
-    return 0;
+    return root_vnode;
 }
 
 // Unmount ext2 filesystem

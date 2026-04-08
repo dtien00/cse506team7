@@ -33,15 +33,6 @@ typedef struct tmpfs_mount_data {
 
 // Function declarations
 void tmpfs_init(void);
-int tmpfs_mount(mount_t *mnt, const char *source);
-int tmpfs_unmount(mount_t *mnt);
-vnode_t *tmpfs_lookup(mount_t *mnt, const char *path);
-int tmpfs_read(vnode_t *vnode, void *buf, size_t offset, size_t len);
-int tmpfs_write(vnode_t *vnode, const void *buf, size_t offset, size_t len);
-int tmpfs_create(mount_t *mnt, const char *path, uint32_t mode);
-int tmpfs_unlink(mount_t *mnt, const char *path);
-int tmpfs_mkdir(mount_t *mnt, const char *path, uint32_t mode);
-int tmpfs_truncate(vnode_t *vnode);
 
 // Get the registered tmpfs filesystem type
 fs_type_t *tmpfs_get_type(void);

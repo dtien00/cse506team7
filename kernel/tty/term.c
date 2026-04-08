@@ -3,7 +3,7 @@
 #include "kernel/console.h"
 #include "kernel/printk.h"
 #include "process/process.h"
-#include "lib/kstring.h"
+#include "lib/string.h"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Global singleton

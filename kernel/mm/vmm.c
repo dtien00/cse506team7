@@ -2,7 +2,7 @@
 #include "mm/pmm.h"
 #include "arch/riscv.h"
 #include "kernel/printk.h"
-#include "lib/kstring.h"
+#include "lib/string.h"
 
 static pagetable_t kernel_pagetable = NULL;
 
@@ -174,19 +174,15 @@ pagetable_t vmm_create_pagetable(void) {
 }
 
 static void vmm_free_pagetable_recursive(pagetable_t pagetable, pagetable_t kernel_level_pt, int level) {
-    if (level > 0) {
-        for (int i = 0; i < 512; i++) {
-            uint64_t pte = pagetable[i];
-            if (!((pte & PTE_V) && (pte & (PTE_R | PTE_W | PTE_X)) == 0))
-                continue;
+    for (int i = 0; i < 512; i++) {
+        uint64_t pte = pagetable[i];
+        if (!(pte & PTE_V)) continue;
 
-            // Skip entries that are identical to the kernel's entry at this
-            // same level — they are shared and must not be freed here.
+        if ((pte & (PTE_R | PTE_W | PTE_X)) == 0) {
+            /* Intermediate page-table node — recurse if not shared with kernel */
             if (kernel_level_pt && pte == kernel_level_pt[i])
                 continue;
 
-            // Determine the kernel's corresponding child table (if any) so
-            // the next recursion level can perform the same shared-entry check.
             pagetable_t kernel_child = NULL;
             if (kernel_level_pt) {
                 uint64_t kpte = kernel_level_pt[i];
@@ -194,8 +190,13 @@ static void vmm_free_pagetable_recursive(pagetable_t pagetable, pagetable_t kern
                     kernel_child = (pagetable_t)PTE_TO_PA(kpte);
             }
 
-            vmm_free_pagetable_recursive((pagetable_t)PTE_TO_PA(pte), kernel_child, level - 1);
+            if (level > 0)
+                vmm_free_pagetable_recursive((pagetable_t)PTE_TO_PA(pte), kernel_child, level - 1);
+        } else if (pte & PTE_U) {
+            /* Leaf user data page — decref (handles both COW-shared and private) */
+            pmm_free_page((void *)PTE_TO_PA(pte));
         }
+        /* Kernel/device leaf mappings (no PTE_U): shared, do not free */
     }
     pmm_free_page(pagetable);
 }
@@ -302,13 +303,15 @@ static int vmm_copy_pagetable_recursive(pagetable_t child, pagetable_t parent, i
       // PTE_U; reading their physical addresses as RAM would cause a load
       // access fault.  Only pages explicitly tagged PTE_U by exec() are
       // safe to copy.
+      // Instead of allocating a new page:
       if (pte & PTE_U) {
-        // True user page: allocate a new physical page and copy contents.
-        void *newpage = pmm_alloc_page();
-        if (!newpage) return -1;
-        void *oldpage = (void *)PTE_TO_PA(pte);
-        memcpy(newpage, oldpage, PGSIZE);
-        child[i] = PA_TO_PTE((uintptr_t)newpage) | (pte & (PTE_R | PTE_W | PTE_X | PTE_U | PTE_V));
+          void *phys = (void *)PTE_TO_PA(pte);
+          pmm_incref(phys);                        // shared now
+          uint64_t flags = pte & ~PTE_W;           // strip write
+          if (pte & PTE_W)
+              flags |= PTE_COW;                    // mark COW on both
+          parent[i] = flags;                       // parent loses write too
+          child[i]  = flags;                       // child shares same PA
       } else {
         // Kernel or device mapping: share the PTE as-is.
         child[i] = pte;

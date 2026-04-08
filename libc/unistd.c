@@ -3,6 +3,7 @@
 
 #define SYS_exit  1
 #define SYS_sleep 11
+#define SYS_uptime 12
 
 void _exit(int status) {
     register long a0 asm("a0") = status;
@@ -12,10 +13,49 @@ void _exit(int status) {
 }
 
 unsigned int sleep(unsigned int seconds) {
+    {
+        const char *msg = "  [libc] sleep: before ecall\n";
+        register long _a0 asm("a0") = 1;
+        register long _a1 asm("a1") = (long)msg;
+        register long _a2 asm("a2") = 29;
+        register long _a7 asm("a7") = 4;
+        asm volatile("ecall" : "+r"(_a0) : "r"(_a1), "r"(_a2), "r"(_a7) : "memory");
+    }
     register long a0 asm("a0") = seconds;
     register long a7 asm("a7") = SYS_sleep;
     asm volatile("ecall" :: "r"(a0), "r"(a7) : "memory");
+    {
+        const char *msg = "  [libc] sleep: after ecall\n";
+        register long _a0 asm("a0") = 1;
+        register long _a1 asm("a1") = (long)msg;
+        register long _a2 asm("a2") = 28;
+        register long _a7 asm("a7") = 4;
+        asm volatile("ecall" : "+r"(_a0) : "r"(_a1), "r"(_a2), "r"(_a7) : "memory");
+    }
     return 0;
+}
+
+int uptime(void) {
+    {
+        const char *msg = "  [libc] uptime: before ecall\n";
+        register long _a0 asm("a0") = 1; /* stdout */
+        register long _a1 asm("a1") = (long)msg;
+        register long _a2 asm("a2") = 30;
+        register long _a7 asm("a7") = 4; /* SYS_write */
+        asm volatile("ecall" : "+r"(_a0) : "r"(_a1), "r"(_a2), "r"(_a7) : "memory");
+    }
+    register long a7 asm("a7") = SYS_uptime;
+    register long a0 asm("a0") = 0;
+    asm volatile("ecall" : "+r"(a0) : "r"(a7) : "memory");
+    {
+        const char *msg = "  [libc] uptime: after ecall\n";
+        register long _a0 asm("a0") = 1;
+        register long _a1 asm("a1") = (long)msg;
+        register long _a2 asm("a2") = 29;
+        register long _a7 asm("a7") = 4;
+        asm volatile("ecall" : "+r"(_a0) : "r"(_a1), "r"(_a2), "r"(_a7) : "memory");
+    }
+    return (int)a0;
 }
 
 int usleep(unsigned int usec) {
@@ -24,9 +64,7 @@ int usleep(unsigned int usec) {
     return 0;
 }
 
-pid_t getppid(void) {
-    return -1;
-}
+/* getppid() is implemented as an assembly syscall wrapper in syscall.S */
 
 int isatty(int fd) {
     return (fd == 0 || fd == 1 || fd == 2) ? 1 : 0;

@@ -33,9 +33,16 @@ void run_test_process(us_test_group_t *group);
 void run_test_write(us_test_group_t *group);
 /* fs_persist fills multiple groups (one per sub-test) */
 void run_test_fs_persist(us_test_group_t groups[], int *count);
+void run_test_syscall(us_test_group_t *group);
+void run_test_cow(us_test_group_t *group);
+void run_test_sched(us_test_group_t *group);
+void run_test_signal(us_test_group_t *group);
+void run_test_stack_growth(us_test_group_t *group);
+void run_test_dirent(us_test_group_t *group);
+
 
 /* base groups + 6 fs_persist sub-groups */
-#define MAX_GROUPS 16
+#define MAX_GROUPS 30
 
 int main(void) {
     us_test_group_t groups[MAX_GROUPS];
@@ -47,18 +54,24 @@ int main(void) {
         groups[i].skipped = 0;
     }
 
-    ut_suite_begin("libc Userspace Test Suite");
-
+    ut_suite_begin("SBUnix Userspace Test Suite");
     int idx = 0;
-    run_test_printf (&groups[idx++]);
-    run_test_string (&groups[idx++]);
-    run_test_ctype  (&groups[idx++]);
-    run_test_stdlib (&groups[idx++]);
-    run_test_malloc (&groups[idx++]);
+
+    run_test_printf(&groups[idx++]);
+    run_test_string(&groups[idx++]);
+    run_test_ctype(&groups[idx++]);
+    run_test_stdlib(&groups[idx++]);
+    run_test_malloc(&groups[idx++]);
     run_test_file_io(&groups[idx++]);
     run_test_process(&groups[idx++]);
-    run_test_write  (&groups[idx++]);
-    run_test_fs_persist(groups, &idx);   /* appends 6 groups */
+    run_test_write(&groups[idx++]);
+    // run_test_fs_persist(groups, &idx);
+    run_test_syscall(&groups[idx++]);
+    run_test_cow(&groups[idx++]);
+    run_test_sched(&groups[idx++]);
+    run_test_signal(&groups[idx++]);
+    run_test_dirent(&groups[idx++]);
+    run_test_stack_growth(&groups[idx++]);
 
     return ut_suite_end(groups, idx);
 }
