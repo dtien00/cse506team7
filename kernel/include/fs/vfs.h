@@ -78,7 +78,6 @@ int vfs_register_fs(fs_type_t *fs_type);
 int vfs_mount(const char *source, const char *target, const char *fstype);
 int vfs_unmount(const char *target);
 mount_t *vfs_find_mount(const char *path);
-void vfs_ref(file_t *f);
 
 // VFS-level operations
 dentry_t *vfs_get_root(void);

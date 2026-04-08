@@ -325,17 +325,6 @@ int vfs_mkdir(const char *path, uint32_t mode) {
     return -1;
 }
 
-/*
- * vfs_ref — acquire a shared reference to an already-open file.
- *
- * Call this whenever a file_t is handed to a second owner WITHOUT going
- * through vfs_open (i.e. fork, dup).
- */
-void vfs_ref(file_t *f) {
-    if (!f) return;
-    f->ref_count++;
-}
-
 // -----------------------------------------------------------------------------
 // File operations
 // -----------------------------------------------------------------------------

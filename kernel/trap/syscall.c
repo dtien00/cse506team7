@@ -247,7 +247,7 @@ pid_t sys_fork(void) {
     for (int i = 0; i < MAX_FDS; i++) {
         child->fds.files[i] = current->fds.files[i];
         if (child->fds.files[i])
-            vfs_ref(child->fds.files[i]);  // bump refcount if vfs supports it
+            file_ref(child->fds.files[i]);  // bump refcount if vfs supports it
     }
 
     // Copy parent's address space (page table + VMA list)
@@ -361,7 +361,6 @@ ssize_t sys_write(int fd, const void *buf, size_t count) {
     }
     if (f->type == FILE_PIPE)
         return file_write(f, buf, count);
-    if (!f) return -EBADF;
     set_csr_bit(sstatus, SSTATUS_SUM);
     ssize_t n = file_write(f, buf, count);
     clear_csr_bit(sstatus, SSTATUS_SUM);
@@ -445,7 +444,7 @@ int sys_dup(int oldfd) {
     file_t *f = fd_get(&current->fds, oldfd);
     if (!f) return -EBADF;
 
-    vfs_ref(f);
+    file_ref(f);
     int newfd = fd_alloc(&current->fds, f);
     if (newfd < 0) {
         file_close(f);
@@ -468,7 +467,7 @@ int sys_dup2(int oldfd, int newfd) {
         fd_close(&current->fds, newfd);
     }
 
-    vfs_ref(f);
+    file_ref(f);
     current->fds.files[newfd] = f;
     return newfd;
 }
