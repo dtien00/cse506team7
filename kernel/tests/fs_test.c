@@ -332,7 +332,7 @@ void fs_test_run(void) {
     printk("\n");
 
     tmpfs_test();
-    // printk("\n");
+    printk("\n");
     printk("\n========================================\n");
     printk("  Results: %d passed, %d failed\n", passed, failed);
     printk("========================================\n");

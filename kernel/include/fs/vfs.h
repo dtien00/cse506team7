@@ -1,7 +1,6 @@
 // vfs.h
 #pragma once
-#include "fs/tarfs.h"
-#include "fs/dentry.h"
+#include "fs/file.h"
 #include "kernel/types.h"
 
 // Forward declarations

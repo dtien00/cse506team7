@@ -1,4 +1,6 @@
 #include "fs/tarfs.h"
+
+#include "errno.h"
 #include "fs/vfs.h"
 #include "kernel/types.h"
 #include "kernel/printk.h"
@@ -240,6 +242,11 @@ int tarfs_read(vnode_t *vnode, void *buf, size_t offset, size_t len) {
 
     tarfs_entry_t *entry = (tarfs_entry_t *)vnode->fs_data;
     return read_entry(entry, buf, offset, len);
+}
+
+int tarfs_write(vnode_t *vnode, const void *buf, size_t offset, size_t len) {
+    printk("TARFS: can't write to read-only file system.\n");
+    return -EBADF;
 }
 
 // not needed anymore, this information is stored at the vfs layer

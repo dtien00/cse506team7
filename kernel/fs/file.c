@@ -1,8 +1,15 @@
 #include "fs/file.h"
+#include "arch/riscv.h"
+#include "errno.h"
 #include "fs/vfs.h"
 #include "kernel/printk.h"
 #include "mm/kmalloc.h"
 #include "process/process.h"
+#include "tty/term.h"
+
+#define SEEK_SET 0
+#define SEEK_CUR 1
+#define SEEK_END 2
 
 // -----------------------------------------------------------------------------
 // fd_init
@@ -10,7 +17,8 @@
 // These are special pseudo-files that don't point to real tarfs entries.
 // -----------------------------------------------------------------------------
 void fd_init(fd_table_t *table) {
-    if (!table) return;
+    if (!table)
+        return;
 
     for (int i = 0; i < MAX_FDS; i++) {
         table->files[i] = NULL;
@@ -19,7 +27,6 @@ void fd_init(fd_table_t *table) {
     // Allocate stdin (fd 0)
     file_t *stdin_file = kmalloc(sizeof(file_t));
     if (stdin_file) {
-        stdin_file->entry = NULL;
         stdin_file->type = FILE_STDIN;
         stdin_file->vnode = NULL;
         stdin_file->pipe = NULL;
@@ -32,7 +39,6 @@ void fd_init(fd_table_t *table) {
     // Allocate stdout (fd 1)
     file_t *stdout_file = kmalloc(sizeof(file_t));
     if (stdout_file) {
-        stdout_file->entry = NULL;
         stdout_file->type = FILE_STDOUT;
         stdout_file->vnode = NULL;
         stdout_file->pipe = NULL;
@@ -45,7 +51,6 @@ void fd_init(fd_table_t *table) {
     // Allocate stderr (fd 2) - same as stdout for now
     file_t *stderr_file = kmalloc(sizeof(file_t));
     if (stderr_file) {
-        stderr_file->entry = NULL;
         stderr_file->type = FILE_STDOUT;
         stderr_file->vnode = NULL;
         stderr_file->pipe = NULL;
@@ -62,7 +67,8 @@ void fd_init(fd_table_t *table) {
 // the fd number. Returns -1 if the table is full.
 // -----------------------------------------------------------------------------
 int fd_alloc(fd_table_t *table, file_t *f) {
-    if (!table || !f) return -1;
+    if (!table || !f)
+        return -1;
 
     for (int i = 0; i < MAX_FDS; i++) {
         if (table->files[i] == NULL) {
@@ -96,7 +102,7 @@ void fd_close(fd_table_t *table, int fd) {
 
     file_t *f = table->files[fd];
     if (f) {
-        vfs_close(f);
+        file_close(f);
         table->files[fd] = NULL;
     }
 }
@@ -108,10 +114,11 @@ void fd_close(fd_table_t *table, int fd) {
 // since they were kmalloc'd in fd_init.
 // -----------------------------------------------------------------------------
 void fd_destroy(fd_table_t *table) {
-    if (!table) return;
+    if (!table)
+        return;
     for (int i = 0; i < MAX_FDS; i++) {
         if (table->files[i]) {
-            fd_close(table, i);   // calls vfs_close → frees file_t if ref==0
+            fd_close(table, i); // calls vfs_close → frees file_t if ref==0
         }
     }
 }
@@ -120,16 +127,242 @@ void fd_destroy(fd_table_t *table) {
 // file operations
 // -----------------------------------------------------------------------------
 
-// fget: look up fd, bump refcount so it's safe to use across a syscall
-// (prevents the file being closed by another thread while you hold it)
-file_t *fget(struct proc *p, int fd) {
-    file_t *f = fd_get(&p->fd_table, fd);
-    if (!f) return NULL;
-    f->ref_count++;   // caller owns a reference
+file_t *file_open(const char *path) {
+    // 1. Resolve the path to a dentry (stays in vfs.c — that's its job)
+    dentry_t *d = vfs_lookup(path);
+    if (!d) {
+        printk("file_open: file not found: %s\n", path);
+        return NULL;
+    }
+
+    // 2. Allocate the file_t wrapper
+    file_t *f = kzalloc(sizeof(file_t));
+    if (!f) {
+        printk("file_open: kmalloc failed\n");
+        dentry_put(d);
+        return NULL;
+    }
+
+    // 3. Wire it up
+    dentry_get(d); // file_t now owns a reference to the dentry
+    f->dentry = d;
+    f->vnode = d->d_vnode;
+    f->type = FILE_VNODE;
+    f->offset = 0;
+    f->ref_count = 1;
+    f->pipe = NULL;
+    f->pipe_flags = 0;
+
     return f;
 }
 
-// fput: release the reference acquired by fget
-void fput(file_t *f) {
-    file_close(f);    // file_close already handles ref_count-- and kfree at 0
+void file_close(file_t *f) {
+    if (!f)
+        return;
+    if (f->ref_count <= 0) {
+        printk("file_close: double-close detected (ref_count=%d)\n", f->ref_count);
+        return;
+    }
+    f->ref_count--;
+    if (f->ref_count > 0)
+        return;
+
+    // Release resources based on type
+    if (f->type == FILE_VNODE && f->dentry) {
+        dentry_put(f->dentry); // the only type that owns a dentry ref
+        f->dentry = NULL;
+        f->vnode = NULL;
+    } else if (f->type == FILE_PIPE && f->pipe) {
+        pipe_t *p = f->pipe;
+        if (f->pipe_flags & PIPE_END_READ) {
+            p->readers--;
+        }
+        if (f->pipe_flags & PIPE_END_WRITE) {
+            p->writers--;
+        }
+        proc_wakeup(p);
+        if (p->readers <= 0 && p->writers <= 0) {
+            kfree(p);
+        }
+    }
+    kfree(f);
+}
+
+int file_read(file_t *f, void *buf, size_t len) {
+    if (!f || !buf)
+        return -EINVAL;
+
+    switch (f->type) {
+        case FILE_VNODE: {
+            if (!f->vnode || !f->vnode->mount || !f->vnode->mount->fs_type->ops.read) {
+                printk("file_read: no read op on vnode\n");
+                return -EBADF;
+            }
+            int n = f->vnode->mount->fs_type->ops.read(f->vnode, buf, f->offset, len);
+            if (n > 0)
+                f->offset += (size_t) n;
+            return n;
+        }
+
+        case FILE_STDIN:
+            return term_read(&console_term, buf, (uint32_t) len);
+
+        case FILE_PIPE: {
+            pipe_t *p = f->pipe;
+            char *dst = (char *) buf;
+            size_t nread = 0;
+
+            if (!p || !(f->pipe_flags & PIPE_END_READ))
+                return -EBADF;
+
+            while (nread < len) {
+                while (p->count == 0) {
+                    if (p->writers <= 0)
+                        return (int) nread; // EOF — all writers closed
+                    proc_sleep(p);
+                }
+                set_csr_bit(sstatus, SSTATUS_SUM);
+                dst[nread] = p->buffer[p->read_pos];
+                clear_csr_bit(sstatus, SSTATUS_SUM);
+                nread++;
+                p->read_pos = (p->read_pos + 1) % PIPE_CAPACITY;
+                p->count--;
+                proc_wakeup(p);
+            }
+            return (int) nread;
+        }
+
+        case FILE_STDOUT:
+            printk("file_read: cannot read from stdout\n");
+            return -EBADF;
+
+        default:
+            return -EBADF;
+    }
+}
+
+int file_write(file_t *f, const void *buf, size_t len) {
+    if (!f || !buf)
+        return -EINVAL;
+
+    switch (f->type) {
+        case FILE_STDOUT:
+            return term_write(&console_term, buf, (uint32_t) len);
+
+        case FILE_VNODE: {
+            if (!f->vnode || !f->vnode->mount || !f->vnode->mount->fs_type->ops.write) {
+                printk("file_write: no write op on vnode\n");
+                return -EBADF;
+            }
+            int n = f->vnode->mount->fs_type->ops.write(f->vnode, buf, f->offset, len);
+            if (n > 0)
+                f->offset += (size_t) n;
+            return n;
+        }
+
+        case FILE_PIPE: {
+            pipe_t *p = f->pipe;
+            const char *src = (const char *) buf;
+            size_t nwritten = 0;
+
+            if (!p || !(f->pipe_flags & PIPE_END_WRITE))
+                return -EBADF;
+
+            while (nwritten < len) {
+                if (p->readers <= 0)
+                    return nwritten > 0 ? (int) nwritten : -EPIPE;
+
+                while (p->count == PIPE_CAPACITY) {
+                    if (p->readers <= 0)
+                        return nwritten > 0 ? (int) nwritten : -EPIPE;
+                    proc_sleep(p);
+                }
+                set_csr_bit(sstatus, SSTATUS_SUM);
+                p->buffer[p->write_pos] = src[nwritten];
+                clear_csr_bit(sstatus, SSTATUS_SUM);
+                nwritten++;
+                p->write_pos = (p->write_pos + 1) % PIPE_CAPACITY;
+                p->count++;
+                proc_wakeup(p);
+            }
+            return (int) nwritten;
+        }
+
+        case FILE_STDIN:
+            printk("file_write: cannot write to stdin\n");
+            return -EBADF;
+
+        default:
+            return -EBADF;
+    }
+}
+
+int file_lseek(file_t *f, size_t offset, int whence) {
+    if (!f)
+        return -EINVAL;
+
+    // Pipes and terminal files have no concept of position
+    if (f->type == FILE_PIPE || f->type == FILE_STDIN || f->type == FILE_STDOUT) {
+        printk("file_lseek: cannot seek on pipe/stdio\n");
+        return -ESPIPE;
+    }
+
+    // Everything below is FILE_VNODE (or legacy FILE_TARFS/FILE_TMPFS)
+    if (!f->vnode) {
+        printk("file_lseek: no vnode on file\n");
+        return -EBADF;
+    }
+
+    size_t new_offset = 0;
+    switch (whence) {
+        case SEEK_SET:
+            new_offset = offset;
+            break;
+
+        case SEEK_CUR:
+            new_offset = f->offset + offset;
+            break;
+
+        case SEEK_END:
+            new_offset = f->vnode->size + offset;
+            break;
+
+        default:
+            printk("file_lseek: invalid whence %d\n", whence);
+            return -EINVAL;
+    }
+
+    // Don't allow seeking past EOF
+    if (f->vnode->mount && f->vnode->mount->fs_type && f->vnode->mount->fs_type->ops.write == NULL &&
+        new_offset > f->vnode->size) {
+        printk("file_lseek: seek past EOF (offset=%zu, size=%zu) on read-only file not allowed\n", new_offset,
+               f->vnode->size);
+        return -EINVAL;
+    }
+
+    f->offset = new_offset;
+    return (int) new_offset;
+}
+
+void file_ref(file_t *f) {
+    if (!f) return;
+    f->ref_count++;
+}
+
+// -----------------------------------------------------------------------------
+// file operations - proc level reference counting
+// -----------------------------------------------------------------------------
+
+// f_get: look up fd, bump refcount so it's safe to use across a syscall
+// (prevents the file being closed by another thread while you hold it)
+file_t *f_get(struct proc *p, int fd) {
+    file_t *f = fd_get(&p->fds, fd);
+    if (!f) return NULL;
+    file_ref(f);    // just delegates to the primitive
+    return f;
+}
+
+// f_put: release the reference acquired by fget
+void f_put(file_t *f) {
+    file_close(f); // file_close already handles ref_count-- and kfree at 0
 }

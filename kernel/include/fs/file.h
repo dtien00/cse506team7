@@ -1,14 +1,17 @@
 #pragma once
 #include "kernel/types.h"
-#include "fs/vfs.h"
+#include "fs/dentry.h"
 // process level manager
 
-#define MAX_FDS 16  // or however many per process
+#define MAX_FDS 16 // or however many per process
+struct vnode;
+
+typedef struct vnode  vnode_t;
+typedef struct pipe pipe_t;
 
 // File types
 typedef enum {
-    FILE_TARFS,
-    FILE_TMPFS,
+    FILE_VNODE, // backed by vfs
     FILE_PIPE,
     FILE_STDIN,
     FILE_STDOUT
@@ -16,14 +19,17 @@ typedef enum {
 
 // A generic open file
 typedef struct file {
-    tarfs_entry_t *entry;
     file_type_t type;
-    vnode_t *vnode;
+    int ref_count;
+    size_t offset;
+
+    // for type FILE_VNODE only
+    vnode_t *vnode; // cached vnode, fetched from inside dentry on file open
     dentry_t *dentry;
+
+    // for type FILE_PIPE only
     pipe_t *pipe;
     int pipe_flags;
-    size_t offset;
-    int ref_count;
 } file_t;
 
 // File descriptor table (lives in process_t)
@@ -32,21 +38,21 @@ typedef struct fd_table {
 } fd_table_t;
 
 // Function declarations
-int   fd_alloc(fd_table_t *table, file_t *f);  // returns fd number
+int fd_alloc(fd_table_t *table, file_t *f); // returns fd number
 file_t *fd_get(fd_table_t *table, int fd);
-void  fd_close(fd_table_t *table, int fd);
+void fd_close(fd_table_t *table, int fd);
 void fd_destroy(fd_table_t *table);
-void  fd_init(fd_table_t *table);  // sets up stdin/stdout/stderr
+void fd_init(fd_table_t *table); // sets up stdin/stdout/stderr
 
 // I/O operations (moved from vfs.h)
 file_t *file_open(const char *path);
-void    file_close(file_t *f);
-int     file_read(file_t *f, void *buf, size_t len);
-int     file_write(file_t *f, const void *buf, size_t len);
-int     file_lseek(file_t *f, size_t offset, int whence);
-void    file_ref(file_t *f);
+void file_close(file_t *f);
+int file_read(file_t *f, void *buf, size_t len);
+int file_write(file_t *f, const void *buf, size_t len);
+int file_lseek(file_t *f, size_t offset, int whence);
+void file_ref(file_t *f);
 
 struct proc;
 // Safe fd → file_t lookup for syscalls
-file_t *fget(struct proc *p, int fd);
-void    fput(file_t *f);
+file_t *f_get(struct proc *p, int fd);
+void f_put(file_t *f);
