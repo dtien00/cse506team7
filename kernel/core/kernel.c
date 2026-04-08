@@ -30,6 +30,11 @@ static void boot_fallback_to_idle(void) {
     boot_park_forever();
 }
 
+static void boot_wait_for_first_tick(void) {
+    while (timer_ticks == 0)
+        asm volatile("wfi");
+}
+
 void run_all_tests(void) {
     mem_test_run();
     // trap_test_run();
@@ -123,6 +128,7 @@ void boot(uint64_t hart_id, uint64_t dtb) {
     proc_init();
 
     interrupts_on();
+    boot_wait_for_first_tick();
     printk("Turned on global interrupts. Now waiting for interrupts...\n");
 
     printk("\n");

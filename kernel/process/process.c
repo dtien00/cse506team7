@@ -16,6 +16,7 @@
 #define SEEK_SET 0
 #endif
 
+static uint32_t next_pid = 1;
 
 /* Forward declaration — defined later in this file. */
 void proc_start_user(struct proc *p, uint64_t entry, uint64_t user_sp);
@@ -38,6 +39,7 @@ static void proc_entry(void) {
 struct proc* proc_alloc(void) {
     for (int i = 0; i < MAX_PROCS; i++) {
         if (proctab[i].state == PROC_UNUSED) {
+            memset(&proctab[i], 0, sizeof(proctab[i]));
             proctab[i].state = PROC_CREATED;   // mark as taken immediately
             return &proctab[i];
         }
@@ -52,18 +54,16 @@ void proc_init(void) {
         proctab[i].next = NULL;
     }
 
-    struct proc *init = proc_alloc();
-    int idx = init - proctab;
-    memset(init, 0, sizeof(*init));
-    init->pid = 1;
-    strncpy(init->name, "init", MAX_NAME - 1);
-    init->state = PROC_READY;
-    init->context.sp = (uint64_t)&kstacks[idx][KSTACK_SIZE];
-    init->context.ra = (uint64_t)proc_entry;
-    vma_init(&init->vma_list);
+    // next_pid is 1 at file scope, so proc_create assigns pid=1 to init
+    struct proc *init = proc_create("init");
+    next_pid = 2;  // next real process gets pid 2
+
+    // proc_create leaves fds and cwd/pwd in fs to the caller
     fd_init(&init->fds);
-    init->cwd[0] = '/';
-    init->cwd[1] = '\0';
+
+    init->fs = fs_struct_alloc();
+    fs_struct_set_root(init->fs, "/");   // set where "/" is
+    fs_struct_set_cwd(init->fs, "/");    // set where we are
 
     // Prepare argv for /bin/echo
     static char *argv[] = { "sh", NULL };
@@ -96,7 +96,6 @@ struct proc* proc_create(const char *name) {
     int idx = p - proctab;
     memset(p, 0, sizeof(*p));
 
-    static uint32_t next_pid = 2;
     p->pid = next_pid++;
     strncpy(p->name, name, MAX_NAME - 1);
     p->state = PROC_CREATED;
@@ -104,8 +103,6 @@ struct proc* proc_create(const char *name) {
     p->context.ra = (uint64_t)proc_entry;
     p->trapframe = NULL;
     p->trapframe_owned = 0;
-    p->cwd[0] = '/';
-    p->cwd[1] = '\0';
 
     // Initialize VMA list
     vma_init(&p->vma_list);
@@ -134,6 +131,11 @@ void proc_destroy(struct proc *p) {
     }
     p->trapframe = NULL;
     p->trapframe_owned = 0;
+
+    if (p->fs) {
+        fs_struct_free(p->fs);
+        p->fs = NULL;
+    }
 
     fd_destroy(&p->fds);
 }
