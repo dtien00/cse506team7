@@ -320,9 +320,9 @@ ssize_t sys_read(int fd, void *buf, size_t count) {
     file_t *f = fd_get(&current->fds, fd);
     if (!f) return -1;
     if (f->type == FILE_PIPE)
-        return vfs_read(f, buf, count);
+        return file_read(f, buf, count);
     set_csr_bit(sstatus, SSTATUS_SUM);
-    int n = vfs_read(f, buf, count);
+    int n = file_read(f, buf, count);
     clear_csr_bit(sstatus, SSTATUS_SUM);
     return n;
 }
@@ -360,17 +360,17 @@ ssize_t sys_write(int fd, const void *buf, size_t count) {
         return (ssize_t)count;
     }
     if (f->type == FILE_PIPE)
-        return vfs_write(f, buf, count);
+        return file_write(f, buf, count);
     if (!f) return -EBADF;
     set_csr_bit(sstatus, SSTATUS_SUM);
-    ssize_t n = vfs_write(f, buf, count);
+    ssize_t n = file_write(f, buf, count);
     clear_csr_bit(sstatus, SSTATUS_SUM);
     return n;
 }
 
 int sys_open(const char *path, int flags) {
     set_csr_bit(sstatus, SSTATUS_SUM);
-    file_t *f = vfs_open(path);
+    file_t *f = file_open(path);
     clear_csr_bit(sstatus, SSTATUS_SUM);
     if (!f) return -1;
     return fd_alloc(&current->fds, f);
@@ -448,7 +448,7 @@ int sys_dup(int oldfd) {
     vfs_ref(f);
     int newfd = fd_alloc(&current->fds, f);
     if (newfd < 0) {
-        vfs_close(f);
+        file_close(f);
         return -EMFILE;
     }
 
@@ -817,7 +817,7 @@ int sys_sigprocmask(int how, const uint32_t *set, uint32_t *oldset) {
 off_t sys_lseek(int fd, off_t offset, int whence) {
     file_t *f = fd_get(&current->fds, fd);
     if (!f) return -1;
-    return (off_t)vfs_lseek(f, (size_t)offset, whence);
+    return (off_t)file_lseek(f, (size_t)offset, whence);
 }
 
 /* ------------------------------------------------------------------ */

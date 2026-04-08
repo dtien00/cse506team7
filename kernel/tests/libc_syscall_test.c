@@ -84,44 +84,44 @@ static void test_sys_file_io(void) {
      */
 
     /* vfs_open works without a process context */
-    file_t *f = vfs_open("/hello.txt");
+    file_t *f = file_open("/hello.txt");
     TEST("vfs_open /hello.txt non-NULL", f != NULL);
 
     if (f) {
         /* Read some bytes */
         char buf[32];
         memset(buf, 0, sizeof(buf));
-        int n = vfs_read(f, buf, sizeof(buf) - 1);
+        int n = file_read(f, buf, sizeof(buf) - 1);
         TEST("vfs_read returns > 0", n > 0);
         TEST("vfs_read data non-empty", n > 0 && buf[0] != '\0');
 
         /* Offset advances */
         size_t off1 = f->offset;
         char buf2[8];
-        int n2 = vfs_read(f, buf2, 4);
+        int n2 = file_read(f, buf2, 4);
         TEST("offset advances after read", n2 >= 0 && f->offset == off1 + (size_t)n2);
 
         /* Read past EOF eventually returns 0 */
         char drain[64];
         int eof = 0;
         for (int i = 0; i < 32; i++) {
-            if (vfs_read(f, drain, sizeof(drain)) == 0) { eof = 1; break; }
+            if (file_read(f, drain, sizeof(drain)) == 0) { eof = 1; break; }
         }
         TEST("repeated reads reach EOF (returns 0)", eof);
 
-        vfs_close(f);
+        file_close(f);
     }
 
     /* Open nonexistent file returns NULL */
-    file_t *bad = vfs_open("/does_not_exist_xyz.txt");
+    file_t *bad = file_open("/does_not_exist_xyz.txt");
     TEST("vfs_open nonexistent returns NULL", bad == NULL);
 
     /* Write to tarfs file returns error (read-only filesystem) */
-    file_t *rf = vfs_open("/hello.txt");
+    file_t *rf = file_open("/hello.txt");
     if (rf) {
-        int w = vfs_write(rf, "x", 1);
+        int w = file_write(rf, "x", 1);
         TEST("vfs_write to tarfs returns error", w < 0);
-        vfs_close(rf);
+        file_close(rf);
     }
 }
 
@@ -250,7 +250,7 @@ static void test_fd_init(void) {
     TEST("fd_get(999) returns NULL", fd_get(&table, 999) == NULL);
 
     /* Allocate user fd — must land at 3 */
-    file_t *f = vfs_open("/hello.txt");
+    file_t *f = file_open("/hello.txt");
     if (f) {
         int fd = fd_alloc(&table, f);
         TEST("first user fd is 3", fd == 3);
@@ -262,7 +262,7 @@ static void test_fd_init(void) {
         TEST("fd_get after close returns NULL", fd_get(&table, fd) == NULL);
 
         /* Slot should be reusable */
-        file_t *f2 = vfs_open("/hello.txt");
+        file_t *f2 = file_open("/hello.txt");
         if (f2) {
             int fd2 = fd_alloc(&table, f2);
             TEST("freed slot reused", fd2 == 3);
@@ -410,7 +410,7 @@ static void test_sys_lseek_chdir_getcwd(void) {
     test_setup_proc();
 
     /* --- lseek --- */
-    file_t *f = vfs_open("/bin/sh");
+    file_t *f = file_open("/bin/sh");
     if (f) {
         int fd = fd_alloc(&current->fds, f);
         if (fd >= 0) {
@@ -425,7 +425,7 @@ static void test_sys_lseek_chdir_getcwd(void) {
 
             sys_close(fd);
         } else {
-            vfs_close(f);
+            file_close(f);
         }
     } else {
         printk("  [INFO] /bin/sh not found in tarfs; skipping lseek file tests\n");

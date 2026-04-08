@@ -340,27 +340,6 @@ void vfs_ref(file_t *f) {
 // File operations
 // -----------------------------------------------------------------------------
 
-file_t *vfs_open(const char *path) {
-    return file_open(path);
-}
-
-void vfs_close(file_t *f) {
-    file_close(f);
-}
-
-int vfs_read(file_t *f, void *buf, size_t len) {
-    return file_read(f, buf, len);
-}
-
-int vfs_write(file_t *f, const void *buf, size_t len) {
-    return file_write(f, buf, len);
-}
-
-// Seek to a new offset in the file
-int vfs_lseek(file_t *f, size_t offset, int whence) {
-    return file_lseek(f, offset, whence);
-}
-
 /*
  * vfs_is_dir — test whether 'path' is an existing directory.
  * Returns 1 if path is a directory, 0 if not, -1 on error.

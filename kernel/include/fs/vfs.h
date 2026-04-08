@@ -80,19 +80,12 @@ int vfs_unmount(const char *target);
 mount_t *vfs_find_mount(const char *path);
 void vfs_ref(file_t *f);
 
-// File operations
-file_t *vfs_open(const char *path);
-void    vfs_close(file_t *f);
-int     vfs_read(file_t *f, void *buf, size_t len);
-int     vfs_write(file_t *f, const void *buf, size_t len);
-
 // VFS-level operations
 dentry_t *vfs_get_root(void);
 dentry_t *vfs_lookup(const char *path);
 int vfs_create(const char *path, uint32_t mode);
 int vfs_unlink(const char *path);
 int vfs_mkdir(const char *path, uint32_t mode);
-int vfs_lseek(file_t *f, size_t offset, int whence);
 int vfs_is_dir(const char *path);
 
 fs_struct_t *fs_struct_alloc(void);
