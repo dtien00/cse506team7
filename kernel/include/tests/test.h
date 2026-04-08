@@ -26,3 +26,4 @@ void libc_syscall_test_run(void);
 void timer_test_run(void);
 void kill_test_run(void);
 void cow_test_run(void);
+void stack_growth_test_run(void);

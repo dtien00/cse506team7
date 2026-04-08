@@ -32,9 +32,7 @@ int usleep(unsigned int usec) {
     return 0;
 }
 
-pid_t getppid(void) {
-    return -1;
-}
+/* getppid() is implemented as an assembly syscall wrapper in syscall.S */
 
 int isatty(int fd) {
     return (fd == 0 || fd == 1 || fd == 2) ? 1 : 0;
