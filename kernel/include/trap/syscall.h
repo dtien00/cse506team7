@@ -24,6 +24,7 @@
 #define SYS_lseek    18
 #define SYS_getcwd   19
 #define SYS_sigprocmask 20
+#define SYS_getppid  21
 #define SYS_chdir    49
 #define SYS_pipe     22
 #define SYS_dup      23
@@ -45,6 +46,7 @@ int sys_close(int fd);
 pid_t sys_wait(int *status);
 int sys_exec(const char *path, char **argv);
 pid_t sys_getpid(void);
+pid_t sys_getppid(void);
 void *sys_sbrk(intptr_t increment);
 int sys_sleep(int seconds);
 int sys_uptime(void);
