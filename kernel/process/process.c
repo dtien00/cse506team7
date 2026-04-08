@@ -383,12 +383,12 @@ void proc_start_user(struct proc *p, uint64_t entry, uint64_t user_sp) {
 
 int exec(const char *path, char *const argv[]) {
     // 1. Open the binary
-    file_t *f = vfs_open(path);
+    file_t *f = file_open(path);
     if (!f) return -1;
 
     // 2. Read and validate the ELF64 header
     elf_header_t ehdr;
-    if (vfs_read(f, &ehdr, sizeof(ehdr)) != (int)sizeof(ehdr))
+    if (file_read(f, &ehdr, sizeof(ehdr)) != (int)sizeof(ehdr))
         goto fail_file;
     if (ehdr.e_ident[0] != 0x7F || ehdr.e_ident[1] != 'E' ||
         ehdr.e_ident[2] != 'L'  || ehdr.e_ident[3] != 'F' ||
@@ -408,9 +408,9 @@ int exec(const char *path, char *const argv[]) {
     // 4. Load each PT_LOAD segment into the new page table
     for (int i = 0; i < ehdr.e_phnum; i++) {
         elf_prog_header_t phdr;
-        if (vfs_lseek(f, (size_t)(ehdr.e_phoff + (uint64_t)i * sizeof(phdr)), SEEK_SET) < 0)
+        if (file_lseek(f, (size_t)(ehdr.e_phoff + (uint64_t)i * sizeof(phdr)), SEEK_SET) < 0)
             goto fail_pt;
-        if (vfs_read(f, &phdr, sizeof(phdr)) != (int)sizeof(phdr))
+        if (file_read(f, &phdr, sizeof(phdr)) != (int)sizeof(phdr))
             goto fail_pt;
         if (phdr.p_type != PT_LOAD)
             continue;
@@ -440,7 +440,7 @@ int exec(const char *path, char *const argv[]) {
         }
 
         // Seek to segment data in file, then copy into the mapped PA range
-        if (vfs_lseek(f, (size_t)phdr.p_offset, SEEK_SET) < 0)
+        if (file_lseek(f, (size_t)phdr.p_offset, SEEK_SET) < 0)
             goto fail_vma;
         size_t remaining = (size_t)phdr.p_filesz;
         uintptr_t va     = phdr.p_vaddr;
@@ -450,7 +450,7 @@ int exec(const char *path, char *const argv[]) {
             if (!pa) goto fail_vma;
             size_t chunk = PGSIZE - (va & (PGSIZE - 1));
             if (chunk > remaining) chunk = remaining;
-            if (vfs_read(f, (void *)pa, chunk) != (int)chunk)
+            if (file_read(f, (void *)pa, chunk) != (int)chunk)
                 goto fail_vma;
             va        += chunk;
             remaining -= chunk;
@@ -565,7 +565,7 @@ int exec(const char *path, char *const argv[]) {
 
     // current->pagetable is already active after commit above.
 
-    vfs_close(f);
+    file_close(f);
     return 0;
 
 fail_vma:
@@ -573,7 +573,7 @@ fail_vma:
 fail_pt:
     vmm_free_pagetable(new_pt);
 fail_file:
-    vfs_close(f);
+    file_close(f);
     return -1;
 }
 

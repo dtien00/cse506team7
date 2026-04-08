@@ -8,16 +8,5 @@ compile.sh
 flat_kernel/
 .DS_Store
 .claude/
-<<<<<<< HEAD
-<<<<<<< Updated upstream
-build/*
-=======
 build/**
 .codex
->>>>>>> Stashed changes
-dump/*
-*.md
-=======
-build/**
-.codex
->>>>>>> main

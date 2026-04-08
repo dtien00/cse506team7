@@ -35,6 +35,7 @@ int uptime(void);   /* returns kernel timer_ticks since boot (10 ticks/s on QEMU
 
 int chdir(const char *path);
 char* getcwd(char *buf, size_t size);
+ssize_t fs_getdents(int fd, void *buf, size_t count, int flags);
 int rename(const char *old, const char *new);  // mv applet
 int rmdir(const char *path);                    // rmdir applet
 int truncate(const char *path, off_t length);   // truncate applet

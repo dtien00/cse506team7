@@ -8,11 +8,8 @@
 #include "mm/pool.h"
 #include "lib/string.h"
 #include "process/process.h"
+#include "fs/dentry.h"
 #include "tty/term.h"
-
-#define SEEK_SET 0
-#define SEEK_CUR 1
-#define SEEK_END 2
 
 // -----------------------------------------------------------------------------
 // Internal state
@@ -260,7 +257,7 @@ dentry_t *vfs_lookup(const char *path) {
     if (path[0] == '/' && path[1] == '\0') {
         parent = NULL;   // we are root
     } else {
-        char parent_path[256];
+        char parent_path[MAX_PATH];
         if (dentry_get_parent_path(path, parent_path, sizeof(parent_path)) < 0)
             return NULL;  // root
 
@@ -312,6 +309,18 @@ int vfs_unlink(const char *path) {
     return -1;
 }
 
+int vfs_readdir(vnode_t *vnode, uint32_t start_idx, void *buf, uint32_t bufsize, uint32_t *entries_out)
+{
+    if (!vnode || !buf || bufsize == 0) return -EINVAL;
+    if (vnode->type != VNODE_DIR)       return -ENOTDIR;
+
+    mount_t *mnt = vnode->mount;        // vnode already knows its mount
+    if (!mnt || !mnt->fs_type->ops.readdir) return -ENOSYS;
+
+    return mnt->fs_type->ops.readdir(mnt, vnode, start_idx,
+                                     buf, bufsize, entries_out);
+}
+
 int vfs_mkdir(const char *path, uint32_t mode) {
     if (!path) return -1;
 
@@ -328,224 +337,9 @@ int vfs_mkdir(const char *path, uint32_t mode) {
     return -1;
 }
 
-/*
- * vfs_ref — acquire a shared reference to an already-open file.
- *
- * Call this whenever a file_t is handed to a second owner WITHOUT going
- * through vfs_open (i.e. fork, dup).
- */
-void vfs_ref(file_t *f) {
-    if (!f) return;
-    f->ref_count++;
-}
-
 // -----------------------------------------------------------------------------
 // File operations
 // -----------------------------------------------------------------------------
-
-file_t *vfs_open(const char *path) {
-    dentry_t *dentry = vfs_lookup(path);
-    if (!dentry) {
-        printk("vfs: file not found: %s\n", path);
-        return NULL;
-    }
-
-    file_t *f = kmalloc(sizeof(file_t));
-    if (!f) {
-        printk("vfs: kmalloc failed in vfs_open\n");
-        dentry_put(dentry);
-        return NULL;
-    }
-
-    // Determine file type from filesystem name
-    if (strcmp(dentry->d_vnode->fs_type->name, "tmpfs") == 0) {
-        f->type = FILE_TMPFS;
-    } else if (strcmp(dentry->d_vnode->fs_type->name, "tarfs") == 0) {
-        f->type = FILE_TARFS;
-    } else {
-        f->type = FILE_TARFS;  // Default fallback
-    }
-
-    f->pipe = NULL;
-    f->pipe_flags = 0;
-    f->offset = 0;
-    f->ref_count = 1;
-    dentry_get(dentry);
-    f->dentry = dentry;
-
-    return f;
-}
-
-void vfs_close(file_t *f) {
-    if (!f) return;
-
-    if (f->ref_count <= 0) {
-        printk("vfs: double-close detected (ref_count=%d)\n", f->ref_count);
-        return;
-    }
-
-    f->ref_count--;
-    if (f->ref_count == 0) {
-        if (f->type == FILE_PIPE && f->pipe) {
-            pipe_t *p = f->pipe;
-            if (f->pipe_flags & PIPE_END_READ) {
-                p->readers--;
-            }
-            if (f->pipe_flags & PIPE_END_WRITE) {
-                p->writers--;
-            }
-            proc_wakeup(p);
-            if (p->readers <= 0 && p->writers <= 0) {
-                kfree(p);
-            }
-        }
-        if (f->dentry) {
-            dentry_put(f->dentry);
-            f->dentry = NULL;
-        }
-        kfree(f);
-    }
-}
-
-int vfs_read(file_t *f, void *buf, size_t len) {
-    if (!f || !buf) return -1;
-
-    switch (f->type) {
-        case FILE_TARFS:
-        case FILE_TMPFS: {
-            if (f->dentry->d_vnode && f->dentry->d_vnode->mount && f->dentry->d_vnode->mount->fs_type->ops.read) {
-                int n = f->dentry->d_vnode->mount->fs_type->ops.read(f->dentry->d_vnode, buf, f->offset, len);
-                if (n > 0)
-                    f->offset += (size_t)n;
-                return n;
-            }
-            return -1;
-        }
-
-        case FILE_STDIN:
-            return term_read(&console_term, buf, (uint32_t)len);
-
-        case FILE_PIPE: {
-            pipe_t *p = f->pipe;
-            char *dst = (char *)buf;
-            size_t nread = 0;
-
-            if (!p || !(f->pipe_flags & PIPE_END_READ))
-                return -1;
-
-            while (nread < len) {
-                while (p->count == 0) {
-                    if (p->writers <= 0) {
-                        return (int)nread;
-                    }
-                    proc_sleep(p);
-                }
-
-                set_csr_bit(sstatus, SSTATUS_SUM);
-                dst[nread] = p->buffer[p->read_pos];
-                clear_csr_bit(sstatus, SSTATUS_SUM);
-                nread++;
-                p->read_pos = (p->read_pos + 1) % PIPE_CAPACITY;
-                p->count--;
-                proc_wakeup(p);
-            }
-
-            return (int)nread;
-        }
-
-        default:
-            return -1;
-    }
-}
-
-int vfs_write(file_t *f, const void *buf, size_t len) {
-    if (!f || !buf) return -1;
-
-    switch (f->type) {
-        case FILE_STDOUT: {
-            return term_write(&console_term, buf, (uint32_t)len);
-        }
-
-        case FILE_PIPE: {
-            pipe_t *p = f->pipe;
-            const char *src = (const char *)buf;
-            size_t nwritten = 0;
-
-            if (!p || !(f->pipe_flags & PIPE_END_WRITE))
-                return -1;
-
-            while (nwritten < len) {
-                if (p->readers <= 0) {
-                    return nwritten > 0 ? (int)nwritten : -EPIPE;
-                }
-
-                while (p->count == PIPE_CAPACITY) {
-                    if (p->readers <= 0) {
-                        return nwritten > 0 ? (int)nwritten : -EPIPE;
-                    }
-                    proc_sleep(p);
-                }
-
-                set_csr_bit(sstatus, SSTATUS_SUM);
-                p->buffer[p->write_pos] = src[nwritten];
-                clear_csr_bit(sstatus, SSTATUS_SUM);
-                nwritten++;
-                p->write_pos = (p->write_pos + 1) % PIPE_CAPACITY;
-                p->count++;
-                proc_wakeup(p);
-            }
-
-            return (int)nwritten;
-        }
-
-        case FILE_TMPFS: {
-            if (f->dentry->d_vnode && f->dentry->d_vnode->mount && f->dentry->d_vnode->mount->fs_type->ops.write) {
-                int n = f->dentry->d_vnode->mount->fs_type->ops.write(f->dentry->d_vnode, buf, f->offset, len);
-                if (n > 0)
-                    f->offset += (size_t)n;
-                return n;
-            }
-            return -1;
-        }
-
-        case FILE_TARFS:
-            printk("vfs: write to read-only tarfs file\n");
-            return -1;
-
-        default:
-            return -1;
-    }
-}
-
-// Seek to a new offset in the file
-int vfs_lseek(file_t *f, size_t offset, int whence) {
-    if (!f) return -1;
-
-    size_t new_offset = 0;
-    switch (whence) {
-        case SEEK_SET:
-            new_offset = offset;
-            break;
-        case SEEK_CUR:
-            new_offset = f->offset + offset;
-            break;
-        case SEEK_END:
-            if (f->dentry && f->dentry->d_vnode)
-                new_offset = f->dentry->d_vnode->size + offset;
-            else
-                return -1;
-            break;
-        default:
-            return -1;
-    }
-
-    // Bound seek by vnode size for regular VFS-backed files.
-    if (f->dentry && f->dentry->d_vnode && new_offset > f->dentry->d_vnode->size)
-        return -1;
-
-    f->offset = new_offset;
-    return new_offset;
-}
 
 /*
  * vfs_is_dir — test whether 'path' is an existing directory.
@@ -555,6 +349,32 @@ int vfs_lseek(file_t *f, size_t offset, int whence) {
 int vfs_is_dir(const char *path) {
     dentry_t *d = vfs_lookup(path);
     return d && d->d_vnode->type == VNODE_DIR;
+}
+
+int vfs_chdir(const char *kpath) {
+    // 1. Get current cwd as a string
+    char cwd_str[MAX_PATH];
+    if (dentry_build_path(current->fs->cwd, vfs_get_root(),
+                          cwd_str, MAX_PATH) != 0)
+        return -ENAMETOOLONG;
+
+    // 2. Resolve — same function file_open also calls
+    char resolved[MAX_PATH];
+    if (path_resolve(cwd_str, kpath, resolved) < 0)
+        return -ENAMETOOLONG;
+
+    // 3. Verify the target actually exists and is a directory
+    dentry_t *d = vfs_lookup(resolved);
+    if (!d) return -ENOENT;
+    if (d->d_vnode->type != VNODE_DIR) {
+        dentry_put(d);
+        return -ENOTDIR;
+    }
+
+    // 4. Hand off to fs_struct — it swaps the cwd dentry
+    const int ret = fs_struct_set_cwd(current->fs, resolved);
+    dentry_put(d);
+    return ret;
 }
 
 // -----------------------------------------------------------------------------
@@ -567,13 +387,13 @@ void fs_struct_dump(const fs_struct_t *fs) {
         return;
     }
 
-    char root_path[256];
-    char cwd_path[256];
+    char root_path[MAX_PATH];
+    char cwd_path[MAX_PATH];
 
     if (!fs->root) {
         printk("[fs_struct] root=NULL\n");
     } else {
-        dentry_build_path(fs->root, fs->root, root_path, 256);
+        dentry_build_path(fs->root, fs->root, root_path, MAX_PATH);
         printk("[fs_struct] root=%s (dentry=%p, d_ref=%d)\n",
                root_path, fs->root, fs->root->d_ref);
     }
@@ -581,7 +401,7 @@ void fs_struct_dump(const fs_struct_t *fs) {
     if (!fs->cwd) {
         printk("[fs_struct] cwd=NULL\n");
     } else {
-        dentry_build_path(fs->cwd, fs->root, cwd_path, 256);
+        dentry_build_path(fs->cwd, fs->root, cwd_path, MAX_PATH);
         printk("[fs_struct] cwd=%s (dentry=%p, d_ref=%d)\n",
                cwd_path, fs->cwd, fs->cwd->d_ref);
     }
