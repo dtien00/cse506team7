@@ -2,6 +2,7 @@
 #include "fs/vfs.h"
 #include "kernel/printk.h"
 #include "mm/kmalloc.h"
+#include "process/process.h"
 
 // -----------------------------------------------------------------------------
 // fd_init
@@ -113,4 +114,22 @@ void fd_destroy(fd_table_t *table) {
             fd_close(table, i);   // calls vfs_close → frees file_t if ref==0
         }
     }
+}
+
+// -----------------------------------------------------------------------------
+// file operations
+// -----------------------------------------------------------------------------
+
+// fget: look up fd, bump refcount so it's safe to use across a syscall
+// (prevents the file being closed by another thread while you hold it)
+file_t *fget(struct proc *p, int fd) {
+    file_t *f = fd_get(&p->fd_table, fd);
+    if (!f) return NULL;
+    f->ref_count++;   // caller owns a reference
+    return f;
+}
+
+// fput: release the reference acquired by fget
+void fput(file_t *f) {
+    file_close(f);    // file_close already handles ref_count-- and kfree at 0
 }

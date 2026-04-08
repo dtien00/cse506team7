@@ -9,15 +9,6 @@ struct vnode;
 struct mount;
 struct filesystem_type;
 
-// File types
-typedef enum {
-    FILE_TARFS,
-    FILE_TMPFS,
-    FILE_PIPE,
-    FILE_STDIN,
-    FILE_STDOUT
-} file_type_t;
-
 typedef enum {
     VNODE_REG,   // regular file
     VNODE_DIR    // directory
@@ -47,18 +38,6 @@ typedef struct vnode {
     void *fs_data;                   // Filesystem-specific data
     struct filesystem_type *fs_type; // Filesystem type
 } vnode_t;
-
-// A generic open file
-typedef struct file {
-    tarfs_entry_t *entry;
-    file_type_t type;
-    vnode_t *vnode;
-    dentry_t *dentry;
-    pipe_t *pipe;
-    int pipe_flags;
-    size_t offset;
-    int ref_count;
-} file_t;
 
 // Filesystem operations
 typedef struct filesystem_operations {
