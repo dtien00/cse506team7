@@ -127,9 +127,94 @@ void fd_destroy(fd_table_t *table) {
 // file operations
 // -----------------------------------------------------------------------------
 
+/* ------------------------------------------------------------------ */
+/* Resolves 'input' relative to 'base' (cwd) into 'out' (MAX_PATH).  */
+/* Handles absolute paths, ".", "..", and consecutive slashes.        */
+/* Returns 0 on success, -1 if the result would overflow MAX_PATH.   */
+/* This is basic, should switch to dentry caching and finding parent from there   */
+/* ------------------------------------------------------------------ */
+int path_resolve(const char *base, const char *input, char *out) {
+    char tmp[MAX_PATH];
+    int pos = 0;
+
+    if (input[0] == '/') {
+        /* Absolute path — copy as-is into tmp for normalization */
+        int i = 0;
+        while (input[i] && pos < MAX_PATH - 1)
+            tmp[pos++] = input[i++];
+        tmp[pos] = '\0';
+    } else {
+        /* Relative path — prepend base */
+        int i = 0;
+        while (base[i] && pos < MAX_PATH - 1)
+            tmp[pos++] = base[i++];
+        /* Add separator if base doesn't already end with '/' */
+        if (pos > 0 && tmp[pos - 1] != '/' && pos < MAX_PATH - 1)
+            tmp[pos++] = '/';
+        i = 0;
+        while (input[i] && pos < MAX_PATH - 1)
+            tmp[pos++] = input[i++];
+        tmp[pos] = '\0';
+    }
+
+    /* Normalize: walk components into out[] */
+    out[0] = '/';
+    int opos = 1;
+    out[opos] = '\0';
+
+    char *p = tmp;
+    if (*p == '/') p++;  /* skip the leading '/' we already placed */
+
+    while (*p) {
+        /* Find end of component */
+        char *slash = p;
+        while (*slash && *slash != '/') slash++;
+        int clen = (int)(slash - p);
+
+        if (clen == 0) {
+            /* consecutive slash — skip */
+        } else if (clen == 1 && p[0] == '.') {
+            /* "." — current dir, skip */
+        } else if (clen == 2 && p[0] == '.' && p[1] == '.') {
+            /* ".." — go up one level */
+            if (opos > 1) {
+                opos--;  /* back past the last written char */
+                while (opos > 1 && out[opos - 1] != '/')
+                    opos--;
+                if (opos > 1) opos--;  /* remove the preceding '/' too */
+                out[opos] = '\0';
+            }
+            /* already at root — ".." is a no-op */
+        } else {
+            /* Normal component: append '/' + component */
+            if (opos + 1 + clen >= MAX_PATH) return -1;
+            if (opos > 1) out[opos++] = '/';
+            for (int i = 0; i < clen; i++)
+                out[opos++] = p[i];
+            out[opos] = '\0';
+        }
+
+        p = *slash ? slash + 1 : slash;
+    }
+
+    return 0;
+}
+
 file_t *file_open(const char *path) {
+    if (!path || !current || !current->fs) return NULL;
+
+    char cwd[MAX_PATH];
+    if (fs_struct_get_cwd(current->fs, cwd, MAX_PATH) < 0)
+        return NULL;
+
+    char resolved[MAX_PATH];
+    if (path_resolve(cwd, path, resolved) < 0)
+        return NULL;
+
+    // printk("opening file at: %s", resolved);
+
     // 1. Resolve the path to a dentry (stays in vfs.c — that's its job)
-    dentry_t *d = vfs_lookup(path);
+    dentry_t *d = vfs_lookup(resolved);
     if (!d) {
         printk("file_open: file not found: %s\n", path);
         return NULL;
@@ -311,6 +396,14 @@ int file_lseek(file_t *f, size_t offset, int whence) {
     if (!f->vnode) {
         printk("file_lseek: no vnode on file\n");
         return -EBADF;
+    }
+
+    if (f->vnode && f->vnode->type == VNODE_DIR) {
+        if (whence == SEEK_SET && offset == 0) {
+            f->offset = 0;
+            return 0;
+        }
+        return -EISDIR;   // reject all other seeks on directories
     }
 
     size_t new_offset = 0;

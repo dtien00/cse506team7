@@ -257,7 +257,7 @@ dentry_t *vfs_lookup(const char *path) {
     if (path[0] == '/' && path[1] == '\0') {
         parent = NULL;   // we are root
     } else {
-        char parent_path[256];
+        char parent_path[MAX_PATH];
         if (dentry_get_parent_path(path, parent_path, sizeof(parent_path)) < 0)
             return NULL;  // root
 
@@ -309,6 +309,18 @@ int vfs_unlink(const char *path) {
     return -1;
 }
 
+int vfs_readdir(vnode_t *vnode, uint32_t start_idx, void *buf, uint32_t bufsize, uint32_t *entries_out)
+{
+    if (!vnode || !buf || bufsize == 0) return -EINVAL;
+    if (vnode->type != VNODE_DIR)       return -ENOTDIR;
+
+    mount_t *mnt = vnode->mount;        // vnode already knows its mount
+    if (!mnt || !mnt->fs_type->ops.readdir) return -ENOSYS;
+
+    return mnt->fs_type->ops.readdir(mnt, vnode, start_idx,
+                                     buf, bufsize, entries_out);
+}
+
 int vfs_mkdir(const char *path, uint32_t mode) {
     if (!path) return -1;
 
@@ -339,6 +351,32 @@ int vfs_is_dir(const char *path) {
     return d && d->d_vnode->type == VNODE_DIR;
 }
 
+int vfs_chdir(const char *kpath) {
+    // 1. Get current cwd as a string
+    char cwd_str[MAX_PATH];
+    if (dentry_build_path(current->fs->cwd, vfs_get_root(),
+                          cwd_str, MAX_PATH) != 0)
+        return -ENAMETOOLONG;
+
+    // 2. Resolve — same function file_open also calls
+    char resolved[MAX_PATH];
+    if (path_resolve(cwd_str, kpath, resolved) < 0)
+        return -ENAMETOOLONG;
+
+    // 3. Verify the target actually exists and is a directory
+    dentry_t *d = vfs_lookup(resolved);
+    if (!d) return -ENOENT;
+    if (d->d_vnode->type != VNODE_DIR) {
+        dentry_put(d);
+        return -ENOTDIR;
+    }
+
+    // 4. Hand off to fs_struct — it swaps the cwd dentry
+    const int ret = fs_struct_set_cwd(current->fs, resolved);
+    dentry_put(d);
+    return ret;
+}
+
 // -----------------------------------------------------------------------------
 // fs_struct operations (at a process level)
 // -----------------------------------------------------------------------------
@@ -349,13 +387,13 @@ void fs_struct_dump(const fs_struct_t *fs) {
         return;
     }
 
-    char root_path[256];
-    char cwd_path[256];
+    char root_path[MAX_PATH];
+    char cwd_path[MAX_PATH];
 
     if (!fs->root) {
         printk("[fs_struct] root=NULL\n");
     } else {
-        dentry_build_path(fs->root, fs->root, root_path, 256);
+        dentry_build_path(fs->root, fs->root, root_path, MAX_PATH);
         printk("[fs_struct] root=%s (dentry=%p, d_ref=%d)\n",
                root_path, fs->root, fs->root->d_ref);
     }
@@ -363,7 +401,7 @@ void fs_struct_dump(const fs_struct_t *fs) {
     if (!fs->cwd) {
         printk("[fs_struct] cwd=NULL\n");
     } else {
-        dentry_build_path(fs->cwd, fs->root, cwd_path, 256);
+        dentry_build_path(fs->cwd, fs->root, cwd_path, MAX_PATH);
         printk("[fs_struct] cwd=%s (dentry=%p, d_ref=%d)\n",
                cwd_path, fs->cwd, fs->cwd->d_ref);
     }

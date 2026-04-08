@@ -220,6 +220,10 @@ void syscall_handler(trap_frame *frame) {
             ret = (uint64_t)sys_getcwd((char *)arg0, (size_t)arg1);
             break;
 
+        case SYS_fs_getdents:
+            ret = sys_fs_getdents((int)arg0, (void *)arg1, (uint32_t)arg2);
+            break;
+
         default:
             printk("Unknown system call: %d\n", syscall_num);
             ret = -1;
@@ -328,22 +332,6 @@ ssize_t sys_read(int fd, void *buf, size_t count) {
 }
 
 ssize_t sys_write(int fd, const void *buf, size_t count) {
-    // // For now, just print to console if fd is 1 (stdout)
-    // if (fd == 1 || fd == 2) {
-    //     const char *str = (const char *) buf;
-    //     // buf is a user-space pointer (PTE_U set).  S-mode cannot load from
-    //     // user pages unless sstatus.SUM=1.  Set it for the duration of the
-    //     // copy, then clear it to restore the default deny policy.
-    //     set_csr_bit(sstatus, SSTATUS_SUM);
-    //     for (size_t i = 0; i < count; i++) {
-    //         printk("%c", str[i]);
-    //     }
-    //     clear_csr_bit(sstatus, SSTATUS_SUM);
-    //     return (ssize_t)count;
-    // }
-    //
-    // printk("sys_write(%d, %p, %d) not implemented\n", fd, buf, count);
-    // return -1;
     if (count == 0) return 0;
     if (!current || fd < 0 || fd >= MAX_FDS) return -EBADF;
 
@@ -368,10 +356,19 @@ ssize_t sys_write(int fd, const void *buf, size_t count) {
 }
 
 int sys_open(const char *path, int flags) {
+    if (!current || !path) return -EINVAL;
+
+    // SUM open only for the copy — nothing else
     set_csr_bit(sstatus, SSTATUS_SUM);
-    file_t *f = file_open(path);
+    char kpath[MAX_PATH];
+    strncpy(kpath, path, MAX_PATH - 1);
+    kpath[MAX_PATH - 1] = '\0';
     clear_csr_bit(sstatus, SSTATUS_SUM);
-    if (!f) return -1;
+
+    // Everything below works entirely in kernel memory
+    file_t *f = file_open(kpath);
+    if (!f) return -ENOENT;
+
     return fd_alloc(&current->fds, f);
 }
 
@@ -820,86 +817,11 @@ off_t sys_lseek(int fd, off_t offset, int whence) {
 }
 
 /* ------------------------------------------------------------------ */
-/* path_resolve — build an absolute, normalized path                   */
-/*                                                                     */
-/* Resolves 'input' relative to 'base' (cwd) into 'out' (MAX_PATH).  */
-/* Handles absolute paths, ".", "..", and consecutive slashes.        */
-/* Returns 0 on success, -1 if the result would overflow MAX_PATH.   */
-/* ------------------------------------------------------------------ */
-
-static int path_resolve(const char *base, const char *input, char *out) {
-    char tmp[MAX_PATH];
-    int pos = 0;
-
-    if (input[0] == '/') {
-        /* Absolute path — copy as-is into tmp for normalization */
-        int i = 0;
-        while (input[i] && pos < MAX_PATH - 1)
-            tmp[pos++] = input[i++];
-        tmp[pos] = '\0';
-    } else {
-        /* Relative path — prepend base */
-        int i = 0;
-        while (base[i] && pos < MAX_PATH - 1)
-            tmp[pos++] = base[i++];
-        /* Add separator if base doesn't already end with '/' */
-        if (pos > 0 && tmp[pos - 1] != '/' && pos < MAX_PATH - 1)
-            tmp[pos++] = '/';
-        i = 0;
-        while (input[i] && pos < MAX_PATH - 1)
-            tmp[pos++] = input[i++];
-        tmp[pos] = '\0';
-    }
-
-    /* Normalize: walk components into out[] */
-    out[0] = '/';
-    int opos = 1;
-    out[opos] = '\0';
-
-    char *p = tmp;
-    if (*p == '/') p++;  /* skip the leading '/' we already placed */
-
-    while (*p) {
-        /* Find end of component */
-        char *slash = p;
-        while (*slash && *slash != '/') slash++;
-        int clen = (int)(slash - p);
-
-        if (clen == 0) {
-            /* consecutive slash — skip */
-        } else if (clen == 1 && p[0] == '.') {
-            /* "." — current dir, skip */
-        } else if (clen == 2 && p[0] == '.' && p[1] == '.') {
-            /* ".." — go up one level */
-            if (opos > 1) {
-                opos--;  /* back past the last written char */
-                while (opos > 1 && out[opos - 1] != '/')
-                    opos--;
-                if (opos > 1) opos--;  /* remove the preceding '/' too */
-                out[opos] = '\0';
-            }
-            /* already at root — ".." is a no-op */
-        } else {
-            /* Normal component: append '/' + component */
-            if (opos + 1 + clen >= MAX_PATH) return -1;
-            if (opos > 1) out[opos++] = '/';
-            for (int i = 0; i < clen; i++)
-                out[opos++] = p[i];
-            out[opos] = '\0';
-        }
-
-        p = *slash ? slash + 1 : slash;
-    }
-
-    return 0;
-}
-
-/* ------------------------------------------------------------------ */
 /* sys_chdir                                                           */
 /* ------------------------------------------------------------------ */
 
 int sys_chdir(const char *path) {
-    if (!current || !path) return -1;
+    if (!current || !path) return -EINVAL;
 
     set_csr_bit(sstatus, SSTATUS_SUM);
     char kpath[MAX_PATH];
@@ -907,14 +829,7 @@ int sys_chdir(const char *path) {
     kpath[MAX_PATH - 1] = '\0';
     clear_csr_bit(sstatus, SSTATUS_SUM);
 
-    char cwd_str[MAX_PATH];
-    dentry_build_path(current->fs->cwd, vfs_get_root(), cwd_str, MAX_PATH);
-
-    char resolved[MAX_PATH];
-    if (path_resolve(cwd_str, kpath, resolved) < 0)
-        return -1;
-
-    return fs_struct_set_cwd(current->fs, resolved);  // VFS owns everything below
+    return vfs_chdir(kpath);   // VFS owns everything below
 }
 
 /* ------------------------------------------------------------------ */
@@ -937,4 +852,39 @@ char *sys_getcwd(char *buf, size_t size) {
     clear_csr_bit(sstatus, SSTATUS_SUM);
 
     return buf;
+}
+
+/* ------------------------------------------------------------------ */
+/* sys_getdents64                                                     */
+/* ------------------------------------------------------------------ */
+// Fills user buffer `dirp` with fs_dent records for the directory
+// referenced by `fd`.  Returns bytes written, 0 at end-of-directory, -errno.
+
+int sys_fs_getdents(int fd, void *dirp, uint32_t count)
+{
+    if (!current || !dirp) return -EINVAL;
+
+    file_t *f = fd_get(&current->fds, fd);
+    if (!f || f->type != FILE_VNODE)              return -EBADF;
+    if (!f->vnode || f->vnode->type != VNODE_DIR) return -ENOTDIR;
+
+    if (count == 0) return 0;
+
+    char *kbuf = kmalloc(count);
+    if (!kbuf) return -ENOMEM;
+
+    uint32_t entries_read = 0;
+    int n = vfs_readdir(f->vnode, (uint32_t)f->offset,
+                        kbuf, count, &entries_read);
+
+    if (n > 0) {
+        f->offset += entries_read;
+
+        set_csr_bit(sstatus, SSTATUS_SUM);
+        memcpy(dirp, kbuf, (size_t)n);
+        clear_csr_bit(sstatus, SSTATUS_SUM);
+    }
+
+    kfree(kbuf);
+    return n;
 }

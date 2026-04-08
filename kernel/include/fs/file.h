@@ -4,7 +4,10 @@
 // process level manager
 
 #define MAX_FDS 16 // or however many per process
+#define MAX_PATH 256
 struct vnode;
+
+typedef int64_t   off_t;   // file offset (signed, supports seeking)
 
 typedef struct vnode  vnode_t;
 typedef struct pipe pipe_t;
@@ -21,7 +24,7 @@ typedef enum {
 typedef struct file {
     file_type_t type;
     int ref_count;
-    size_t offset;
+    size_t offset; // offset into file, or index into directory
 
     // for type FILE_VNODE only
     vnode_t *vnode; // cached vnode, fetched from inside dentry on file open
@@ -45,6 +48,7 @@ void fd_destroy(fd_table_t *table);
 void fd_init(fd_table_t *table); // sets up stdin/stdout/stderr
 
 // I/O operations (moved from vfs.h)
+int path_resolve(const char *base, const char *input, char *out);
 file_t *file_open(const char *path);
 void file_close(file_t *f);
 int file_read(file_t *f, void *buf, size_t len);

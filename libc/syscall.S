@@ -23,7 +23,7 @@
 .global mkdir
 .global chmod
 .global fchmod
-.global getdents64
+.global fs_getdents
 .global unlink
 .global kill
 .global link
@@ -156,7 +156,7 @@ fchmod:
     ecall
     ret
 
-getdents64:
+fs_getdents:
     li a7, 61
     ecall
     ret
