@@ -27,6 +27,10 @@
 // SIGSTOP cannot be masked or ignored (POSIX)
 #define KERNEL_STOP_SIGS  (1U << KERNEL_SIGSTOP)
 
+#define MLFQ_LEVELS 4
+#define MLFQ_BOOST_INTERVAL 50
+#define PROC_DEFAULT_PRIORITY 5
+
 extern struct proc *current;
 extern uint8_t kstacks[][KSTACK_SIZE];
 
@@ -76,6 +80,8 @@ struct proc {
 
     proc_state_t state;
     int exit_code;
+    int priority; // UNIX Convetion: lower integer = higher priority (0 = highest)
+    int mlfq_level;
     void *chan; // Sleep/wakeup channel support
 
     uint64_t time_slice;

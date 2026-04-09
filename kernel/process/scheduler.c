@@ -7,7 +7,8 @@
 #include "trap/trap.h"
 
 struct proc proctab[MAX_PROCS];
-struct proc *ready_queue = NULL;
+// struct proc *ready_queue = NULL;
+struct proc *mlfq[MLFQ_LEVELS];
 struct proc *blocked_queue = NULL;
 struct proc *current = NULL;
 uint8_t kstacks[MAX_PROCS][KSTACK_SIZE] __attribute__((aligned(16)));
@@ -33,6 +34,8 @@ static void idle_loop(void) {
 void scheduler_init(void) {
     memset(&idle_context, 0, sizeof(idle_context));
     memset(&scheduler_context, 0, sizeof(scheduler_context));
+    for (int i = 0; i < MLFQ_LEVELS; i++)
+        mlfq[i] = NULL;
 
     idle_context.ra = (uint64_t) idle_loop;
     idle_context.sp = (uint64_t) (idle_stack + sizeof(idle_stack));
@@ -108,41 +111,53 @@ void proc_yield(void) {
 
 void proc_ready(struct proc *p) {
     p->state = PROC_READY;
+    p->time_slice = (1 << p->mlfq_level);
     p->next = NULL;
-    if (ready_queue == NULL) {
-        ready_queue = p;
-    } else {
-        struct proc *tail = ready_queue;
-        while (tail->next) tail = tail->next;
-        tail->next = p;
+    int lvl = p->mlfq_level;
+    if (mlfq[lvl] == NULL || p->priority < mlfq[lvl]->priority) {
+        p->next = mlfq[lvl];
+        mlfq[lvl] = p;
+        return;
     }
+    struct proc *cur = mlfq[lvl];
+    while (cur->next && cur->next->priority <= p->priority)
+        cur = cur->next;
+    p->next = cur->next;
+    cur->next = p;
 }
 
 struct proc *proc_next_ready(void) {
-    struct proc *p = ready_queue;
-    if (p) {
-        ready_queue = p->next;
-        p->next = NULL;
+    for (int i = 0; i < MLFQ_LEVELS; i++) {
+        struct proc *p = mlfq[i];
+        if (p) {
+            mlfq[i] = p->next;
+            p->next = NULL;
+            return p;
+        }
     }
-    return p;
+    return NULL;
 }
 
 void proc_block(struct proc *p) {
-    p->state = PROC_BLOCKED;
-    if (ready_queue == p) {
-        ready_queue = ready_queue->next;
-    } else {
-        struct proc *cur = ready_queue;
-        struct proc *prev = NULL;
-        while (cur) {
-            if (cur == p) {
-                prev->next = cur->next;
-                break;
+    // If p is currently READY, remove it from its MLFQ level.
+    if (p->state == PROC_READY) {
+        int lvl = p->mlfq_level;
+        if (mlfq[lvl] == p) {
+            mlfq[lvl] = p->next;
+        } else {
+            struct proc *cur = mlfq[lvl];
+            struct proc *prev = NULL;
+            while (cur) {
+                if (cur == p) {
+                    prev->next = cur->next;
+                    break;
+                }
+                prev = cur;
+                cur = cur->next;
             }
-            prev = cur;
-            cur = cur->next;
         }
     }
+    p->state = PROC_BLOCKED;
     p->next = NULL;
     if (blocked_queue == NULL) {
         blocked_queue = p;
@@ -167,6 +182,7 @@ void proc_unblock(struct proc *p) {
         }
     }
     p->next = NULL;
+    if (p->mlfq_level > 0) p->mlfq_level--;
     proc_ready(p);
 }
 
@@ -214,12 +230,13 @@ void proc_wakeup(void *chan) {
 }
 
 void proc_stop(struct proc *p) {
-    // Remove from ready_queue if present
+    // Remove from MLFQ if present
     if (p->state == PROC_READY) {
-        if (ready_queue == p) {
-            ready_queue = ready_queue->next;
+        int lvl = p->mlfq_level;
+        if (mlfq[lvl] == p) {
+            mlfq[lvl] = p->next;
         } else {
-            struct proc *cur = ready_queue, *prev = NULL;
+            struct proc *cur = mlfq[lvl], *prev = NULL;
             while (cur) {
                 if (cur == p) { prev->next = cur->next; break; }
                 prev = cur; cur = cur->next;
@@ -256,5 +273,5 @@ void proc_stop(struct proc *p) {
 
 void proc_unstop(struct proc *p) {
     if (p->state != PROC_STOPPED) return;
-    proc_ready(p);  // sets PROC_READY and appends to ready_queue
+    proc_ready(p);  // sets PROC_READY and re-enqueues into MLFQ
 }

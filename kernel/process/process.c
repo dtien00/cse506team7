@@ -57,6 +57,7 @@ void proc_init(void) {
     // next_pid is 1 at file scope, so proc_create assigns pid=1 to init
     struct proc *init = proc_create("init");
     next_pid = 2;  // next real process gets pid 2
+    init->priority = 0;  // PID 1 runs at highest priority — never starved
 
     // proc_create leaves fds and cwd/pwd in fs to the caller
     fd_init(&init->fds);
@@ -101,6 +102,8 @@ struct proc* proc_create(const char *name) {
     p->state = PROC_CREATED;
     p->context.sp = (uint64_t)&kstacks[idx][KSTACK_SIZE];
     p->context.ra = (uint64_t)proc_entry;
+    p->priority = PROC_DEFAULT_PRIORITY;
+    p->mlfq_level = 0;
     p->trapframe = NULL;
     p->trapframe_owned = 0;
 

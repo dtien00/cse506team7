@@ -124,8 +124,17 @@ void sched_timeslice_test_run(void) {
 }
 
 void sched_priority_test_run(void) {
-    printk("[sched_priority_test_run] Not implemented yet.\n");
-    TEST("sched_priority_test_run stub", 0);
+    struct proc *lo = proc_alloc(); lo->priority = 10;
+    struct proc *hi = proc_alloc(); hi->priority = 1;
+    struct proc *mid = proc_alloc(); mid->priority = 5;
+    proc_ready(lo); proc_ready(mid); proc_ready(hi);
+    struct proc *n1 = proc_next_ready();
+    struct proc *n2 = proc_next_ready();
+    struct proc *n3 = proc_next_ready();
+    TEST("priority: hi dequeues first",  n1 == hi);
+    TEST("priority: mid dequeues second", n2 == mid);
+    TEST("priority: lo dequeues last",   n3 == lo);
+    proc_free(lo); proc_free(mid); proc_free(hi);
 }
 
 void sched_fairness_test_run(void) {
