@@ -32,6 +32,7 @@
 .global readlink
 .global sigprocmask
 .global getrusage
+.global nice
 
 mmap:
     li a7, 14
@@ -199,5 +200,10 @@ sigprocmask:
     ret
 getrusage:
     li a7, 24
+    ecall
+    ret
+
+nice:
+    li a7, 25
     ecall
     ret

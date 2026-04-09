@@ -229,6 +229,10 @@ void syscall_handler(trap_frame *frame) {
             ret = sys_getrusage((int)arg0, (struct rusage *)arg1);
             break;
 
+        case SYS_nice:
+            ret = sys_nice((int)arg0);
+            break;
+
         default:
             printk("Unknown system call: %d\n", syscall_num);
             ret = -1;
@@ -272,6 +276,8 @@ pid_t sys_fork(void) {
     }
 
     child->signal_mask = current->signal_mask; // Fork child inherits parent's signal mask
+    child->priority    = current->priority;    /* POSIX: nice value is inherited across fork */
+    child->mlfq_level  = 0;                    /* fresh MLFQ slate — child has used no CPU yet */
     child->fs = fs_struct_copy(current->fs);
     if (!child->fs) {
         vma_free_all(child->vma_list);
@@ -983,4 +989,34 @@ int sys_getrusage(int who, struct rusage *usage) {
     clear_csr_bit(sstatus, SSTATUS_SUM);
 
     return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* sys_nice                                                             */
+/* ------------------------------------------------------------------ */
+
+/*
+ * sys_nice(increment) — adjust the calling process's scheduling priority.
+ *
+ * Convention (matching struct proc.priority): 0 = highest, 19 = lowest,
+ * which mirrors the Unix nice-value range [0, 19] used by this kernel.
+ *
+ * Positive increment lowers priority (background work).
+ * Negative increment raises priority; clamped to 0 regardless of privilege
+ * because this kernel has no uid concept.
+ *
+ * POSIX semantics:
+ *   nice(0)  — returns current priority without changing it.
+ *   Return value is the new priority on success, -1 if current == NULL.
+ *
+ * Overflow safety: intermediate arithmetic is widened to long (64-bit on
+ * RISC-V) before clamping so that INT_MIN/INT_MAX arguments cannot wrap.
+ */
+int sys_nice(int increment) {
+    if (!current) return -1;
+    long new_prio = (long)current->priority + (long)increment;
+    if (new_prio < 0)  new_prio = 0;
+    if (new_prio > 19) new_prio = 19;
+    current->priority = (int)new_prio;
+    return (int)new_prio;
 }

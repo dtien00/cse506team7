@@ -542,6 +542,9 @@ int exec(const char *path, char *const argv[]) {
 
     // 7. Commit: install new address space, then tear down the old one.
     // Keep the old root alive until after SATP switches away from it.
+    // NOTE: current->priority (nice value) and current->signal_mask are
+    // intentionally NOT reset here — POSIX requires both to be preserved
+    // across exec().  Do not clear these fields in future refactors.
     pagetable_t old_pt = current->pagetable;
     struct vm_area *old_vma_list = current->vma_list;
 

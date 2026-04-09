@@ -32,6 +32,7 @@ gid_t getgid(void);
 unsigned int sleep(unsigned int seconds);
 int usleep(unsigned int usec);
 int uptime(void);   /* returns kernel timer_ticks since boot (10 ticks/s on QEMU) */
+int nice(int increment); /* adjust scheduling priority; clamps to [0,19]; returns new priority */
 
 int chdir(const char *path);
 char* getcwd(char *buf, size_t size);
