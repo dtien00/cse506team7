@@ -501,6 +501,7 @@ void timer_handler(void) {
 
     // Only preempt when we're actually in a running process context.
     if (current != NULL && current->state == PROC_RUNNING) {
+        current->utime_ticks++;  // charge every tick regardless of preemptibility
         if (current->time_slice > 0) {
             current->total_time++;
             if (current->total_time >= current->time_slice) {

@@ -2,6 +2,7 @@
 #include "arch/riscv.h"
 #include "errno.h"
 #include "kernel/printk.h"
+#include "kernel/resource.h"
 #include "lib/string.h"
 #include "mm/kmalloc.h"
 #include "mm/pmm.h"
@@ -222,6 +223,10 @@ void syscall_handler(trap_frame *frame) {
 
         case SYS_getcwd:
             ret = (uint64_t)sys_getcwd((char *)arg0, (size_t)arg1);
+            break;
+
+        case SYS_getrusage:
+            ret = sys_getrusage((int)arg0, (struct rusage *)arg1);
             break;
 
         default:
@@ -950,4 +955,32 @@ char *sys_getcwd(char *buf, size_t size) {
     clear_csr_bit(sstatus, SSTATUS_SUM);
 
     return buf;
+}
+/* ------------------------------------------------------------------ */
+/* sys_getrusage                                                        */
+/* ------------------------------------------------------------------ */
+
+int sys_getrusage(int who, struct rusage *usage) {
+    if (!current || !usage) return -1;
+
+    uint64_t ticks;
+    if (who == RUSAGE_SELF) {
+        ticks = current->utime_ticks;
+    } else if (who == RUSAGE_CHILDREN) {
+        ticks = current->children_utime;
+    } else {
+        return -1;
+    }
+
+    struct rusage ku;
+    ku.ru_utime.tv_sec  = ticks / TICKS_PER_SEC;
+    ku.ru_utime.tv_usec = (ticks % TICKS_PER_SEC) * (1000000ULL / TICKS_PER_SEC);
+    ku.ru_stime.tv_sec  = 0;
+    ku.ru_stime.tv_usec = 0;
+
+    set_csr_bit(sstatus, SSTATUS_SUM);
+    *usage = ku;
+    clear_csr_bit(sstatus, SSTATUS_SUM);
+
+    return 0;
 }

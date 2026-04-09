@@ -85,7 +85,9 @@ struct proc {
     void *chan; // Sleep/wakeup channel support
 
     uint64_t time_slice;
-    uint64_t total_time;
+    uint64_t total_time;     // ticks used in current MLFQ slice (reset on preemption)
+    uint64_t utime_ticks;    // total user-mode ticks consumed (never reset)
+    uint64_t children_utime; // sum of utime_ticks of all reaped children
     uint64_t wake_tick;      // 0 = not sleeping; >0 = timer_ticks value at which to wake
     uint32_t pending_signals; // bitmask: bit N set means signal N is pending
     uint32_t signal_mask;

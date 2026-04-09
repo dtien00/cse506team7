@@ -31,6 +31,7 @@
 .global symlink
 .global readlink
 .global sigprocmask
+.global getrusage
 
 mmap:
     li a7, 14
@@ -98,7 +99,7 @@ getppid:
     ret
 
 getuid:
-    li a7, 24
+    li a7, 174   // SYS_getuid (Linux RISC-V ABI); unimplemented — kernel returns -1
     ecall
     ret
 
@@ -194,5 +195,9 @@ readlink:
 
 sigprocmask:
     li a7, 20
+    ecall
+    ret
+getrusage:
+    li a7, 24
     ecall
     ret

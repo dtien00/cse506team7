@@ -219,6 +219,9 @@ int proc_wait(int *exit_code_out) {
                     clear_csr_bit(sstatus, SSTATUS_SUM);
                 }
 
+                // Accumulate child CPU time into parent before freeing
+                current->children_utime += child->utime_ticks;
+
                 proc_free(child);
                 return pid;
             }
@@ -266,6 +269,9 @@ int proc_waitpid(pid_t target_pid, int *exit_code_out, int options) {
                             *exit_code_out = (child->exit_code & 0xff) << 8;
                         clear_csr_bit(sstatus, SSTATUS_SUM);
                     }
+                    // Accumulate child CPU time into parent before freeing
+                    current->children_utime += child->utime_ticks;
+
                     proc_free(child);
                     return target_pid;
                 }

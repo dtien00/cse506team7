@@ -52,6 +52,7 @@ void run_all_tests(void) {
     kill_test_run();
     cow_test_run();
     stack_growth_test_run();
+    accounting_test_run();
 
     // printk("%d passed, %d failed\n", passed, failed);
 }
