@@ -167,37 +167,44 @@ void sched_nice_test_run(void) {
 
         /* nice(0) is a no-op */
         long r = (long)base + 0L;
-        if (r < 0) r = 0; if (r > 19) r = 19;
+        if (r < 0) r = 0; 
+        if (r > 19) r = 19;
         TEST("nice(0) returns current priority unchanged", (int)r == base);
 
         /* Positive increment */
         r = (long)base + 10L;
-        if (r < 0) r = 0; if (r > 19) r = 19;
+        if (r < 0) r = 0; 
+        if (r > 19) r = 19;
         TEST("nice(+10) from 5 == 15", (int)r == 15);
 
         /* Negative increment */
         r = (long)base + (-6L);
-        if (r < 0) r = 0; if (r > 19) r = 19;
+        if (r < 0) r = 0; 
+        if (r > 19) r = 19;
         TEST("nice(-6) from 5 clamps to 0 (5-6=-1 -> 0)", (int)r == 0);
 
         /* Overflow: INT_MIN must not wrap to a large positive */
         r = (long)base + (long)(-2147483648);
-        if (r < 0) r = 0; if (r > 19) r = 19;
+        if (r < 0) r = 0; 
+        if (r > 19) r = 19;
         TEST("nice(INT_MIN) safely clamps to 0", (int)r == 0);
 
         /* Overflow: INT_MAX must not wrap to a large negative */
         r = (long)base + (long)(2147483647);
-        if (r < 0) r = 0; if (r > 19) r = 19;
+        if (r < 0) r = 0; 
+        if (r > 19) r = 19;
         TEST("nice(INT_MAX) safely clamps to 19", (int)r == 19);
 
         /* Boundary: already at 0, decrement stays at 0 */
         r = (long)0 + (-1L);
-        if (r < 0) r = 0; if (r > 19) r = 19;
+        if (r < 0) r = 0; 
+        if (r > 19) r = 19;
         TEST("nice(-1) from 0 stays at 0 (lower clamp)", (int)r == 0);
 
         /* Boundary: already at 19, increment stays at 19 */
         r = (long)19 + 1L;
-        if (r < 0) r = 0; if (r > 19) r = 19;
+        if (r < 0) r = 0; 
+        if (r > 19) r = 19;
         TEST("nice(+1) from 19 stays at 19 (upper clamp)", (int)r == 19);
     }
 
