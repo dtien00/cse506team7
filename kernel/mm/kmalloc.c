@@ -132,31 +132,34 @@ void kfree(void *ptr) {
   if (ptr == NULL) {
     return;
   }
-  
+
   // Get block header
   block_header_t *block = (block_header_t *)((char *)ptr - BLOCK_HEADER_SIZE);
-  
+
   if (block->free) {
     printk("kmalloc: Double free detected at %p\n", ptr);
     return;
   }
-  
+
   block->free = 1;
   total_freed += block->size;
-  
-  // Coalesce with next block if it's free
-  if (block->next != NULL && block->next->free) {
+
+  // Coalesce with next block only if it is free AND physically adjacent
+  if (block->next != NULL && block->next->free &&
+      (char *)block + BLOCK_HEADER_SIZE + block->size == (char *)block->next) {
     block->size += BLOCK_HEADER_SIZE + block->next->size;
     block->next = block->next->next;
   }
-  
-  // Coalesce with previous block if it's free
+
+  // Find previous block in list
   block_header_t *current = heap_start;
   while (current != NULL && current->next != block) {
     current = current->next;
   }
-  
-  if (current != NULL && current->free) {
+
+  // Coalesce with previous block only if it is free AND physically adjacent
+  if (current != NULL && current->free &&
+      (char *)current + BLOCK_HEADER_SIZE + current->size == (char *)block) {
     current->size += BLOCK_HEADER_SIZE + block->size;
     current->next = block->next;
   }
