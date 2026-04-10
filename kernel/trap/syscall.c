@@ -24,7 +24,6 @@
 
 #define MAX_ARGS 64
 #define KARG_MAX 256
-#define MAX_PATH    256
 
 void syscall_init(void) { printk("Syscall: Initialized\n"); }
 
@@ -228,6 +227,14 @@ void syscall_handler(trap_frame *frame) {
             ret = sys_fs_getdents((int)arg0, (void *)arg1, (uint32_t)arg2);
             break;
 
+        case SYS_stat:
+            ret = sys_stat((char *)arg0, (void *)arg1);
+            break;
+
+        case SYS_fstat:
+            ret = sys_fstat((int)arg0, (void *)arg1);
+            break;
+
         default:
             printk("Unknown system call: %d\n", syscall_num);
             ret = -1;
@@ -325,62 +332,53 @@ pid_t sys_fork(void) {
 }
 
 ssize_t sys_read(int fd, void *buf, size_t count) {
-    file_t *f = fd_get(&current->fds, fd);
-    if (!f) return -1;
-    if (f->type == FILE_PIPE)
-        return file_read(f, buf, count);
-    set_csr_bit(sstatus, SSTATUS_SUM);
-    int n = file_read(f, buf, count);
-    clear_csr_bit(sstatus, SSTATUS_SUM);
+    if (!current || !buf)
+        return -EINVAL;
+    if (count == 0)
+        return 0;
+
+    char *kbuf = (char *) kmalloc(count);
+    if (!kbuf)
+        return -ENOMEM;
+
+    int n = file_read(fd, kbuf, count);
+    if (n > 0)
+        copy_to_user(buf, kbuf, (size_t) n);
+
+    kfree(kbuf);
     return n;
 }
 
 ssize_t sys_write(int fd, const void *buf, size_t count) {
-    if (count == 0) return 0;
-    if (!current || fd < 0 || fd >= MAX_FDS) return -EBADF;
+    if (!current || !buf)
+        return -EINVAL;
+    if (count == 0)
+        return 0;
 
-    file_t *f = fd_get(&current->fds, fd);
-    if (!f) return -EBADF;
+    char *kbuf = (char *) kmalloc(count);
+    if (!kbuf)
+        return -ENOMEM;
 
-    /* Console path — active until vfs_write has a console driver */
-    if (f->type == FILE_STDOUT || f->type == FILE_STDIN) {
-        set_csr_bit(sstatus, SSTATUS_SUM);
-        const char *str = (const char *)buf;
-        for (size_t i = 0; i < count; i++)
-            printk_char(str[i]);
-        clear_csr_bit(sstatus, SSTATUS_SUM);
-        return (ssize_t)count;
-    }
-    if (f->type == FILE_PIPE)
-        return file_write(f, buf, count);
-    set_csr_bit(sstatus, SSTATUS_SUM);
-    ssize_t n = file_write(f, buf, count);
-    clear_csr_bit(sstatus, SSTATUS_SUM);
+    copy_from_user(kbuf, buf, count);
+    int n = file_write(fd, kbuf, count);
+
+    kfree(kbuf);
     return n;
 }
 
 int sys_open(const char *path, int flags) {
+    (void) flags;
     if (!current || !path) return -EINVAL;
 
-    // SUM open only for the copy — nothing else
-    set_csr_bit(sstatus, SSTATUS_SUM);
     char kpath[MAX_PATH];
-    strncpy(kpath, path, MAX_PATH - 1);
+    strncpy_from_user(kpath, path, MAX_PATH - 1);
     kpath[MAX_PATH - 1] = '\0';
-    clear_csr_bit(sstatus, SSTATUS_SUM);
 
-    // Everything below works entirely in kernel memory
-    file_t *f = file_open(kpath);
-    if (!f) return -ENOENT;
-
-    return fd_alloc(&current->fds, f);
+    return file_open(kpath);
 }
 
 int sys_close(int fd) {
-    file_t *f = fd_get(&current->fds, fd);
-    if (!f) return -1;
-    fd_close(&current->fds, fd);
-    return 0;
+    return file_close(fd);
 }
 
 int sys_pipe(int pipefd[2]) {
@@ -442,13 +440,12 @@ int sys_pipe(int pipefd[2]) {
 int sys_dup(int oldfd) {
     if (!current) return -EBADF;
 
-    file_t *f = fd_get(&current->fds, oldfd);
+    file_t *f = f_get(current, oldfd);
     if (!f) return -EBADF;
 
-    file_ref(f);
     int newfd = fd_alloc(&current->fds, f);
     if (newfd < 0) {
-        file_close(f);
+        f_put(f);
         return -EMFILE;
     }
 
@@ -459,16 +456,18 @@ int sys_dup2(int oldfd, int newfd) {
     if (!current) return -EBADF;
     if (newfd < 0 || newfd >= MAX_FDS) return -EBADF;
 
-    file_t *f = fd_get(&current->fds, oldfd);
+    file_t *f = f_get(current, oldfd);
     if (!f) return -EBADF;
 
-    if (oldfd == newfd) return newfd;
+    if (oldfd == newfd) {
+        f_put(f);
+        return newfd;
+    }
 
     if (fd_get(&current->fds, newfd)) {
         fd_close(&current->fds, newfd);
     }
 
-    file_ref(f);
     current->fds.files[newfd] = f;
     return newfd;
 }
@@ -823,9 +822,7 @@ int sys_sigprocmask(int how, const uint32_t *set, uint32_t *oldset) {
 /* ------------------------------------------------------------------ */
 
 off_t sys_lseek(int fd, off_t offset, int whence) {
-    file_t *f = fd_get(&current->fds, fd);
-    if (!f) return -1;
-    return (off_t)file_lseek(f, (size_t)offset, whence);
+    return (off_t) file_lseek(fd, (size_t) offset, whence);
 }
 
 /* ------------------------------------------------------------------ */
@@ -835,11 +832,9 @@ off_t sys_lseek(int fd, off_t offset, int whence) {
 int sys_chdir(const char *path) {
     if (!current || !path) return -EINVAL;
 
-    set_csr_bit(sstatus, SSTATUS_SUM);
     char kpath[MAX_PATH];
-    strncpy(kpath, path, MAX_PATH - 1);
+    strncpy_from_user(kpath, path, MAX_PATH - 1);
     kpath[MAX_PATH - 1] = '\0';
-    clear_csr_bit(sstatus, SSTATUS_SUM);
 
     return vfs_chdir(kpath);   // VFS owns everything below
 }
@@ -859,9 +854,7 @@ char *sys_getcwd(char *buf, size_t size) {
     size_t cwd_len = strlen(kbuf);
     if (cwd_len + 1 > size) return NULL;   // user buffer too small
 
-    set_csr_bit(sstatus, SSTATUS_SUM);
-    memcpy(buf, kbuf, cwd_len + 1);
-    clear_csr_bit(sstatus, SSTATUS_SUM);
+    copy_to_user(buf, kbuf, cwd_len + 1);
 
     return buf;
 }
@@ -876,14 +869,27 @@ int sys_fs_getdents(int fd, void *dirp, uint32_t count)
 {
     if (!current || !dirp) return -EINVAL;
 
-    file_t *f = fd_get(&current->fds, fd);
-    if (!f || f->type != FILE_VNODE)              return -EBADF;
-    if (!f->vnode || f->vnode->type != VNODE_DIR) return -ENOTDIR;
+    file_t *f = f_get(current, fd);
+    if (!f || f->type != FILE_VNODE) {
+        if (f)
+            f_put(f);
+        return -EBADF;
+    }
+    if (!f->vnode || f->vnode->type != VNODE_DIR) {
+        f_put(f);
+        return -ENOTDIR;
+    }
 
-    if (count == 0) return 0;
+    if (count == 0) {
+        f_put(f);
+        return 0;
+    }
 
     char *kbuf = kmalloc(count);
-    if (!kbuf) return -ENOMEM;
+    if (!kbuf) {
+        f_put(f);
+        return -ENOMEM;
+    }
 
     uint32_t entries_read = 0;
     int n = vfs_readdir(f->vnode, (uint32_t)f->offset,
@@ -891,12 +897,46 @@ int sys_fs_getdents(int fd, void *dirp, uint32_t count)
 
     if (n > 0) {
         f->offset += entries_read;
-
-        set_csr_bit(sstatus, SSTATUS_SUM);
-        memcpy(dirp, kbuf, (size_t)n);
-        clear_csr_bit(sstatus, SSTATUS_SUM);
+        copy_to_user(dirp, kbuf, (size_t) n);
     }
 
     kfree(kbuf);
+    f_put(f);
     return n;
+}
+
+// trap/trapsyscall.c
+
+int sys_stat(const char *upath, struct stat *ustat)
+{
+    if (!current || !upath || !ustat) return -EINVAL;
+
+    // 1. Copy path from user
+    char kpath[MAX_PATH];
+    strncpy_from_user(kpath, upath, MAX_PATH - 1);
+    kpath[MAX_PATH - 1] = '\0';
+
+    // 2. Do kernel-side stat (no user memory access)
+    struct stat kst;
+    int ret = file_stat(kpath, &kst);
+    if (ret != 0) return ret;
+
+    // 3. Copy result back to user
+    copy_to_user(ustat, &kst, sizeof(struct stat));
+
+    return 0;
+}
+
+int sys_fstat(int fd, struct stat *ustat)
+{
+    if (!current || !ustat) return -EINVAL;
+
+    // 1. Kernel-side stat by fd (no user memory needed)
+    struct stat kst;
+    int ret = file_fstat(fd, &kst);
+    if (ret != 0) return ret;
+
+    // 2. Copy result to user
+    copy_to_user(ustat, &kst, sizeof(struct stat));
+    return 0;
 }

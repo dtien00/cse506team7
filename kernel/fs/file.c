@@ -11,6 +11,11 @@
 #define SEEK_CUR 1
 #define SEEK_END 2
 
+#define S_IFREG 0100000
+#define S_IFDIR 0040000
+
+static void file_release(file_t *f);
+
 // -----------------------------------------------------------------------------
 // fd_init
 // Initialize a file descriptor table with stdin (0), stdout (1), stderr (2).
@@ -101,10 +106,11 @@ void fd_close(fd_table_t *table, int fd) {
         return;
 
     file_t *f = table->files[fd];
-    if (f) {
-        file_close(f);
-        table->files[fd] = NULL;
-    }
+    if (!f)
+        return;
+
+    table->files[fd] = NULL;
+    file_release(f);
 }
 
 // -----------------------------------------------------------------------------
@@ -133,7 +139,7 @@ void fd_destroy(fd_table_t *table) {
 /* Returns 0 on success, -1 if the result would overflow MAX_PATH.   */
 /* This is basic, should switch to dentry caching and finding parent from there   */
 /* ------------------------------------------------------------------ */
-int path_resolve(const char *base, const char *input, char *out) {
+int path_resolve(const char *input, char *out) {
     char tmp[MAX_PATH];
     int pos = 0;
 
@@ -145,9 +151,13 @@ int path_resolve(const char *base, const char *input, char *out) {
         tmp[pos] = '\0';
     } else {
         /* Relative path — prepend base */
+        char cwd[MAX_PATH];
+        if (fs_struct_get_cwd(current->fs, cwd, MAX_PATH) != 0)
+            return -ENAMETOOLONG;
+
         int i = 0;
-        while (base[i] && pos < MAX_PATH - 1)
-            tmp[pos++] = base[i++];
+        while (cwd[i] && pos < MAX_PATH - 1)
+            tmp[pos++] = cwd[i++];
         /* Add separator if base doesn't already end with '/' */
         if (pos > 0 && tmp[pos - 1] != '/' && pos < MAX_PATH - 1)
             tmp[pos++] = '/';
@@ -163,13 +173,15 @@ int path_resolve(const char *base, const char *input, char *out) {
     out[opos] = '\0';
 
     char *p = tmp;
-    if (*p == '/') p++;  /* skip the leading '/' we already placed */
+    if (*p == '/')
+        p++; /* skip the leading '/' we already placed */
 
     while (*p) {
         /* Find end of component */
         char *slash = p;
-        while (*slash && *slash != '/') slash++;
-        int clen = (int)(slash - p);
+        while (*slash && *slash != '/')
+            slash++;
+        int clen = (int) (slash - p);
 
         if (clen == 0) {
             /* consecutive slash — skip */
@@ -178,17 +190,20 @@ int path_resolve(const char *base, const char *input, char *out) {
         } else if (clen == 2 && p[0] == '.' && p[1] == '.') {
             /* ".." — go up one level */
             if (opos > 1) {
-                opos--;  /* back past the last written char */
+                opos--; /* back past the last written char */
                 while (opos > 1 && out[opos - 1] != '/')
                     opos--;
-                if (opos > 1) opos--;  /* remove the preceding '/' too */
+                if (opos > 1)
+                    opos--; /* remove the preceding '/' too */
                 out[opos] = '\0';
             }
             /* already at root — ".." is a no-op */
         } else {
             /* Normal component: append '/' + component */
-            if (opos + 1 + clen >= MAX_PATH) return -1;
-            if (opos > 1) out[opos++] = '/';
+            if (opos + 1 + clen >= MAX_PATH)
+                return -1;
+            if (opos > 1)
+                out[opos++] = '/';
             for (int i = 0; i < clen; i++)
                 out[opos++] = p[i];
             out[opos] = '\0';
@@ -200,33 +215,23 @@ int path_resolve(const char *base, const char *input, char *out) {
     return 0;
 }
 
-file_t *file_open(const char *path) {
-    if (!path || !current || !current->fs) return NULL;
-
-    char cwd[MAX_PATH];
-    if (fs_struct_get_cwd(current->fs, cwd, MAX_PATH) < 0)
-        return NULL;
+int file_open(const char *path) {
+    if (!path || !current || !current->fs)
+        return -EINVAL;
 
     char resolved[MAX_PATH];
-    if (path_resolve(cwd, path, resolved) < 0)
-        return NULL;
+    if (path_resolve(path, resolved) != 0)
+        return -ENAMETOOLONG;
 
-    // printk("opening file at: %s", resolved);
-
-    // 1. Resolve the path to a dentry (stays in vfs.c — that's its job)
     dentry_t *d = vfs_lookup(resolved);
-    if (!d) {
-        printk("file_open: file not found: %s\n", path);
-        return NULL;
-    }
+    if (!d)
+        return -ENOENT;
 
     // 2. Allocate the file_t wrapper
-    file_t *f = kzalloc(sizeof(file_t));
-    if (!f) {
-        printk("file_open: kmalloc failed\n");
-        dentry_put(d);
-        return NULL;
-    }
+    file_t *f = NULL;
+    f = kzalloc(sizeof(file_t));
+    if (!f)
+        return -ENOMEM;
 
     // 3. Wire it up
     dentry_get(d); // file_t now owns a reference to the dentry
@@ -238,12 +243,28 @@ file_t *file_open(const char *path) {
     f->pipe = NULL;
     f->pipe_flags = 0;
 
-    return f;
+    int fd = fd_alloc(&current->fds, f);
+    if (fd < 0) {
+        file_release(f);
+        return -EMFILE;
+    }
+    return fd;
 }
 
-void file_close(file_t *f) {
+int file_close(int fd) {
+    if (!current || fd < 0 || fd >= MAX_FDS)
+        return -EBADF;
+
+    file_t *f = fd_get(&current->fds, fd);
     if (!f)
-        return;
+        return -EBADF;
+
+    current->fds.files[fd] = NULL;
+    file_release(f);
+    return 0;
+}
+
+static void file_release(file_t *f) {
     if (f->ref_count <= 0) {
         printk("file_close: double-close detected (ref_count=%d)\n", f->ref_count);
         return;
@@ -273,7 +294,8 @@ void file_close(file_t *f) {
     kfree(f);
 }
 
-int file_read(file_t *f, void *buf, size_t len) {
+int file_read(int fd, void *buf, size_t len) {
+    file_t *f = fd_get(&current->fds, fd);
     if (!f || !buf)
         return -EINVAL;
 
@@ -306,9 +328,7 @@ int file_read(file_t *f, void *buf, size_t len) {
                         return (int) nread; // EOF — all writers closed
                     proc_sleep(p);
                 }
-                set_csr_bit(sstatus, SSTATUS_SUM);
                 dst[nread] = p->buffer[p->read_pos];
-                clear_csr_bit(sstatus, SSTATUS_SUM);
                 nread++;
                 p->read_pos = (p->read_pos + 1) % PIPE_CAPACITY;
                 p->count--;
@@ -326,7 +346,8 @@ int file_read(file_t *f, void *buf, size_t len) {
     }
 }
 
-int file_write(file_t *f, const void *buf, size_t len) {
+int file_write(int fd, const void *buf, size_t len) {
+    file_t *f = fd_get(&current->fds, fd);
     if (!f || !buf)
         return -EINVAL;
 
@@ -362,9 +383,7 @@ int file_write(file_t *f, const void *buf, size_t len) {
                         return nwritten > 0 ? (int) nwritten : -EPIPE;
                     proc_sleep(p);
                 }
-                set_csr_bit(sstatus, SSTATUS_SUM);
                 p->buffer[p->write_pos] = src[nwritten];
-                clear_csr_bit(sstatus, SSTATUS_SUM);
                 nwritten++;
                 p->write_pos = (p->write_pos + 1) % PIPE_CAPACITY;
                 p->count++;
@@ -382,7 +401,8 @@ int file_write(file_t *f, const void *buf, size_t len) {
     }
 }
 
-int file_lseek(file_t *f, size_t offset, int whence) {
+int file_lseek(int fd, size_t offset, int whence) {
+    file_t *f = fd_get(&current->fds, fd);
     if (!f)
         return -EINVAL;
 
@@ -403,7 +423,7 @@ int file_lseek(file_t *f, size_t offset, int whence) {
             f->offset = 0;
             return 0;
         }
-        return -EISDIR;   // reject all other seeks on directories
+        return -EISDIR; // reject all other seeks on directories
     }
 
     size_t new_offset = 0;
@@ -438,8 +458,82 @@ int file_lseek(file_t *f, size_t offset, int whence) {
 }
 
 void file_ref(file_t *f) {
-    if (!f) return;
+    if (!f)
+        return;
     f->ref_count++;
+}
+
+static int vnode_fill_stat(vnode_t *vn, struct stat *kst) {
+    if (!vn || !kst)
+        return -EINVAL;
+
+    kst->st_dev = vn->mount ? vn->mount->dev_id : 0;
+    kst->st_ino = (ino_t) vn->ino;
+
+    // Combine permission bits with file-type bits
+    // vnode->mode stores only permission bits (0644, 0755, etc.)
+    // File type bits come from vnode->type
+    mode_t type_bits = 0;
+    switch (vn->type) {
+        case VNODE_REG:
+            type_bits = S_IFREG;
+            break;
+        case VNODE_DIR:
+            type_bits = S_IFDIR;
+            break;
+        default:
+            type_bits = 0;
+            break;
+    }
+    kst->st_mode = (mode_t) (type_bits | (vn->mode & 0xFFF));
+
+    kst->st_nlink = (nlink_t) vn->nlink;
+    kst->st_uid = 0; // no user model
+    kst->st_gid = 0; // no group model
+    kst->st_size = (off_t) vn->size;
+
+    kst->st_atime = (time_t) vn->atime;
+    kst->st_mtime = (time_t) vn->mtime;
+    kst->st_ctime = (time_t) vn->ctime;
+
+    return 0;
+}
+
+int file_stat(const char *kpath, struct stat *kst) {
+    if (!kpath || !kst || !current || !current->fs)
+        return -EINVAL;
+
+    // Resolve the path to a dentry (same path as file_open uses)
+    char resolved[MAX_PATH];
+    if (path_resolve(kpath, resolved) != 0)
+        return -ENAMETOOLONG;
+
+    dentry_t *d = vfs_lookup(resolved);
+    if (!d)
+        return -ENOENT;
+
+    int ret = vnode_fill_stat(d->d_vnode, kst);
+
+    // Drop the transient reference we got from vfs_lookup
+    dentry_put(d);
+    return ret;
+}
+
+int file_fstat(int fd, struct stat *kst) {
+    if (!current || !kst)
+        return -EINVAL;
+
+    file_t *f = fd_get(&current->fds, fd);
+    if (!f)
+        return -EBADF;
+
+    // stat only makes sense for vnodes; pipes/stdin/stdout have no inode
+    if (f->type != FILE_VNODE)
+        return -EBADF;
+    if (!f->vnode)
+        return -EBADF;
+
+    return vnode_fill_stat(f->vnode, kst);
 }
 
 // -----------------------------------------------------------------------------
@@ -447,15 +541,19 @@ void file_ref(file_t *f) {
 // -----------------------------------------------------------------------------
 
 // f_get: look up fd, bump refcount so it's safe to use across a syscall
-// (prevents the file being closed by another thread while you hold it)
 file_t *f_get(struct proc *p, int fd) {
+    if (!p)
+        return NULL;
     file_t *f = fd_get(&p->fds, fd);
-    if (!f) return NULL;
-    file_ref(f);    // just delegates to the primitive
+    if (!f)
+        return NULL;
+    file_ref(f); // just delegates to the primitive
     return f;
 }
 
 // f_put: release the reference acquired by fget
 void f_put(file_t *f) {
-    file_close(f); // file_close already handles ref_count-- and kfree at 0
+    if (!f)
+        return;
+    file_release(f);
 }

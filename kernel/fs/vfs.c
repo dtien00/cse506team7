@@ -17,6 +17,7 @@
 
 static fs_type_t *fs_types = NULL;  // Linked list of registered filesystems
 static mount_t *mounts = NULL;      // Linked list of mount points
+static uint32_t dev_counter = 0;
 
 // file-scope pool declarations for pool allocator
 POOL_DECLARE(fs_struct_pool);
@@ -120,6 +121,7 @@ int vfs_mount(const char *source, const char *target, const char *fstype) {
     // Initialize mount
     strncpy(mnt->mountpoint, target, sizeof(mnt->mountpoint) - 1);
     mnt->mountpoint[sizeof(mnt->mountpoint) - 1] = '\0';
+    mnt->dev_id = ++dev_counter;
     mnt->fs_type = fs;
     mnt->fs_data = NULL;
     mnt->next = NULL;
@@ -341,26 +343,10 @@ int vfs_mkdir(const char *path, uint32_t mode) {
 // File operations
 // -----------------------------------------------------------------------------
 
-/*
- * vfs_is_dir — test whether 'path' is an existing directory.
- * Returns 1 if path is a directory, 0 if not, -1 on error.
- * The root path "/" is always a directory.
- */
-int vfs_is_dir(const char *path) {
-    dentry_t *d = vfs_lookup(path);
-    return d && d->d_vnode->type == VNODE_DIR;
-}
-
 int vfs_chdir(const char *kpath) {
-    // 1. Get current cwd as a string
-    char cwd_str[MAX_PATH];
-    if (dentry_build_path(current->fs->cwd, vfs_get_root(),
-                          cwd_str, MAX_PATH) != 0)
-        return -ENAMETOOLONG;
-
-    // 2. Resolve — same function file_open also calls
+    // Resolve — same function file_open also calls
     char resolved[MAX_PATH];
-    if (path_resolve(cwd_str, kpath, resolved) < 0)
+    if (path_resolve(kpath, resolved) < 0)
         return -ENAMETOOLONG;
 
     // 3. Verify the target actually exists and is a directory

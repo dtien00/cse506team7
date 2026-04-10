@@ -2,6 +2,7 @@
 
 #include "kernel/types.h"
 #include "trap/trap.h"
+#include "fs/file.h"
 
 // System call numbers
 #define SYS_exit     1
@@ -30,6 +31,8 @@
 #define SYS_dup      23
 #define SYS_dup2     33
 #define SYS_fs_getdents  61
+#define SYS_stat     79
+#define SYS_fstat    80
 
 // Initialize syscall subsystem
 void syscall_init(void);
@@ -64,3 +67,5 @@ off_t  sys_lseek(int fd, off_t offset, int whence);
 int    sys_chdir(const char *path);
 char  *sys_getcwd(char *buf, size_t size);
 int sys_fs_getdents(int fd, void *dirp, uint32_t count);
+int sys_stat(const char *upath, struct stat *ustat);
+int sys_fstat(int fd, struct stat *ustat);

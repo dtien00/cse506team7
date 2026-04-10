@@ -35,8 +35,12 @@ typedef struct vnode {
     uint64_t ino; // Inode number
     uint32_t mode; // File mode (permissions, type)
     uint32_t size; // File size in bytes
+    uint32_t nlink; // count number of links to this file
     uint32_t ref_count; // Reference count
-    struct mount *mount; // Mount point this vnode belongs to
+    time_t atime;
+    time_t mtime;
+    time_t ctime;
+    struct mount *mount; // Mount point this vnode belongs to - also stores st_dev
     void *fs_data; // Filesystem-specific data
     struct filesystem_type *fs_type; // Filesystem type
 } vnode_t;
@@ -70,6 +74,7 @@ typedef struct filesystem_type {
 // Mount point
 typedef struct mount {
     char mountpoint[256]; // Where it's mounted (e.g., "/", "/tmp")
+    uint32_t dev_id; // simple numeric device id, starts from 1
     fs_type_t *fs_type; // Filesystem type
     void *fs_data; // Filesystem-specific mount data
     dentry_t *root;
@@ -82,6 +87,7 @@ int vfs_register_fs(fs_type_t *fs_type);
 int vfs_mount(const char *source, const char *target, const char *fstype);
 int vfs_unmount(const char *target);
 mount_t *vfs_find_mount(const char *path);
+void vnode_put(vnode_t *vn);
 
 // VFS-level operations
 dentry_t *vfs_get_root(void);
@@ -89,7 +95,6 @@ dentry_t *vfs_lookup(const char *path);
 int vfs_create(const char *path, uint32_t mode);
 int vfs_unlink(const char *path);
 int vfs_mkdir(const char *path, uint32_t mode);
-int vfs_is_dir(const char *path);
 int vfs_chdir(const char *kpath);
 int vfs_readdir(vnode_t *vnode, uint32_t start_idx, void *buf, uint32_t bufsize, uint32_t *entries_out);
 

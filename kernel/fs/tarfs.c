@@ -216,7 +216,7 @@ vnode_t *tarfs_lookup(mount_t *mnt, const char *path) {
         return NULL;
 
     vnode->ino = (uint64_t) entry; // Use entry pointer as inode number
-    vnode->mode = 0644; // Default read permissions
+    vnode->mode = (uint32_t)octal_to_size(entry->header->mode, sizeof(entry->header->mode));
     vnode->size = entry->size;
     vnode->ref_count = 0;
     vnode->mount = mnt;

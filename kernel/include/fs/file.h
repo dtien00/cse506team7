@@ -7,7 +7,16 @@
 #define MAX_PATH 256
 struct vnode;
 
-typedef int64_t   off_t;   // file offset (signed, supports seeking)
+typedef int64_t off_t;
+typedef unsigned int mode_t;
+typedef unsigned long dev_t;
+typedef unsigned long ino_t;
+typedef unsigned int nlink_t;
+typedef long blksize_t;
+typedef long blkcnt_t;
+typedef long time_t;
+typedef int uid_t;
+typedef int gid_t;
 
 typedef struct vnode  vnode_t;
 typedef struct pipe pipe_t;
@@ -40,6 +49,19 @@ typedef struct fd_table {
     file_t *files[MAX_FDS];
 } fd_table_t;
 
+struct stat {
+    dev_t st_dev; // all fs
+    ino_t st_ino; // all fs
+    mode_t st_mode; // all fs
+    nlink_t st_nlink; // hardcode 1 for files and calculate for directories
+    uid_t st_uid; // 0
+    gid_t st_gid; // 0
+    off_t st_size; // all fs
+    time_t st_atime; // all fs
+    time_t st_mtime; // all fs
+    time_t st_ctime; // all fs
+};
+
 // Function declarations
 int fd_alloc(fd_table_t *table, file_t *f); // returns fd number
 file_t *fd_get(fd_table_t *table, int fd);
@@ -48,13 +70,15 @@ void fd_destroy(fd_table_t *table);
 void fd_init(fd_table_t *table); // sets up stdin/stdout/stderr
 
 // I/O operations (moved from vfs.h)
-int path_resolve(const char *base, const char *input, char *out);
-file_t *file_open(const char *path);
-void file_close(file_t *f);
-int file_read(file_t *f, void *buf, size_t len);
-int file_write(file_t *f, const void *buf, size_t len);
-int file_lseek(file_t *f, size_t offset, int whence);
+int path_resolve(const char *input, char *out);
+int file_open(const char *path);
+int file_close(int fd);
+int file_read(int fd, void *buf, size_t len);
+int file_write(int fd, const void *buf, size_t len);
+int file_lseek(int fd, size_t offset, int whence);
 void file_ref(file_t *f);
+int file_stat(const char *kpath, struct stat *kst);
+int file_fstat(int fd, struct stat *kst);
 
 struct proc;
 // Safe fd → file_t lookup for syscalls
