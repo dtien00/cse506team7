@@ -110,6 +110,7 @@ void proc_yield(void) {
 // }
 
 void proc_ready(struct proc *p) {
+    if (p->state == PROC_READY) return; // Guard clause against a process that's already in the READY state, which can corrupt MLFQ linked list.
     p->state = PROC_READY;
     p->time_slice = (1 << p->mlfq_level);
     p->next = NULL;

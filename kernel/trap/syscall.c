@@ -520,8 +520,17 @@ pid_t sys_getppid(void) {
 
 int sys_sleep(int seconds) {
     if (seconds <= 0) return 0;
-    current->wake_tick = timer_ticks + (uint64_t)seconds * TICKS_PER_SEC;
+    uint64_t wake_at = timer_ticks + (uint64_t)seconds * TICKS_PER_SEC;
+    current->wake_tick = wake_at;
     proc_sleep(current);   // sleep on self; timer_handler calls proc_wakeup(p)
+    // Clear wake_tick: if we were woken early by a signal, a stale non-zero
+    // wake_tick would cause the timer to attempt proc_wakeup() on a running process.
+    current->wake_tick = 0;
+    // POSIX: return the number of seconds left to sleep if interrupted early.
+    if (timer_ticks < wake_at) {
+        uint64_t ticks_left = wake_at - timer_ticks;
+        return (int)(ticks_left / TICKS_PER_SEC);
+    }
     return 0;
 }
 
@@ -531,6 +540,35 @@ int sys_uptime(void) {
 
 int sys_kill(pid_t pid, int sig) {
     if (sig < 0 || sig > 31) return -1;
+
+    // POSIX: kill(-1, sig) broadcasts to all processes except init (PID 1) and the caller.
+    // Returns -1 (ESRCH) if no eligible targets exist.
+    if (pid == -1) {
+        if (sig == 0) return 0;  // validity check — always succeeds
+        int sent = 0;
+        for (int i = 0; i < MAX_PROCS; i++) {
+            struct proc *p = &proctab[i];
+            if (p->state == PROC_UNUSED || p->state == PROC_ZOMBIE) continue;
+            if (p->pid == 1 || p == current) continue;
+            sent++;
+            if (sig == KERNEL_SIGCONT) {
+                p->pending_signals &= ~KERNEL_STOP_SIGS;
+                if (p->state == PROC_STOPPED)
+                    proc_unstop(p);
+            } else if (sig == KERNEL_SIGSTOP) {
+                p->pending_signals &= ~(1U << KERNEL_SIGCONT);
+                if (p->state == PROC_READY || p->state == PROC_BLOCKED)
+                    proc_stop(p);
+                else
+                    p->pending_signals |= KERNEL_STOP_SIGS;
+            } else {
+                p->pending_signals |= (1U << sig);
+                if (p->state == PROC_BLOCKED)
+                    proc_unblock(p);
+            }
+        }
+        return (sent > 0) ? 0 : -1;
+    }
 
     struct proc *target = proc_find(pid);
     if (!target || target->state == PROC_UNUSED || target->state == PROC_ZOMBIE)
