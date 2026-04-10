@@ -168,35 +168,35 @@ static void test_directories(us_test_group_t *group) {
     TEST(group, "open in missing dir fails", fd < 0);
     if (fd >= 0) close(fd);
 
-    // /* create file in new subdir */
-    // fd = open("/mnt/subdir/nested.txt", O_CREAT | O_WRONLY, 0644);
-    // TEST(group, "create file in new subdir succeeds", fd >= 0);
-    // if (fd >= 0) {
-    //     write(fd, "nested\n", 7);
-    //     close(fd);
-    // }
+    /* create file in new subdir */
+    fd = open("/mnt/subdir/nested.txt", O_CREAT | O_WRONLY, 0644);
+    TEST(group, "create file in new subdir succeeds", fd >= 0);
+    if (fd >= 0) {
+        write(fd, "nested\n", 7);
+        close(fd);
+    }
 
-    // /* flush and re-read nested file — checks inode + data blocks hit disk */
-    // char buf[64];
-    // int n = flush_and_read("/mnt/subdir/nested.txt", buf, sizeof(buf));
-    // TEST(group, "nested file readable after flush", n > 0);
-    // TEST(group, "nested file content correct after flush", strcmp(buf, "nested\n") == 0);
+    /* flush and re-read nested file — checks inode + data blocks hit disk */
+    char buf[64];
+    int n = flush_and_read("/mnt/subdir/nested.txt", buf, sizeof(buf));
+    TEST(group, "nested file readable after flush", n > 0);
+    TEST(group, "nested file content correct after flush", strcmp(buf, "nested\n") == 0);
 
-    // /* nested mkdir */
-    // r = mkdir("/mnt/subdir/inner", 0755);
-    // TEST(group, "nested mkdir succeeds", r == 0);
+    /* nested mkdir */
+    r = mkdir("/mnt/subdir/inner", 0755);
+    TEST(group, "nested mkdir succeeds", r == 0);
 
-    // fd = open("/mnt/subdir/inner/deep.txt", O_CREAT | O_WRONLY, 0644);
-    // TEST(group, "create file in nested subdir succeeds", fd >= 0);
-    // if (fd >= 0) {
-    //     write(fd, "deep\n", 5);
-    //     close(fd);
-    // }
+    fd = open("/mnt/subdir/inner/deep.txt", O_CREAT | O_WRONLY, 0644);
+    TEST(group, "create file in nested subdir succeeds", fd >= 0);
+    if (fd >= 0) {
+        write(fd, "deep\n", 5);
+        close(fd);
+    }
 
-    // /* flush and verify deeply nested file */
-    // n = flush_and_read("/mnt/subdir/inner/deep.txt", buf, sizeof(buf));
-    // TEST(group, "deep file readable after flush", n > 0);
-    // TEST(group, "deep file content correct after flush", strcmp(buf, "deep\n") == 0);
+    /* flush and verify deeply nested file */
+    n = flush_and_read("/mnt/subdir/inner/deep.txt", buf, sizeof(buf));
+    TEST(group, "deep file readable after flush", n > 0);
+    TEST(group, "deep file content correct after flush", strcmp(buf, "deep\n") == 0);
 
     ut_group_end(group);
 }
