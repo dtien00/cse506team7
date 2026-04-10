@@ -37,6 +37,13 @@ void sched_test_run(void) {
     proc_unblock(n1);
     TEST("proc_unblock sets READY", n1 && n1->state == PROC_READY);
 
+    // proc_unblock re-enqueued n1 into the MLFQ; drain it before freeing
+    // to avoid a dangling MLFQ pointer after proc_free wipes the slot.
+    if (n1) {
+        struct proc *d;
+        do { d = proc_next_ready(); } while (d && d != n1);
+    }
+
     // Free dummy processes
     if (p1) proc_free(p1);
     if (p2) proc_free(p2);

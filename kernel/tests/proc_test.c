@@ -115,6 +115,11 @@ void proc_test_run(void) {
         TEST("fork: child linked to parent", fork_child && fork_child->parent == current);
 
         if (fork_child) {
+            // sys_fork() enqueued the child via proc_ready(); drain it from
+            // the MLFQ before manually transitioning to ZOMBIE so that
+            // proc_free() (inside sys_wait) doesn't leave a stale MLFQ pointer.
+            { struct proc *d; do { d = proc_next_ready(); } while (d && d != fork_child); }
+
             // Force deterministic wait() behavior in unit-test context.
             fork_child->state = PROC_ZOMBIE;
             fork_child->exit_code = 0;
@@ -191,6 +196,9 @@ void proc_test_run(void) {
         TEST("fork/wait sanity: child created", child_proc != NULL);
 
         if (child_proc) {
+            // Same as above: drain child from MLFQ before manual ZOMBIE transition.
+            { struct proc *d; do { d = proc_next_ready(); } while (d && d != child_proc); }
+
             child_proc->state = PROC_ZOMBIE;
             child_proc->exit_code = 0;
 
