@@ -2,7 +2,7 @@
 #include "kernel/types.h"
 
 #define BLOCK_SIZE 1024
-#define BLOCK_CACHE_SIZE 64  // Cache 64 blocks (64KB)
+#define BLOCK_CACHE_SIZE 256  // Cache 256 blocks (256KB)
 
 // Cached block structure
 typedef struct cached_block {

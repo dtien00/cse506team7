@@ -2,6 +2,8 @@
 
 #include "errno.h"
 #include "fs/vfs.h"
+#include "fs/ext2.h"
+#include "drivers/virtio.h"
 #include "kernel/printk.h"
 #include "kernel/types.h"
 #include "lib/string.h"
@@ -341,6 +343,109 @@ static int tarfs_readdir(mount_t *mnt, vnode_t *vnode,
 
     if (entries_out) *entries_out = found;
     return (int)written;
+}
+
+// -----------------------------------------------------------------------------
+// tarfs_populate_ext2
+//
+// Called once after ext2 is mounted at /.  Checks s_reserved[203] in the
+// ext2 superblock:
+//   0x00  → first boot on this disk image: copy every tarfs entry into the
+//            ext2 root (/), then set the flag to 0xAB and persist the superblock.
+//   0xAB  → already done, skip silently.
+// -----------------------------------------------------------------------------
+
+#define TARFS_INIT_FLAG_OFFSET 203
+#define TARFS_INIT_FLAG_MAGIC  0xAB
+
+void tarfs_populate_ext2(mount_t *ext2_mnt) {
+    if (!ext2_mnt || !ext2_mnt->fs_data) {
+        printk("tarfs_populate_ext2: no ext2 mount data\n");
+        return;
+    }
+
+    ext2_mount_data_t *mdata = (ext2_mount_data_t *)ext2_mnt->fs_data;
+    ext2_superblock_t *sb = mdata->sb;
+
+    if (sb->s_reserved[TARFS_INIT_FLAG_OFFSET] == TARFS_INIT_FLAG_MAGIC) {
+        printk("tarfs: ext2 already populated, skipping\n");
+        return;
+    }
+
+    printk("tarfs: populating ext2 root from tarfs (%d entries)...\n", entry_count);
+
+    // Walk every indexed tarfs entry
+    for (int i = 0; i < entry_count; i++) {
+        tarfs_entry_t *e = &entries[i];
+        const char *raw = e->header->name;
+        int is_dir = (e->header->typeflag == '5');
+
+        // Strip leading "./" if present
+        if (raw[0] == '.' && raw[1] == '/')
+            raw += 2;
+
+        // Skip the root "." entry itself
+        if (raw[0] == '\0')
+            continue;
+
+        // Build destination path: /<raw>  (strip trailing '/')
+        char dst[384];
+        int dlen = 0;
+        dst[dlen++] = '/';
+        int rlen = 0;
+        while (raw[rlen] && raw[rlen] != '\0')
+            dst[dlen + rlen] = raw[rlen], rlen++;
+        dst[dlen + rlen] = '\0';
+        // Strip trailing slash for directories
+        int total = dlen + rlen;
+        while (total > 1 && dst[total - 1] == '/')
+            dst[--total] = '\0';
+
+        if (is_dir) {
+            if (vfs_mkdir(dst, 0755) < 0)
+                printk("tarfs: mkdir %s failed\n", dst);
+            else
+                printk("tarfs: mkdir %s\n", dst);
+        } else {
+            // Create the file
+            if (vfs_create(dst, 0644) < 0) {
+                printk("tarfs: create %s failed\n", dst);
+                continue;
+            }
+
+            // Write its contents if non-empty
+            if (e->size > 0) {
+                dentry_t *dent = vfs_lookup(dst);
+                if (dent && dent->d_vnode) {
+                    vnode_t *vn = dent->d_vnode;
+                    int written = vn->fs_type->ops.write(vn, e->data, 0, e->size);
+                    if (written < 0)
+                        printk("tarfs: write %s failed (%d)\n", dst, written);
+                    else
+                        printk("tarfs: copied %s (%d bytes)\n", dst, written);
+                } else {
+                    printk("tarfs: lookup after create failed for %s\n", dst);
+                }
+            } else {
+                printk("tarfs: created empty %s\n", dst);
+            }
+        }
+    }
+
+    // Mark the superblock so we never repeat this
+    sb->s_reserved[TARFS_INIT_FLAG_OFFSET] = TARFS_INIT_FLAG_MAGIC;
+
+    // Persist the superblock to disk directly (same as ext2_write_superblock)
+    uint8_t *sb_buf = (uint8_t *)kmalloc(1024);
+    if (sb_buf) {
+        memset(sb_buf, 0, 1024);
+        memcpy(sb_buf, sb, sizeof(ext2_superblock_t));
+        virtio_blk_write(2, sb_buf, 2);
+        kfree(sb_buf);
+        printk("tarfs: superblock flag written (0xAB), future boots will skip population\n");
+    } else {
+        printk("tarfs: WARNING: could not persist init flag, will repopulate next boot\n");
+    }
 }
 
 // Filesystem type for tarfs

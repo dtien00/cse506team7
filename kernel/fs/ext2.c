@@ -7,6 +7,9 @@
 
 static fs_type_t ext2_fs_type;
 
+// Forward declarations for helpers used before their definitions
+static uint32_t ext2_alloc_block(ext2_mount_data_t *mnt);
+
 // Helper: Write superblock back to disk (sector 2, 2 sectors)
 static void ext2_write_superblock(ext2_mount_data_t *mnt) {
     uint8_t *sb_buf = (uint8_t *)kmalloc(1024);
@@ -109,23 +112,99 @@ static int ext2_write_inode(ext2_mount_data_t *mnt, uint32_t ino, ext2_inode_t *
     return 0;
 }
 
-// Helper: Read a data block from an inode
-static int ext2_read_inode_block(ext2_mount_data_t *mnt, ext2_inode_t *inode, 
+// Helper: Read a data block from an inode (supports direct + singly-indirect)
+static int ext2_read_inode_block(ext2_mount_data_t *mnt, ext2_inode_t *inode,
                                   uint32_t block_idx, void *buf) {
-    // For simplicity, only support direct blocks for now
-    if (block_idx >= EXT2_NDIR_BLOCKS) {
-        printk("ext2: indirect blocks not supported yet\n");
-        return -1;
+    uint32_t ptrs_per_block = mnt->block_size / sizeof(uint32_t);
+
+    if (block_idx < EXT2_NDIR_BLOCKS) {
+        // Direct block
+        uint32_t block_num = inode->i_block[block_idx];
+        if (block_num == 0) {
+            memset(buf, 0, mnt->block_size);
+            return 0;
+        }
+        return block_cache_read(block_num, buf);
     }
-    
-    uint32_t block_num = inode->i_block[block_idx];
-    if (block_num == 0) {
-        // Sparse block - return zeros
-        memset(buf, 0, mnt->block_size);
-        return 0;
+
+    block_idx -= EXT2_NDIR_BLOCKS;
+    if (block_idx < ptrs_per_block) {
+        // Singly-indirect block
+        uint32_t ind_block = inode->i_block[EXT2_IND_BLOCK];
+        if (ind_block == 0) {
+            memset(buf, 0, mnt->block_size);
+            return 0;
+        }
+        uint32_t *ind_buf = (uint32_t *)kmalloc(mnt->block_size);
+        if (!ind_buf) return -1;
+        if (block_cache_read(ind_block, ind_buf) != 0) {
+            kfree(ind_buf);
+            return -1;
+        }
+        uint32_t block_num = ind_buf[block_idx];
+        kfree(ind_buf);
+        if (block_num == 0) {
+            memset(buf, 0, mnt->block_size);
+            return 0;
+        }
+        return block_cache_read(block_num, buf);
     }
-    
-    return block_cache_read(block_num, buf);
+
+    printk("ext2: doubly-indirect blocks not supported\n");
+    return -1;
+}
+
+// Helper: Write a data block through an inode (supports direct + singly-indirect)
+// Allocates blocks as needed. Returns 0 on success, -1 on error.
+static int ext2_write_inode_block(ext2_mount_data_t *mnt, ext2_inode_t *inode,
+                                   uint32_t block_idx, const void *buf) {
+    uint32_t ptrs_per_block = mnt->block_size / sizeof(uint32_t);
+
+    if (block_idx < EXT2_NDIR_BLOCKS) {
+        if (inode->i_block[block_idx] == 0) {
+            uint32_t nb = ext2_alloc_block(mnt);
+            if (nb == 0) return -1;
+            inode->i_block[block_idx] = nb;
+            inode->i_blocks += mnt->block_size / 512;
+        }
+        return block_cache_write(inode->i_block[block_idx], buf);
+    }
+
+    block_idx -= EXT2_NDIR_BLOCKS;
+    if (block_idx < ptrs_per_block) {
+        // Allocate indirect block if needed
+        if (inode->i_block[EXT2_IND_BLOCK] == 0) {
+            uint32_t ind = ext2_alloc_block(mnt);
+            if (ind == 0) return -1;
+            inode->i_block[EXT2_IND_BLOCK] = ind;
+            inode->i_blocks += mnt->block_size / 512;
+            // Zero the indirect block
+            uint8_t *zero = (uint8_t *)kmalloc(mnt->block_size);
+            if (!zero) return -1;
+            memset(zero, 0, mnt->block_size);
+            block_cache_write(ind, zero);
+            kfree(zero);
+        }
+        uint32_t *ind_buf = (uint32_t *)kmalloc(mnt->block_size);
+        if (!ind_buf) return -1;
+        if (block_cache_read(inode->i_block[EXT2_IND_BLOCK], ind_buf) != 0) {
+            kfree(ind_buf);
+            return -1;
+        }
+        if (ind_buf[block_idx] == 0) {
+            uint32_t nb = ext2_alloc_block(mnt);
+            if (nb == 0) { kfree(ind_buf); return -1; }
+            ind_buf[block_idx] = nb;
+            inode->i_blocks += mnt->block_size / 512;
+            block_cache_write(inode->i_block[EXT2_IND_BLOCK], ind_buf);
+        }
+        uint32_t data_block = ind_buf[block_idx];
+        kfree(ind_buf);
+        return block_cache_write(data_block, buf);
+    }
+
+    printk("ext2: doubly-indirect blocks not supported\n");
+    return -1;
 }
 
 // Helper: Allocate a new block
@@ -160,13 +239,9 @@ static uint32_t ext2_alloc_block(ext2_mount_data_t *mnt) {
                         // Write back bitmap
                         block_cache_write(bitmap_block, bitmap);
 
-                        // Update group descriptor
+                        // Update group descriptor and superblock counts in memory
                         mnt->group_desc[group].bg_free_blocks_count--;
                         mnt->sb->s_free_blocks_count--;
-
-                        // Persist superblock and GDT
-                        ext2_write_superblock(mnt);
-                        ext2_write_gdt(mnt);
 
                         kfree(bitmap);
                         return block_num;
@@ -215,13 +290,9 @@ static uint32_t ext2_alloc_inode(ext2_mount_data_t *mnt) {
                         // Write back bitmap
                         block_cache_write(bitmap_block, bitmap);
 
-                        // Update group descriptor
+                        // Update group descriptor and superblock counts in memory
                         mnt->group_desc[group].bg_free_inodes_count--;
                         mnt->sb->s_free_inodes_count--;
-
-                        // Persist superblock and GDT
-                        ext2_write_superblock(mnt);
-                        ext2_write_gdt(mnt);
 
                         kfree(bitmap);
                         return ino;
@@ -471,10 +542,11 @@ vnode_t *ext2_lookup(mount_t *mnt, const char *path) {
         vnode->mount = mnt;
         vnode->fs_data = inode;
         vnode->fs_type = mnt->fs_type;
-        
+        vnode->type = ((inode->i_mode & 0xF000) == EXT2_S_IFDIR) ? VNODE_DIR : VNODE_REG;
+
         return vnode;
     }
-    
+
     // Parse path components
     char *path_copy = (char *)kmalloc(strlen(path) + 1);
     if (!path_copy) return NULL;
@@ -550,7 +622,8 @@ vnode_t *ext2_lookup(mount_t *mnt, const char *path) {
     vnode->mount = mnt;
     vnode->fs_data = current_inode;
     vnode->fs_type = mnt->fs_type;
-    
+    vnode->type = ((current_inode->i_mode & 0xF000) == EXT2_S_IFDIR) ? VNODE_DIR : VNODE_REG;
+
     return vnode;
 }
 
@@ -602,76 +675,54 @@ int ext2_read(vnode_t *vnode, void *buf, size_t offset, size_t len) {
 // Write to ext2 file
 int ext2_write(vnode_t *vnode, const void *buf, size_t offset, size_t len) {
     if (!vnode || !vnode->fs_data || !buf) return -1;
-    
+
     ext2_inode_t *inode = (ext2_inode_t *)vnode->fs_data;
     ext2_mount_data_t *mnt = (ext2_mount_data_t *)vnode->mount->fs_data;
-    
+
     size_t bytes_written = 0;
     uint8_t *block_buf = (uint8_t *)kmalloc(mnt->block_size);
     if (!block_buf) return -1;
-    
-    while (bytes_written < len) {
-        uint32_t block_idx = (offset + bytes_written) / mnt->block_size;
-        uint32_t block_offset = (offset + bytes_written) % mnt->block_size;
-        uint32_t to_write = mnt->block_size - block_offset;
-        
-        if (to_write > len - bytes_written) {
-            to_write = len - bytes_written;
-        }
-        
-        // Only support direct blocks for now
-        if (block_idx >= EXT2_NDIR_BLOCKS) {
-            printk("ext2: file too large (indirect blocks not supported)\n");
-            kfree(block_buf);
-            return bytes_written > 0 ? (int)bytes_written : -1;
-        }
-        
-        // Allocate block if needed
-        if (inode->i_block[block_idx] == 0) {
-            uint32_t new_block = ext2_alloc_block(mnt);
-            if (new_block == 0) {
-                kfree(block_buf);
-                return bytes_written > 0 ? (int)bytes_written : -1;
-            }
-            inode->i_block[block_idx] = new_block;
-            inode->i_blocks += 2;  // i_blocks counts 512-byte sectors; 1KB block = 2
 
-            // Zero the new block
-            memset(block_buf, 0, mnt->block_size);
-            block_cache_write(new_block, block_buf);
-        }
-        
-        // Read existing block if we're doing partial write
+    while (bytes_written < len) {
+        uint32_t block_idx    = (offset + bytes_written) / mnt->block_size;
+        uint32_t block_offset = (offset + bytes_written) % mnt->block_size;
+        uint32_t to_write     = mnt->block_size - block_offset;
+        if (to_write > len - bytes_written)
+            to_write = len - bytes_written;
+
+        // Read existing block for partial writes so we don't clobber existing data
         if (block_offset != 0 || to_write != mnt->block_size) {
-            if (block_cache_read(inode->i_block[block_idx], block_buf) != 0) {
+            if (ext2_read_inode_block(mnt, inode, block_idx, block_buf) != 0) {
                 kfree(block_buf);
                 return bytes_written > 0 ? (int)bytes_written : -1;
             }
+        } else {
+            memset(block_buf, 0, mnt->block_size);
         }
-        
-        // Modify block
-        memcpy(block_buf + block_offset, (uint8_t *)buf + bytes_written, to_write);
-        
-        // Write block back
-        if (block_cache_write(inode->i_block[block_idx], block_buf) != 0) {
+
+        memcpy(block_buf + block_offset, (const uint8_t *)buf + bytes_written, to_write);
+
+        if (ext2_write_inode_block(mnt, inode, block_idx, block_buf) != 0) {
             kfree(block_buf);
             return bytes_written > 0 ? (int)bytes_written : -1;
         }
-        
+
         bytes_written += to_write;
     }
-    
+
     kfree(block_buf);
-    
-    // Update inode size if we wrote past EOF
-    if (offset + len > inode->i_size) {
-        inode->i_size = offset + len;
-        vnode->size = inode->i_size;
-        
-        // Write inode back to disk
-        ext2_write_inode(mnt, vnode->ino, inode);
+
+    // Update inode size and persist
+    if (offset + bytes_written > inode->i_size) {
+        inode->i_size = offset + bytes_written;
+        vnode->size   = inode->i_size;
     }
-    
+    ext2_write_inode(mnt, vnode->ino, inode);
+
+    // Persist superblock and GDT counts once per write (not per block)
+    ext2_write_superblock(mnt);
+    ext2_write_gdt(mnt);
+
     return (int)bytes_written;
 }
 
@@ -856,17 +907,19 @@ int ext2_create(mount_t *mnt, const char *path, uint32_t mode) {
         return -1;
     }
 
-    // Update parent directory size to cover the full block
-    if (parent_inode->i_size < ext2_mnt->block_size) {
+    // Update parent directory size to cover the full block and persist
+    if (parent_inode->i_size < ext2_mnt->block_size)
         parent_inode->i_size = ext2_mnt->block_size;
-        ext2_write_inode(ext2_mnt, parent_vnode->ino, parent_inode);
-    }
-    
+    ext2_write_inode(ext2_mnt, parent_vnode->ino, parent_inode);
+    ext2_write_superblock(ext2_mnt);
+    ext2_write_gdt(ext2_mnt);
+
     kfree(block_buf);
     kfree(parent_vnode->fs_data);
     kfree(parent_vnode);
     kfree(path_copy);
-    
+
+    block_cache_flush();
     printk("ext2: created file %s (inode %d)\n", path, new_ino);
     return 0;
 }
@@ -971,6 +1024,7 @@ int ext2_unlink(mount_t *mnt, const char *path) {
         ext2_write_inode(ext2_mnt, file_ino, &inode);
     }
     
+    block_cache_flush();
     printk("ext2: unlinked %s\n", path);
     return 0;
 }
@@ -1125,12 +1179,15 @@ int ext2_mkdir(mount_t *mnt, const char *path, uint32_t mode) {
         parent_inode->i_size = ext2_mnt->block_size;
     parent_inode->i_links_count++;  // New subdirectory adds link
     ext2_write_inode(ext2_mnt, parent_vnode->ino, parent_inode);
+    ext2_write_superblock(ext2_mnt);
+    ext2_write_gdt(ext2_mnt);
     
     kfree(block_buf);
     kfree(parent_vnode->fs_data);
     kfree(parent_vnode);
     kfree(path_copy);
-    
+
+    block_cache_flush();
     printk("ext2: created directory %s (inode %u)\n", path, new_ino);
     return 0;
 }
@@ -1175,6 +1232,61 @@ static int ext2_truncate(vnode_t *vnode) {
     return 0;
 }
 
+// Enumerate directory entries — implements the readdir VFS op used by ls/getdents
+static int ext2_readdir(mount_t *mnt, vnode_t *vnode, uint32_t start_idx,
+                        void *buf, uint32_t bufsize, uint32_t *entries_out) {
+    if (!mnt || !mnt->fs_data || !vnode || !vnode->fs_data || !buf || !entries_out)
+        return -1;
+
+    ext2_mount_data_t *ext2_mnt = (ext2_mount_data_t *)mnt->fs_data;
+    ext2_inode_t *inode = (ext2_inode_t *)vnode->fs_data;
+
+    *entries_out = 0;
+    uint32_t buf_off = 0;   // write cursor into caller's buf
+    uint32_t idx    = 0;    // absolute entry index (for start_idx skip)
+
+    uint8_t *block_buf = (uint8_t *)kmalloc(ext2_mnt->block_size);
+    if (!block_buf) return -1;
+
+    uint32_t blocks = (inode->i_size + ext2_mnt->block_size - 1) / ext2_mnt->block_size;
+
+    for (uint32_t b = 0; b < blocks && b < EXT2_NDIR_BLOCKS; b++) {
+        if (inode->i_block[b] == 0) continue;
+        if (block_cache_read(inode->i_block[b], block_buf) != 0) continue;
+
+        uint32_t off = 0;
+        while (off + 8 <= ext2_mnt->block_size) {
+            ext2_dirent_t *de = (ext2_dirent_t *)(block_buf + off);
+            if (de->rec_len == 0) break;
+            off += de->rec_len;
+
+            if (de->inode == 0) continue;  // deleted entry
+            // skip . and ..
+            if (de->name_len == 1 && de->name[0] == '.') continue;
+            if (de->name_len == 2 && de->name[0] == '.' && de->name[1] == '.') continue;
+
+            if (idx++ < start_idx) continue;
+
+            uint32_t reclen = FS_DENT_RECLEN(de->name_len);
+            if (buf_off + reclen > bufsize) goto done;
+
+            fs_dent_t *out = (fs_dent_t *)((char *)buf + buf_off);
+            out->d_ino    = de->inode;
+            out->d_reclen = (reclen_t)reclen;
+            out->d_type   = (de->file_type == EXT2_FT_DIR) ? DT_DIR : DT_REG;
+            memcpy(out->d_name, de->name, de->name_len);
+            out->d_name[de->name_len] = '\0';
+
+            buf_off += reclen;
+            (*entries_out)++;
+        }
+    }
+
+done:
+    kfree(block_buf);
+    return (int)buf_off;
+}
+
 // Initialize ext2 filesystem type
 void ext2_init(void) {
     ext2_fs_type.name = "ext2";
@@ -1187,6 +1299,7 @@ void ext2_init(void) {
     ext2_fs_type.ops.unlink = ext2_unlink;
     ext2_fs_type.ops.mkdir = ext2_mkdir;
     ext2_fs_type.ops.truncate = ext2_truncate;
+    ext2_fs_type.ops.readdir  = ext2_readdir;
     ext2_fs_type.next = NULL;
     
     vfs_register_fs(&ext2_fs_type);

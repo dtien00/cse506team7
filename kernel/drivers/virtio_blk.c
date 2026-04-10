@@ -236,7 +236,7 @@ static int virtio_blk_rw(uint64_t sector, void *buf, size_t count, int write) {
     if (0){
         proc_sleep(&blk_dev);
     } else {
-        int timeout = 10000000;
+        int timeout = 100000000;
         while (blk_dev.last_used_idx == blk_dev.used->idx && timeout-- > 0) {}
         if (timeout <= 0) {
             printk("virtio_blk: request timeout\n");

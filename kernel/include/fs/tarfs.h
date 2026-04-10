@@ -40,3 +40,7 @@ struct filesystem_type;
 // Public API
 void tarfs_init(void);
 struct filesystem_type *tarfs_get_type(void);
+
+// Copy all tarfs entries into /mnt/initrd/ on the ext2 mount (one-time).
+// Does nothing if the superblock flag (s_reserved[203] == 0xAB) is already set.
+void tarfs_populate_ext2(struct mount *ext2_mnt);

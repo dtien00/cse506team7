@@ -37,6 +37,9 @@ static void write_superblock(FILE *f, uint32_t blocks, uint32_t inodes) {
     sb->s_rev_level         = 1;
     sb->s_first_ino         = 11;
     sb->s_inode_size        = EXT2_INODE_SIZE;
+    // sb->s_reserved[203] is the tarfs-population flag.
+    // It is left 0x00 (not done) because buf was zeroed above.
+    // The kernel sets it to 0xAB after copying tarfs into /mnt/initrd/.
 
     write_block(f, 1, buf);
 }

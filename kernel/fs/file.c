@@ -1,6 +1,7 @@
 #include "fs/file.h"
 #include "arch/riscv.h"
 #include "errno.h"
+#include "fs/block_cache.h"
 #include "fs/vfs.h"
 #include "kernel/printk.h"
 #include "mm/kmalloc.h"
@@ -346,8 +347,10 @@ int file_write(file_t *f, const void *buf, size_t len) {
             if (f->flags & O_APPEND)
                 f->offset = f->vnode->size;
             int n = f->vnode->mount->fs_type->ops.write(f->vnode, buf, f->offset, len);
-            if (n > 0)
+            if (n > 0) {
                 f->offset += (size_t) n;
+                block_cache_flush();
+            }
             return n;
         }
 

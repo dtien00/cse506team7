@@ -147,11 +147,11 @@ int block_cache_write(uint32_t block_num, const void *buf) {
         cb->valid = 1;
     }
     
-    // Update cache block
+    // Update cache block (write-back: flush happens at the end of each file_write)
     memcpy(cb->data, buf, BLOCK_SIZE);
     cb->dirty = 1;
     cb->last_access = ++cache.access_counter;
-    
+
     return 0;
 }
 
