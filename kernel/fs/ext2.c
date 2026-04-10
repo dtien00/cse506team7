@@ -153,7 +153,8 @@ static uint32_t ext2_alloc_block(ext2_mount_data_t *mnt) {
                         // Found free block
                         bitmap[byte] |= (1 << bit);
                         
-                        uint32_t block_num = group * mnt->blocks_per_group +
+                        uint32_t block_num = mnt->sb->s_first_data_block +
+                                            group * mnt->blocks_per_group +
                                             byte * 8 + bit;
                         
                         // Write back bitmap
