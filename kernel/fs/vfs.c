@@ -1,4 +1,3 @@
-#include "fs/tarfs.h"
 #include "fs/vfs.h"
 #include "errno.h"
 #include "arch/riscv.h"
@@ -14,6 +13,8 @@
 // -----------------------------------------------------------------------------
 // Internal state
 // -----------------------------------------------------------------------------
+
+#define MAX_COMPONENTS 16   // max path depth for iterative dentry chain build
 
 static fs_type_t *fs_types = NULL;  // Linked list of registered filesystems
 static mount_t *mounts = NULL;      // Linked list of mount points
@@ -247,46 +248,132 @@ dentry_t *vfs_lookup(const char *path) {
     vnode_t *vnode = mnt->fs_type->ops.lookup(mnt, rel_path);
     if (!vnode) return NULL;
 
-    // extract last component name
-    const char *last = path;
-    for (const char *p = path; *p; p++)
-        if (*p == '/' && *(p + 1)) last = p + 1;
-    const char *name = (path[0] == '/' && path[1] == '\0') ? "/" : last;
+    // Build the dentry chain iteratively to avoid recursive stack growth.
+    // For a path like "/mnt/subdir/inner/test.txt" we build dentries for
+    // each prefix: "/mnt", "/mnt/subdir", "/mnt/subdir/inner", and finally
+    // "/mnt/subdir/inner/test.txt", chaining them parent→child without
+    // any recursion.
 
-    // determine parent
-    dentry_t *parent = NULL;
-    // d_parent: root is its own parent; everything else recurses up
     if (path[0] == '/' && path[1] == '\0') {
-        parent = NULL;   // we are root
-    } else {
-        char parent_path[MAX_PATH];
-        if (dentry_get_parent_path(path, parent_path, sizeof(parent_path)) < 0)
-            return NULL;  // root
-
-        parent = vfs_lookup(parent_path);   // d_ref = 0
-        if (!parent) parent = vfs_root;
-        dentry_get(parent);                 // child owns a ref to parent
+        // Path is "/" itself — simple root dentry, no parent chain needed
+        dentry_t *d = dentry_alloc("/", vnode, NULL);
+        if (!d) kfree(vnode);
+        return d;
     }
 
-    // create dentry
-    // dentry_alloc: sets d_ref=0, copies name, sets d_parent
-    dentry_t *d = dentry_alloc(name, vnode, parent);
-    if (!d) {
-        if (parent) dentry_put(parent);   // undo the get on failure
+    // Duplicate path so we can tokenize it in-place
+    char *path_buf = (char *)kmalloc(strlen(path) + 1);
+    if (!path_buf) {
         kfree(vnode);
         return NULL;
     }
-    return d; // d_ref still 0, unowned — caller calls dentry_get if keeping it
+    strcpy(path_buf, path);
+
+    // Split into components, recording start of each token in comps[]
+    // and end positions so we can reconstruct prefixes in-place.
+    char *comp_starts[MAX_COMPONENTS];   // pointer into path_buf
+    char *comp_ends[MAX_COMPONENTS];     // pointer to the '\0' we inserted
+    int ncomps = 0;
+
+    char *p = path_buf;
+    if (*p == '/') p++;   // skip leading slash
+    while (*p && ncomps < MAX_COMPONENTS) {
+        comp_starts[ncomps] = p;
+        while (*p && *p != '/') p++;
+        comp_ends[ncomps] = p;
+        if (*p == '/') { *p = '\0'; p++; }
+        ncomps++;
+    }
+
+    if (ncomps == 0) {
+        kfree(path_buf);
+        dentry_t *d = dentry_alloc("/", vnode, NULL);
+        if (!d) kfree(vnode);
+        return d;
+    }
+
+    // Walk from root down, building a dentry chain.
+    // parent starts as NULL (the VFS root has no parent dentry here).
+    dentry_t *parent = NULL;
+
+    for (int i = 0; i < ncomps; i++) {
+        // Restore the slash that was nulled so the prefix up through
+        // comp_ends[i] is a valid absolute path string.
+        if (i > 0) *comp_ends[i - 1] = '/';
+
+        const char *comp_name = comp_starts[i];
+
+        if (i == ncomps - 1) {
+            // Last component: use the vnode we already looked up at top.
+            dentry_t *d = dentry_alloc(comp_name, vnode, parent);
+            if (!d) {
+                if (parent) dentry_put(parent);
+                kfree(vnode);
+                kfree(path_buf);
+                return NULL;
+            }
+            if (parent) dentry_get(parent);   // d holds a ref to parent
+            kfree(path_buf);
+            return d;
+        }
+
+        // Intermediate component: null-terminate at comp_ends[i] to get
+        // the prefix path, then look up its vnode independently.
+        // comp_ends[i] already points to the '\0' we inserted during tokenization
+        // (or was restored to '/' above for i>0, then needs re-nulling).
+        *comp_ends[i] = '\0';
+        // path_buf now contains the prefix path up to and including comps[i]
+
+        mount_t *imnt = vfs_find_mount(path_buf);
+        if (!imnt) {
+            if (parent) dentry_put(parent);
+            kfree(vnode);
+            kfree(path_buf);
+            return NULL;
+        }
+        const char *irel = path_buf + strlen(imnt->mountpoint);
+        if (*irel == '/') irel++;
+
+        vnode_t *ivnode = imnt->fs_type->ops.lookup(imnt, irel);
+        if (!ivnode) {
+            if (parent) dentry_put(parent);
+            kfree(vnode);
+            kfree(path_buf);
+            return NULL;
+        }
+
+        dentry_t *d = dentry_alloc(comp_name, ivnode, parent);
+        if (!d) {
+            kfree(ivnode);
+            if (parent) dentry_put(parent);
+            kfree(vnode);
+            kfree(path_buf);
+            return NULL;
+        }
+        if (parent) dentry_get(parent);   // d holds a ref to parent
+        parent = d;
+    }
+
+    // Should not reach here (ncomps > 0 always exits via the last-component branch)
+    kfree(vnode);
+    kfree(path_buf);
+    return NULL;
 }
 
 int vfs_create(const char *path, uint32_t mode) {
+    printk("path: %s\n", path);
     if (!path) return -1;
 
     mount_t *mnt = vfs_find_mount(path);
-    if (!mnt) return -1;
-
+    if (!mnt){
+        printk("mount not found.\n");
+        return -1;
+    }
     const char *rel_path = path + strlen(mnt->mountpoint);
     if (*rel_path == '/') rel_path++;
+
+    printk("mount: %s\n", mnt->mountpoint);
+    printk("mount type: %s\n", mnt->fs_type->name);
 
     if (mnt->fs_type->ops.create) {
         return mnt->fs_type->ops.create(mnt, rel_path, mode);
@@ -416,8 +503,6 @@ void fs_struct_free(fs_struct_t *fs) {
     dentry_put(fs->root);   // release root slot's ref
     POOL_FREE(fs_struct_pool, fs);
 }
-
-// vfs.c — implementations
 
 int fs_struct_set_cwd(fs_struct_t *fs, const char *abs_path) {
     if (!fs || !abs_path) return -1;

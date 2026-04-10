@@ -1,6 +1,7 @@
 #include "fs/file.h"
 #include "arch/riscv.h"
 #include "errno.h"
+#include "fs/block_cache.h"
 #include "fs/vfs.h"
 #include "kernel/printk.h"
 #include "mm/kmalloc.h"
@@ -38,6 +39,7 @@ void fd_init(fd_table_t *table) {
         stdin_file->pipe_flags = 0;
         stdin_file->offset = 0;
         stdin_file->ref_count = 1;
+        stdin_file->flags = 0;
         table->files[0] = stdin_file;
     }
 
@@ -50,6 +52,7 @@ void fd_init(fd_table_t *table) {
         stdout_file->pipe_flags = 0;
         stdout_file->offset = 0;
         stdout_file->ref_count = 1;
+        stdout_file->flags = 1;
         table->files[1] = stdout_file;
     }
 
@@ -62,6 +65,7 @@ void fd_init(fd_table_t *table) {
         stderr_file->pipe_flags = 0;
         stderr_file->offset = 0;
         stderr_file->ref_count = 1;
+        stderr_file->flags = 1;
         table->files[2] = stderr_file;
     }
 }
@@ -360,9 +364,14 @@ int file_write(int fd, const void *buf, size_t len) {
                 printk("file_write: no write op on vnode\n");
                 return -EBADF;
             }
+            // O_APPEND: always write at end of file
+            if (f->flags & O_APPEND)
+                f->offset = f->vnode->size;
             int n = f->vnode->mount->fs_type->ops.write(f->vnode, buf, f->offset, len);
-            if (n > 0)
+            if (n > 0) {
                 f->offset += (size_t) n;
+                block_cache_flush();
+            }
             return n;
         }
 

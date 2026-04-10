@@ -203,6 +203,13 @@ static void vmm_free_pagetable_recursive(pagetable_t pagetable, pagetable_t kern
 
 void vmm_free_pagetable(pagetable_t pagetable) {
     if (pagetable == NULL) return;
+    if (pagetable == kernel_pagetable) {
+        // printk("VMM FREE BUG: attempt to free kernel pagetable!\n");
+        return;
+    }
+    // if ((uintptr_t)pagetable == 0x804b7000)
+    //     printk("VMM FREE: freeing 0x804b7000! ra=%p\n",
+    //            __builtin_return_address(0));
     vmm_free_pagetable_recursive(pagetable, vmm_kernel_pagetable(), 2);
 }
 
@@ -211,7 +218,9 @@ pagetable_t vmm_kernel_pagetable(void) {
 }
 
 void vmm_switch(pagetable_t pagetable) {
-  w_satp(MAKE_SATP((uintptr_t)pagetable));
+  uint64_t temp = MAKE_SATP((uintptr_t)pagetable);
+  // printk("MAKESATP(%p) = %p\n", pagetable, temp);
+  w_satp(temp);
 }
 
 void vmm_init(void) {
@@ -259,7 +268,19 @@ void vmm_init(void) {
       if (vmm_map(kernel_pagetable, pa, pa, PTE_R | PTE_W) != 0)
           printk("VMM: Failed to map PLIC page at %p\n", pa);
   }
-  
+
+  // Map PCIe ECAM: 0x30000000 - 0x31000000 (bus 0 only, 16MB covers all 256 devices)
+  for (uintptr_t pa = 0x30000000; pa < 0x31000000; pa += PGSIZE) {
+      if (vmm_map(kernel_pagetable, pa, pa, PTE_R | PTE_W) != 0)
+          printk("VMM: Failed to map PCIe ECAM page at %p\n", pa);
+  }
+
+  // Map PCI MMIO window: 0x40000000 - 0x50000000 (where BARs are assigned)
+  for (uintptr_t pa = 0x40000000; pa < 0x50000000; pa += PGSIZE) {
+      if (vmm_map(kernel_pagetable, pa, pa, PTE_R | PTE_W) != 0)
+          printk("VMM: Failed to map PCI MMIO page at %p\n", pa);
+  }
+
   printk("VMM: Kernel page table created\n");
   
   // Switch to kernel page table
@@ -272,6 +293,13 @@ static int vmm_copy_pagetable_recursive(pagetable_t child, pagetable_t parent, i
   for (int i = 0; i < 512; i++) {
     uint64_t pte = parent[i];
     if (!(pte & PTE_V)) continue;
+
+    // At the top level (L2), skip kernel-range entries — vmm_create_pagetable()
+    // already installed the correct shared/private kernel mappings.  Recursing
+    // into them here would allocate new, empty L1 tables that replace the
+    // working kernel mappings, leaving the child with no kernel VA coverage.
+    if (level == 2 && i >= (int)(KERNBASE >> 30))
+        continue;
 
     if ((pte & (PTE_R | PTE_W | PTE_X)) == 0) {
       // This is a lower-level page table
@@ -300,6 +328,10 @@ static int vmm_copy_pagetable_recursive(pagetable_t child, pagetable_t parent, i
               flags |= PTE_COW;                    // mark COW on both
           parent[i] = flags;                       // parent loses write too
           child[i]  = flags;                       // child shares same PA
+          // Flush the parent's TLB entry for this page so the CPU sees the
+          // updated (read-only / COW) PTE rather than a stale writable copy.
+          uintptr_t page_va = va_base | ((uintptr_t)i << (level * 9 + 12));
+          asm volatile("sfence.vma %0, zero" :: "r"(page_va));
       } else {
         // Kernel or device mapping: share the PTE as-is.
         child[i] = pte;

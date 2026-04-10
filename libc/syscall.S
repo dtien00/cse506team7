@@ -14,6 +14,7 @@
 .global getuid
 .global getgid
 .global lseek
+.global sync
 .global pipe
 .global dup
 .global dup2
@@ -31,6 +32,7 @@
 .global symlink
 .global readlink
 .global sigprocmask
+
 
 mmap:
     li a7, 14
@@ -108,7 +110,12 @@ getgid:
     ret
 
 lseek:
-    li a7, 18
+    li a7, 17
+    ecall
+    ret
+
+sync:
+    li a7, 20
     ecall
     ret
 
@@ -133,7 +140,7 @@ chdir:
     ret
 
 getcwd:
-    li a7, 19
+    li a7, 27
     ecall
     ret
 
@@ -148,7 +155,7 @@ fstat:
     ret
 
 mkdir:
-    li a7, 83
+    li a7, 19
     ecall
     ret
 
@@ -168,7 +175,7 @@ fs_getdents:
     ret
 
 unlink:
-    li a7, 87
+    li a7, 18
     ecall
     ret
 
@@ -193,6 +200,6 @@ readlink:
     ret
 
 sigprocmask:
-    li a7, 20
+    li a7, 26
     ecall
     ret

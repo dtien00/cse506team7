@@ -13,9 +13,17 @@ void* memset(void *dest, int c, size_t n) {
     return dest;
 }
 
-int strncpy(char *dest, const char *src, size_t n) {
-    while (n-- && (*dest++ = *src++));
-    return 0;
+char* strcpy(char *dest, const char *src) {
+    char *d = dest;
+    while ((*d++ = *src++));
+    return dest;
+}
+
+char* strncpy(char *dest, const char *src, size_t n) {
+    char *d = dest;
+    while (n-- && (*d++ = *src++));
+    while (n-- != (size_t)-1) *d++ = '\0';
+    return dest;
 }
 
 size_t strlen(const char *s) {
@@ -26,5 +34,11 @@ size_t strlen(const char *s) {
 
 int strcmp(const char *a, const char *b) {
     while (*a && *b && *a == *b) { a++; b++; }
+    return (unsigned char)*a - (unsigned char)*b;
+}
+
+int strncmp(const char *a, const char *b, size_t n) {
+    while (n-- && *a && *b && *a == *b) { a++; b++; }
+    if (n == (size_t)-1) return 0;
     return (unsigned char)*a - (unsigned char)*b;
 }

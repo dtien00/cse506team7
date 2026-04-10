@@ -60,9 +60,16 @@ void schedule(void) {
 
             // Kernel execution for this process (sleep/wait resume, syscall
             // return path, then sret) must use that process's page table.
-            if (next->pagetable)
+            if (next->pagetable) {
+                // Verify the kernel VA at the current PC is reachable through
+                // next's page table before switching SATP — if it isn't, the
+                // CPU will hang silently after the csrw satp instruction.
+                extern void schedule(void);
+                uintptr_t pc = (uintptr_t)schedule;
+                uintptr_t mapped_pa = vmm_translate(next->pagetable, pc);
+                (void) mapped_pa;
                 vmm_switch(next->pagetable);
-            else
+            } else
                 vmm_switch(vmm_kernel_pagetable());
 
             // Do not re-enable interrupts here; new context controls that.

@@ -21,18 +21,28 @@
 #define SYS_mmap     14
 #define SYS_munmap   15
 #define SYS_brk      16
-#define SYS_waitpid  17
-#define SYS_lseek    18
-#define SYS_getcwd   19
-#define SYS_sigprocmask 20
+#define SYS_lseek    17
+#define SYS_unlink   18
+#define SYS_mkdir    19
+#define SYS_sync     20
 #define SYS_getppid  21
-#define SYS_chdir    49
 #define SYS_pipe     22
 #define SYS_dup      23
+#define SYS_getuid   24
+#define SYS_waitpid  25
+#define SYS_sigprocmask 26
+#define SYS_getcwd   27
 #define SYS_dup2     33
+#define SYS_getgid   47
+#define SYS_chdir    49
 #define SYS_fs_getdents  61
 #define SYS_stat     79
 #define SYS_fstat    80
+#define SYS_link     86
+#define SYS_symlink  88
+#define SYS_readlink 89
+#define SYS_chmod    90
+#define SYS_fchmod   91
 
 // Initialize syscall subsystem
 void syscall_init(void);
@@ -57,13 +67,16 @@ int sys_uptime(void);
 void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset);
 int sys_munmap(void *addr, size_t length);
 int sys_brk(void *addr);
+off_t sys_lseek(int fd, off_t offset, int whence);
+int sys_unlink(const char *path);
+int sys_mkdir(const char *path, mode_t mode);
+int sys_sync(void);
 int sys_pipe(int pipefd[2]);
 int sys_dup(int oldfd);
 int sys_dup2(int oldfd, int newfd);
 int sys_kill(pid_t pid, int sig);
 pid_t sys_waitpid(pid_t pid, int *status, int options);
 int sys_sigprocmask(int how, const uint32_t *set, uint32_t *oldset);
-off_t  sys_lseek(int fd, off_t offset, int whence);
 int    sys_chdir(const char *path);
 char  *sys_getcwd(char *buf, size_t size);
 int sys_fs_getdents(int fd, void *dirp, uint32_t count);

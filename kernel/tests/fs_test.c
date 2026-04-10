@@ -1,6 +1,5 @@
 #include "kernel/printk.h"
 #include "kernel/types.h"
-#include "fs/tarfs.h"
 #include "fs/vfs.h"
 #include "fs/file.h"
 #include "fs/tmpfs.h"

@@ -21,7 +21,7 @@ static void putc_buf(char *buf, uint64_t *idx, const char c) {
     buf[(*idx)++] = c;
 }
 
-// converts int to base 10 for printing as characters
+// converts signed int to base 10 for printing as characters
 static void put_i64_buf(char *buf, uint64_t *idx, const int64_t i) {
     char tmp[32];
     uint64_t n = 0;
@@ -44,6 +44,24 @@ static void put_i64_buf(char *buf, uint64_t *idx, const int64_t i) {
     }
 
     // add each char in tmp to buffer in reverse to print digits in the right order
+    while (t--)
+        putc_buf(buf, idx, tmp[t]);
+}
+
+// converts unsigned int to base 10 for printing as characters
+static void put_u64_buf(char *buf, uint64_t *idx, const uint64_t u) {
+    char tmp[32];
+    int t = 0;
+
+    if (u == 0) {
+        putc_buf(buf, idx, '0');
+        return;
+    }
+    uint64_t n = u;
+    while (n && t < 32) {
+        tmp[t++] = n % 10 + '0';
+        n /= 10;
+    }
     while (t--)
         putc_buf(buf, idx, tmp[t]);
 }
@@ -100,14 +118,26 @@ void printk(const char *fmt, ...) {
                 break;
             }
             case 'l': {
-                // only allow %ld
-                if (*(++p) == 'd') {
+                p++;
+                // handle %ll prefix
+                if (*p == 'l')
+                    p++;
+                if (*p == 'd') {
                     const long v = va_arg(args, long);
                     put_i64_buf(buf, &idx, v);
+                } else if (*p == 'u') {
+                    const unsigned long v = va_arg(args, unsigned long);
+                    put_u64_buf(buf, &idx, v);
                 } else {
                     putc_buf(buf, &idx, '%');
                     putc_buf(buf, &idx, 'l');
+                    if (*p) putc_buf(buf, &idx, *p);
                 }
+                break;
+            }
+            case 'u': {
+                const unsigned int u = va_arg(args, unsigned int);
+                put_u64_buf(buf, &idx, u);
                 break;
             }
             case 'p': {

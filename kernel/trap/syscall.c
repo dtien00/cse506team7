@@ -9,6 +9,7 @@
 #include "mm/vma.h"
 #include "process/process.h"
 #include "trap/trap.h"
+#include "fs/block_cache.h"
 #include "signal.h"
 
 
@@ -191,6 +192,22 @@ void syscall_handler(trap_frame *frame) {
             ret = sys_brk((void *) arg0);
             break;
 
+        case SYS_lseek:
+            ret = (uint64_t)(int64_t)sys_lseek((int) arg0, (off_t) arg1, (int) arg2);
+            break;
+
+        case SYS_unlink:
+            ret = sys_unlink((const char *) arg0);
+            break;
+
+        case SYS_mkdir:
+            ret = sys_mkdir((const char *) arg0, (mode_t) arg1);
+            break;
+
+        case SYS_sync:
+            ret = sys_sync();
+            break;
+
         case SYS_pipe:
             ret = sys_pipe((int *) arg0);
             break;
@@ -202,17 +219,13 @@ void syscall_handler(trap_frame *frame) {
         case SYS_dup2:
             ret = sys_dup2((int) arg0, (int) arg1);
             break;
-        
+
         case SYS_waitpid:
             ret = sys_waitpid((pid_t) arg0, (int *) arg1, (int) arg2);
             break;
 
         case SYS_sigprocmask:
             ret = sys_sigprocmask((int)arg0, (uint32_t *)arg1, (uint32_t *)arg2);
-            break;
-
-        case SYS_lseek:
-            ret = (uint64_t)(int64_t)sys_lseek((int)arg0, (off_t)arg1, (int)arg2);
             break;
 
         case SYS_chdir:
@@ -786,6 +799,47 @@ void *sys_sbrk(intptr_t increment) {
     return old_break;
 }
 
+/* ------------------------------------------------------------------ */
+/* sys_lseek                                                           */
+/* ------------------------------------------------------------------ */
+
+off_t sys_lseek(int fd, off_t offset, int whence) {
+    return (off_t) file_lseek(fd, (size_t) offset, whence);
+}
+
+int sys_unlink(const char *path) {
+    if (!current) return -1;
+
+    set_csr_bit(sstatus, SSTATUS_SUM);
+    char kpath[MAX_PATH];
+    strncpy(kpath, path, MAX_PATH - 1);
+    kpath[MAX_PATH - 1] = '\0';
+    clear_csr_bit(sstatus, SSTATUS_SUM);
+
+    return vfs_unlink(kpath);
+}
+
+int sys_mkdir(const char *path, mode_t mode) {
+    if (!current) return -1;
+
+    set_csr_bit(sstatus, SSTATUS_SUM);
+    char kpath[MAX_PATH];
+    strncpy(kpath, path, MAX_PATH - 1);
+    kpath[MAX_PATH - 1] = '\0';
+    clear_csr_bit(sstatus, SSTATUS_SUM);
+
+    char cwd[MAX_PATH];
+    if (fs_struct_get_cwd(current->fs, cwd, MAX_PATH) < 0) return -ENAMETOOLONG;
+    char resolved[MAX_PATH];
+    if (path_resolve(kpath, resolved) < 0) return -ENAMETOOLONG;
+
+    return vfs_mkdir(resolved, mode);
+}
+
+int sys_sync(void) {
+    return block_cache_flush();
+}
+
 int sys_sigprocmask(int how, const uint32_t *set, uint32_t *oldset) {
     if (!current) return -1;
 
@@ -815,14 +869,6 @@ int sys_sigprocmask(int how, const uint32_t *set, uint32_t *oldset) {
     new_mask &= ~((1U << KERNEL_SIGKILL) | (1U << KERNEL_SIGSTOP));
     current->signal_mask = new_mask;
     return 0;
-}
-
-/* ------------------------------------------------------------------ */
-/* sys_lseek                                                           */
-/* ------------------------------------------------------------------ */
-
-off_t sys_lseek(int fd, off_t offset, int whence) {
-    return (off_t) file_lseek(fd, (size_t) offset, whence);
 }
 
 /* ------------------------------------------------------------------ */
@@ -904,6 +950,7 @@ int sys_fs_getdents(int fd, void *dirp, uint32_t count)
     f_put(f);
     return n;
 }
+
 
 // trap/trapsyscall.c
 

@@ -8,7 +8,7 @@
 #include "mm/pmm.h"
 #include "mm/kmalloc.h"   // added — needed for kmalloc/kfree in exec()
 #include "types.h"
-#include "string.h"
+#include "lib/string.h"
 #include "tests/test.h"
 #include "elf/elf.h"
 #include "trap/syscall.h"
