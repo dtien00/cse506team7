@@ -77,13 +77,12 @@ static void test_sys_file_io(void) {
     printk("\n=== sys_open / sys_read / sys_close (tarfs) ===\n");
 
     /*
-     * sys_open / sys_read need a real process context (current->fds).
-     * These are only valid when called during normal kernel operation
-     * after proc_init().  In RUN_TESTS mode proc_init is NOT called,
-     * so we test the lower VFS layer directly instead.
+     * proc_init() is called before run_all_tests() but leaves current=NULL.
+     * Set up a minimal process context so file_open (for relative paths) and
+     * sys_open (which needs current->fds) work correctly.
      */
+    test_setup_proc();
 
-    /* vfs_open works without a process context */
     file_t *f = file_open("/hello.txt");
     TEST("vfs_open /hello.txt non-NULL", f != NULL);
 
@@ -123,6 +122,8 @@ static void test_sys_file_io(void) {
         TEST("vfs_write to tarfs returns error", w < 0);
         file_close(rf);
     }
+
+    test_teardown_proc();
 }
 
 /* ------------------------------------------------------------------ */

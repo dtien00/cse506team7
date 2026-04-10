@@ -57,6 +57,7 @@ void proc_init(void) {
     // next_pid is 1 at file scope, so proc_create assigns pid=1 to init
     struct proc *init = proc_create("init");
     next_pid = 2;  // next real process gets pid 2
+    init->priority = 0;  // PID 1 runs at highest priority — never starved
 
     // proc_create leaves fds and cwd/pwd in fs to the caller
     fd_init(&init->fds);
@@ -101,6 +102,8 @@ struct proc* proc_create(const char *name) {
     p->state = PROC_CREATED;
     p->context.sp = (uint64_t)&kstacks[idx][KSTACK_SIZE];
     p->context.ra = (uint64_t)proc_entry;
+    p->priority = PROC_DEFAULT_PRIORITY;
+    p->mlfq_level = 0;
     p->trapframe = NULL;
     p->trapframe_owned = 0;
 
@@ -216,6 +219,9 @@ int proc_wait(int *exit_code_out) {
                     clear_csr_bit(sstatus, SSTATUS_SUM);
                 }
 
+                // Accumulate child CPU time into parent before freeing
+                current->children_utime += child->utime_ticks;
+
                 proc_free(child);
                 return pid;
             }
@@ -263,6 +269,9 @@ int proc_waitpid(pid_t target_pid, int *exit_code_out, int options) {
                             *exit_code_out = (child->exit_code & 0xff) << 8;
                         clear_csr_bit(sstatus, SSTATUS_SUM);
                     }
+                    // Accumulate child CPU time into parent before freeing
+                    current->children_utime += child->utime_ticks;
+
                     proc_free(child);
                     return target_pid;
                 }
@@ -399,7 +408,7 @@ int exec(const char *path, char *const argv[]) {
     // 3. Create a fresh page table and VMA list for the new image
     pagetable_t new_pt = vmm_create_pagetable();
     if (!new_pt) goto fail_file;
-    
+
     struct vm_area *new_vma_list = NULL;
     vma_init(&new_vma_list);
 
@@ -456,13 +465,13 @@ int exec(const char *path, char *const argv[]) {
             remaining -= chunk;
         }
         // p_memsz > p_filesz (BSS) is already zero from memset above
-        
+
         // Create VMA for this segment
         uint32_t vma_prot = 0;
         if (phdr.p_flags & PF_R) vma_prot |= VMA_PROT_READ;
         if (phdr.p_flags & PF_W) vma_prot |= VMA_PROT_WRITE;
         if (phdr.p_flags & PF_X) vma_prot |= VMA_PROT_EXEC;
-        
+
         struct vm_area *seg_vma = vma_create(seg_start, seg_end, vma_prot, VMA_PRIVATE, VMA_TYPE_FILE);
         if (!seg_vma) goto fail_vma;
         if (vma_insert(&new_vma_list, seg_vma) != 0) {
@@ -533,6 +542,9 @@ int exec(const char *path, char *const argv[]) {
 
     // 7. Commit: install new address space, then tear down the old one.
     // Keep the old root alive until after SATP switches away from it.
+    // NOTE: current->priority (nice value) and current->signal_mask are
+    // intentionally NOT reset here — POSIX requires both to be preserved
+    // across exec().  Do not clear these fields in future refactors.
     pagetable_t old_pt = current->pagetable;
     struct vm_area *old_vma_list = current->vma_list;
 
@@ -576,4 +588,3 @@ fail_file:
     file_close(f);
     return -1;
 }
-

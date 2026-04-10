@@ -32,6 +32,8 @@ gid_t getgid(void);
 unsigned int sleep(unsigned int seconds);
 int usleep(unsigned int usec);
 int uptime(void);   /* returns kernel timer_ticks since boot (10 ticks/s on QEMU) */
+int nice(int increment); /* adjust scheduling priority; clamps to [0,19]; returns new priority */
+int sched_yield(void);  /* voluntarily relinquish the CPU; always returns 0 */
 
 int chdir(const char *path);
 char* getcwd(char *buf, size_t size);
@@ -63,5 +65,7 @@ int   setpgrp(void);
 int link(const char *oldpath, const char *newpath);
 int symlink(const char *target, const char *linkpath);
 ssize_t readlink(const char *pathname, char *buf, size_t bufsiz);
+
+int pause(void);   /* suspend until signal; always returns -1 (EINTR) */
 
 #endif

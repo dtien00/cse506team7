@@ -501,15 +501,27 @@ void timer_handler(void) {
 
     // Only preempt when we're actually in a running process context.
     if (current != NULL && current->state == PROC_RUNNING) {
+        current->utime_ticks++;  // charge every tick regardless of preemptibility
         if (current->time_slice > 0) {
             current->total_time++;
             if (current->total_time >= current->time_slice) {
+                if (current->mlfq_level < MLFQ_LEVELS - 1)
+                    current->mlfq_level++;
                 current->total_time = 0;
                 proc_yield();
                 return;
             }
         }
         // time_slice == 0 means non-preemptible; do NOT yield here.
+    }
+
+    // Starvation prevention: every MLFQ_BOOST_INTERVAL ticks, move all BLOCKED and lower-queue READY processes back to level 0.
+    if (timer_ticks % MLFQ_BOOST_INTERVAL == 0) {
+        for (int i = 0; i < MAX_PROCS; i++) {
+            if (proctab[i].state == PROC_BLOCKED ||
+                proctab[i].state == PROC_READY)
+                proctab[i].mlfq_level = 0;
+        }
     }
 }
 

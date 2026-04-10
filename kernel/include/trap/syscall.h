@@ -1,7 +1,9 @@
 #pragma once
 
 #include "kernel/types.h"
+#include "kernel/resource.h"
 #include "trap/trap.h"
+#include "sys/procinfo.h"
 
 // System call numbers
 #define SYS_exit     1
@@ -30,6 +32,11 @@
 #define SYS_dup      23
 #define SYS_dup2     33
 #define SYS_fs_getdents  61
+#define SYS_getrusage 24
+#define SYS_nice      25
+#define SYS_procinfo  26
+#define SYS_yield     27
+#define SYS_pause     28
 
 // Initialize syscall subsystem
 void syscall_init(void);
@@ -64,3 +71,8 @@ off_t  sys_lseek(int fd, off_t offset, int whence);
 int    sys_chdir(const char *path);
 char  *sys_getcwd(char *buf, size_t size);
 int sys_fs_getdents(int fd, void *dirp, uint32_t count);
+int    sys_getrusage(int who, struct rusage *usage);
+int    sys_nice(int increment);
+int    sys_procinfo(struct proc_info *infos, int max_count);
+int    sys_yield(void);
+int    sys_pause(void);
