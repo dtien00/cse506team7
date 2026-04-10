@@ -65,4 +65,6 @@ int link(const char *oldpath, const char *newpath);
 int symlink(const char *target, const char *linkpath);
 ssize_t readlink(const char *pathname, char *buf, size_t bufsiz);
 
+int pause(void);   /* suspend until signal; always returns -1 (EINTR) */
+
 #endif

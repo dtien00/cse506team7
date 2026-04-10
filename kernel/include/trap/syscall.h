@@ -33,6 +33,7 @@
 #define SYS_getrusage 24
 #define SYS_nice      25
 #define SYS_yield     27
+#define SYS_pause     28
 
 // Initialize syscall subsystem
 void syscall_init(void);
@@ -69,3 +70,4 @@ char  *sys_getcwd(char *buf, size_t size);
 int    sys_getrusage(int who, struct rusage *usage);
 int    sys_nice(int increment);
 int    sys_yield(void);
+int    sys_pause(void);

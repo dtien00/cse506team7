@@ -237,6 +237,10 @@ void syscall_handler(trap_frame *frame) {
             ret = sys_yield();
             break;
 
+        case SYS_pause:
+            ret = sys_pause();
+            break;
+
         default:
             printk("Unknown system call: %d\n", syscall_num);
             ret = -1;
@@ -1085,3 +1089,26 @@ int sys_yield(void) {
     proc_yield();
     return 0;
 }
+
+/*
+ * sys_pause() — suspend the calling process until any signal is delivered.
+ *
+ * Uses &current->pending_signals as the sleep channel so the timer's
+ * proc_wakeup(p) call (which uses the proc pointer as channel) cannot
+ * accidentally wake us. Only proc_unblock() from sys_kill wakes us.
+ *
+ * proc_sleep() checks SIGSTOP and KERNEL_FATAL_SIGS on wakeup and
+ * handles them (stop or exit) before returning here.
+ *
+ * POSIX: always returns -1 (EINTR).
+ */
+int sys_pause(void) {
+    // If a non-fatal, unmasked signal is already pending, return immediately.
+    // (Fatal ones were caught at syscall entry; we'd never reach here if they were set.)
+    uint32_t check = current->pending_signals & ~current->signal_mask
+                     & ~KERNEL_FATAL_SIGS & ~KERNEL_STOP_SIGS;
+    if (check) return -1;
+    proc_sleep(&current->pending_signals);
+    return -1;
+}
+

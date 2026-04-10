@@ -34,6 +34,7 @@
 .global getrusage
 .global nice
 .global sched_yield
+.global pause
 
 mmap:
     li a7, 14
@@ -211,5 +212,10 @@ nice:
 
 sched_yield:
     li a7, 27
+    ecall
+    ret
+
+pause:
+    li a7, 28
     ecall
     ret
