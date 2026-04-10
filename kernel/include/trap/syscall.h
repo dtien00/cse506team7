@@ -32,6 +32,7 @@
 #define SYS_dup2     33
 #define SYS_getrusage 24
 #define SYS_nice      25
+#define SYS_yield     27
 
 // Initialize syscall subsystem
 void syscall_init(void);
@@ -67,3 +68,4 @@ int    sys_chdir(const char *path);
 char  *sys_getcwd(char *buf, size_t size);
 int    sys_getrusage(int who, struct rusage *usage);
 int    sys_nice(int increment);
+int    sys_yield(void);

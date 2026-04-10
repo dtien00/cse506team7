@@ -38,10 +38,11 @@ void run_test_stack_growth(us_test_group_t *group);
 void run_test_getrusage(us_test_group_t *group);
 void run_test_nice(us_test_group_t *group);
 void run_test_nice_extended(us_test_group_t *group);
+void run_test_yield(us_test_group_t *group);
 
 int main(void) {
     us_test_group_t groups[] = {
-        {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}
+        {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}
     };
 
     ut_suite_begin("SBUnix Userspace Test Suite");
@@ -62,6 +63,7 @@ int main(void) {
     run_test_getrusage(&groups[13]);
     run_test_nice(&groups[14]);
     run_test_nice_extended(&groups[15]);
+    run_test_yield(&groups[16]);
 
     return ut_suite_end(groups, (int)(sizeof(groups) / sizeof(groups[0])));
 }

@@ -33,6 +33,7 @@
 .global sigprocmask
 .global getrusage
 .global nice
+.global sched_yield
 
 mmap:
     li a7, 14
@@ -205,5 +206,10 @@ getrusage:
 
 nice:
     li a7, 25
+    ecall
+    ret
+
+sched_yield:
+    li a7, 27
     ecall
     ret

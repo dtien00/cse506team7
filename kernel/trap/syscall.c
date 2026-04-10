@@ -233,6 +233,10 @@ void syscall_handler(trap_frame *frame) {
             ret = sys_nice((int)arg0);
             break;
 
+        case SYS_yield:
+            ret = sys_yield();
+            break;
+
         default:
             printk("Unknown system call: %d\n", syscall_num);
             ret = -1;
@@ -548,7 +552,12 @@ int sys_kill(pid_t pid, int sig) {
         int sent = 0;
         for (int i = 0; i < MAX_PROCS; i++) {
             struct proc *p = &proctab[i];
-            if (p->state == PROC_UNUSED || p->state == PROC_ZOMBIE) continue;
+            // Skip: not yet live, already dead, init, or self.
+            // PROC_CREATED is excluded: the process has no signal context yet
+            // (no trapframe, no user page table, not yet scheduled).
+            if (p->state == PROC_UNUSED ||
+                p->state == PROC_ZOMBIE  ||
+                p->state == PROC_CREATED) continue;
             if (p->pid == 1 || p == current) continue;
             sent++;
             if (sig == KERNEL_SIGCONT) {
@@ -1057,4 +1066,22 @@ int sys_nice(int increment) {
     if (new_prio > 19) new_prio = 19;
     current->priority = (int)new_prio;
     return (int)new_prio;
+}
+
+/*
+ * sys_yield() — voluntarily relinquish the CPU.
+ *
+ * Calls proc_yield(), which re-enqueues the calling process as READY at
+ * its current MLFQ level (priority preserved, no demotion) and switches
+ * to the scheduler.  The process resumes normally once the scheduler
+ * selects it again.
+ *
+ * If no other process is runnable, proc_yield() re-selects the same
+ * process immediately — one extra context switch but no functional issue.
+ *
+ * POSIX sched_yield() always returns 0.
+ */
+int sys_yield(void) {
+    proc_yield();
+    return 0;
 }

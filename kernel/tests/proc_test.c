@@ -85,6 +85,7 @@ void proc_test_run(void) {
         TEST("wait: no more children", proc_wait(NULL) == -1);
 
         current = wait_saved;
+        proc_free(parent);  // must free parent; leaving it in proctab pollutes later tests
     }
     printk("\n========================================\n");
     printk("    End of Process Tests\n");
