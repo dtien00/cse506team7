@@ -342,6 +342,9 @@ int file_write(file_t *f, const void *buf, size_t len) {
                 printk("file_write: no write op on vnode\n");
                 return -EBADF;
             }
+            // O_APPEND: always write at end of file
+            if (f->flags & O_APPEND)
+                f->offset = f->vnode->size;
             int n = f->vnode->mount->fs_type->ops.write(f->vnode, buf, f->offset, len);
             if (n > 0)
                 f->offset += (size_t) n;

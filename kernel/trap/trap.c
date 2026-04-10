@@ -132,6 +132,7 @@ void trap_init(void) {
 }
 
 static void handle_interrupt(trap_frame *frame) {
+    // printk("Handling interrupt");
     uint64_t interrupt_code = frame->scause & ~SCAUSE_INTERRUPT; // calculate exception code by removing interrupt bit
 
     switch (interrupt_code) {
@@ -491,15 +492,15 @@ void timer_handler(void) {
     timer_ticks++;
     sbi_set_timer(read_csr(time) + TIMER_INTERVAL);
     if (timer_ticks % 5 == 0)
-        printk("  [kernel] timer_handler: tick=%lu current=%d\n",
-               (unsigned long)timer_ticks, current ? current->pid : -1);
+        // printk("  [kernel] timer_handler: tick=%d current=%d\n",
+        //        (unsigned long)timer_ticks, current ? current->pid : -1);
 
     // Wake any processes whose timed sleep deadline has expired.
     for (int i = 0; i < MAX_PROCS; i++) {
         struct proc *p = &proctab[i];
         if (p->state == PROC_BLOCKED && p->wake_tick != 0 && timer_ticks >= p->wake_tick) {
-            printk("  [kernel] timer_handler: waking pid=%d at tick=%lu\n",
-                   p->pid, (unsigned long)timer_ticks);
+            // printk("  [kernel] timer_handler: waking pid=%d at tick=%lu\n",
+            //        p->pid, (unsigned long)timer_ticks);
             p->wake_tick = 0;
             proc_wakeup(p);  // p slept on itself (chan == p)
         }

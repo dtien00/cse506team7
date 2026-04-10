@@ -32,7 +32,10 @@ uint64_t *vmm_walk(pagetable_t pagetable, uintptr_t va, int alloc) {
       if (pagetable == NULL) {
         return NULL;
       }
-      
+      if ((uintptr_t)pagetable == 0x804b7000)
+          printk("VMM WALK BUG: allocated 0x804b7000 as intermediate table! ra=%p\n",
+                 __builtin_return_address(0));
+
       // Zero out the new page table
       for (int i = 0; i < 512; i++) {
         pagetable[i] = 0;
@@ -123,6 +126,10 @@ pagetable_t vmm_create_pagetable(void) {
     pagetable_t pt = (pagetable_t)pmm_alloc_page();
     if (pt == NULL) return NULL;
 
+    // if ((uintptr_t)pt == 0x804b7000)
+    //     printk("VMM CREATE: allocated 0x804b7000 as new pagetable root! ra=%p\n",
+    //            __builtin_return_address(0));
+
     for (int i = 0; i < 512; i++) pt[i] = 0;
 
     pagetable_t kpt = vmm_kernel_pagetable();
@@ -203,6 +210,13 @@ static void vmm_free_pagetable_recursive(pagetable_t pagetable, pagetable_t kern
 
 void vmm_free_pagetable(pagetable_t pagetable) {
     if (pagetable == NULL) return;
+    if (pagetable == kernel_pagetable) {
+        // printk("VMM FREE BUG: attempt to free kernel pagetable!\n");
+        return;
+    }
+    // if ((uintptr_t)pagetable == 0x804b7000)
+    //     printk("VMM FREE: freeing 0x804b7000! ra=%p\n",
+    //            __builtin_return_address(0));
     vmm_free_pagetable_recursive(pagetable, vmm_kernel_pagetable(), 2);
 }
 
@@ -211,7 +225,9 @@ pagetable_t vmm_kernel_pagetable(void) {
 }
 
 void vmm_switch(pagetable_t pagetable) {
-  w_satp(MAKE_SATP((uintptr_t)pagetable));
+  uint64_t temp = MAKE_SATP((uintptr_t)pagetable);
+  // printk("MAKESATP(%p) = %p\n", pagetable, temp);
+  w_satp(temp);
 }
 
 void vmm_init(void) {
@@ -285,6 +301,13 @@ static int vmm_copy_pagetable_recursive(pagetable_t child, pagetable_t parent, i
     uint64_t pte = parent[i];
     if (!(pte & PTE_V)) continue;
 
+    // At the top level (L2), skip kernel-range entries — vmm_create_pagetable()
+    // already installed the correct shared/private kernel mappings.  Recursing
+    // into them here would allocate new, empty L1 tables that replace the
+    // working kernel mappings, leaving the child with no kernel VA coverage.
+    if (level == 2 && i >= (int)(KERNBASE >> 30))
+        continue;
+
     if ((pte & (PTE_R | PTE_W | PTE_X)) == 0) {
       // This is a lower-level page table
       pagetable_t parent_next = (pagetable_t)PTE_TO_PA(pte);
@@ -312,6 +335,10 @@ static int vmm_copy_pagetable_recursive(pagetable_t child, pagetable_t parent, i
               flags |= PTE_COW;                    // mark COW on both
           parent[i] = flags;                       // parent loses write too
           child[i]  = flags;                       // child shares same PA
+          // Flush the parent's TLB entry for this page so the CPU sees the
+          // updated (read-only / COW) PTE rather than a stale writable copy.
+          uintptr_t page_va = va_base | ((uintptr_t)i << (level * 9 + 12));
+          asm volatile("sfence.vma %0, zero" :: "r"(page_va));
       } else {
         // Kernel or device mapping: share the PTE as-is.
         child[i] = pte;
@@ -323,6 +350,7 @@ static int vmm_copy_pagetable_recursive(pagetable_t child, pagetable_t parent, i
 
 // Clone a parent's page table for fork()
 pagetable_t vmm_copy_pagetable(pagetable_t parent) {
+  // uint64_t before = parent[KERNBASE >> 30];
   pagetable_t child = vmm_create_pagetable();
   if (!child) return NULL;
   // Recursively copy user mappings (levels 2, 1, 0)
@@ -330,5 +358,9 @@ pagetable_t vmm_copy_pagetable(pagetable_t parent) {
     vmm_free_pagetable(child);
     return NULL;
   }
+  // uint64_t after = parent[KERNBASE >> 30];
+  // if (before != after)
+  //     printk("VMM FORK BUG: parent L2[%d] changed: %p -> %p (parent pt=%p)\n",
+  //            (int)(KERNBASE >> 30), before, after, parent);
   return child;
 }

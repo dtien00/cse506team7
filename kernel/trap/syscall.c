@@ -169,15 +169,15 @@ void syscall_handler(trap_frame *frame) {
             break;
 
         case SYS_sleep:
-            printk("  [kernel] syscall_handler: dispatching SYS_sleep(%d)\n", (int)arg0);
+            // printk("  [kernel] syscall_handler: dispatching SYS_sleep(%d)\n", (int)arg0);
             ret = sys_sleep((int) arg0);
-            printk("  [kernel] syscall_handler: SYS_sleep returned %d\n", ret);
+            // printk("  [kernel] syscall_handler: SYS_sleep returned %d\n", ret);
             break;
 
         case SYS_uptime:
-            printk("  [kernel] syscall_handler: dispatching SYS_uptime\n");
+            // printk("  [kernel] syscall_handler: dispatching SYS_uptime\n");
             ret = sys_uptime();
-            printk("  [kernel] syscall_handler: SYS_uptime returned %d\n", ret);
+            // printk("  [kernel] syscall_handler: SYS_uptime returned %d\n", ret);
             break;
 
         case SYS_kill:
@@ -550,17 +550,17 @@ pid_t sys_getppid(void) {
 int sys_sleep(int seconds) {
     if (seconds <= 0) return 0;
     uint64_t wake = timer_ticks + (uint64_t)seconds * TICKS_PER_SEC;
-    printk("  [kernel] sys_sleep: seconds=%d timer_ticks=%lu wake_tick=%lu\n",
-           seconds, (unsigned long)timer_ticks, (unsigned long)wake);
+    // printk("  [kernel] sys_sleep: seconds=%d timer_ticks=%lu wake_tick=%lu\n",
+    //       seconds, (unsigned long)timer_ticks, (unsigned long)wake);
     current->wake_tick = wake;
-    printk("  [kernel] sys_sleep: calling proc_sleep (going to sleep)\n");
+    // printk("  [kernel] sys_sleep: calling proc_sleep (going to sleep)\n");
     proc_sleep(current);   // sleep on self; timer_handler calls proc_wakeup(p)
-    printk("  [kernel] sys_sleep: woke up, timer_ticks=%lu\n", (unsigned long)timer_ticks);
+    // printk("  [kernel] sys_sleep: woke up, timer_ticks=%lu\n", (unsigned long)timer_ticks);
     return 0;
 }
 
 int sys_uptime(void) {
-    printk("  [kernel] sys_uptime: timer_ticks=%lu\n", (unsigned long)timer_ticks);
+    // printk("  [kernel] sys_uptime: timer_ticks=%lu\n", (unsigned long)timer_ticks);
     return (int)timer_ticks;
 }
 
@@ -875,7 +875,12 @@ int sys_mkdir(const char *path, mode_t mode) {
     kpath[MAX_PATH - 1] = '\0';
     clear_csr_bit(sstatus, SSTATUS_SUM);
 
-    return vfs_mkdir(kpath, mode);
+    char cwd[MAX_PATH];
+    if (fs_struct_get_cwd(current->fs, cwd, MAX_PATH) < 0) return -ENAMETOOLONG;
+    char resolved[MAX_PATH];
+    if (path_resolve(cwd, kpath, resolved) < 0) return -ENAMETOOLONG;
+
+    return vfs_mkdir(resolved, mode);
 }
 
 int sys_sync(void) {

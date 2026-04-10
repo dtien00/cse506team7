@@ -143,6 +143,7 @@ typedef struct virtio_blk_device {
     volatile virtio_pci_common_cfg_t *common_cfg;  // PCI CommonCfg region
     uintptr_t notify_addr;                          // Notify register address
     volatile uint32_t *dev_cfg;                    // Device-specific config region
+    volatile uint8_t *isr_addr;                    // ISR status register (read clears interrupt)
     volatile virtq_desc_t *desc;   // Descriptor table
     volatile virtq_avail_t *avail; // Available ring
     volatile virtq_used_t *used;   // Used ring

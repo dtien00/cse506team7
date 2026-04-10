@@ -33,6 +33,8 @@ int virtio_blk_init(void) {
     uintptr_t notify_base = pci_virtio_cap_addr(pci, VIRTIO_PCI_CAP_NOTIFY_CFG, &notify_off_mult);
     printk("looking for VIRTIO_PCI_CAP_DEVICE_CFG (%d)\n", VIRTIO_PCI_CAP_DEVICE_CFG);
     uintptr_t devcfg_addr = pci_virtio_cap_addr(pci, VIRTIO_PCI_CAP_DEVICE_CFG, NULL);
+    printk("looking for VIRTIO_PCI_CAP_ISR_CFG (%d)\n", VIRTIO_PCI_CAP_ISR_CFG);
+    uintptr_t isr_addr    = pci_virtio_cap_addr(pci, VIRTIO_PCI_CAP_ISR_CFG, NULL);
 
     if (!common_addr) {
         printk("virtio_blk: CommonCfg capability not found\n");
@@ -43,10 +45,11 @@ int virtio_blk_init(void) {
         return -1;
     }
 
-    printk("virtio_blk: CommonCfg @ %ld, Notify @ %ld, DevCfg @ %ld\n",
-           common_addr, notify_base, devcfg_addr);
+    printk("virtio_blk: CommonCfg @ %ld, Notify @ %ld, DevCfg @ %ld, ISR @ %ld\n",
+           common_addr, notify_base, devcfg_addr, isr_addr);
 
-    blk_dev.dev_cfg = (volatile uint32_t *)devcfg_addr;
+    blk_dev.dev_cfg  = (volatile uint32_t *)devcfg_addr;
+    blk_dev.isr_addr = (volatile uint8_t *)isr_addr;
 
     // Access CommonCfg by byte offset to avoid volatile-packed-struct miscompilation.
     // Offsets per VirtIO 1.1 spec section 4.1.4.3:
@@ -323,6 +326,13 @@ uint64_t virtio_blk_get_capacity(void) {
 // Called from the external interrupt handler when the virtio IRQ fires.
 // Advances last_used_idx and wakes whoever is sleeping on &blk_dev.
 void virtio_blk_irq(void) {
+    // Read ISR status to acknowledge the interrupt at the device level.
+    // For VirtIO PCI legacy interrupts, reading the ISR register deasserts
+    // the interrupt line. Without this, the PLIC re-raises the IRQ immediately
+    // after plic_complete(), causing an interrupt storm that starves the timer.
+    if (blk_dev.isr_addr)
+        (void)*blk_dev.isr_addr;
+
     while (blk_dev.last_used_idx != blk_dev.used->idx) {
         blk_dev.last_used_idx++;
     }

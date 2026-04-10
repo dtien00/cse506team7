@@ -42,7 +42,7 @@ void run_test_dirent(us_test_group_t *group);
 
 
 /* base groups + 6 fs_persist sub-groups */
-#define MAX_GROUPS 30
+#define MAX_GROUPS 100
 
 int main(void) {
     us_test_group_t groups[MAX_GROUPS];
@@ -65,7 +65,7 @@ int main(void) {
     run_test_file_io(&groups[idx++]);
     run_test_process(&groups[idx++]);
     run_test_write(&groups[idx++]);
-    // run_test_fs_persist(groups, &idx);
+    run_test_fs_persist(groups, &idx);
     run_test_syscall(&groups[idx++]);
     run_test_cow(&groups[idx++]);
     run_test_sched(&groups[idx++]);

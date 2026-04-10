@@ -1134,6 +1134,46 @@ int ext2_mkdir(mount_t *mnt, const char *path, uint32_t mode) {
     return 0;
 }
 
+// Truncate an ext2 file to zero length: free all data blocks and reset size.
+static int ext2_truncate(vnode_t *vnode) {
+    if (!vnode || !vnode->fs_data || !vnode->mount) return -1;
+
+    ext2_inode_t *inode = (ext2_inode_t *)vnode->fs_data;
+    ext2_mount_data_t *mnt = (ext2_mount_data_t *)vnode->mount->fs_data;
+
+    // Free each allocated direct block
+    for (int i = 0; i < EXT2_NDIR_BLOCKS; i++) {
+        uint32_t blk = inode->i_block[i];
+        if (blk == 0) continue;
+
+        // Determine which group owns this block
+        uint32_t group = (blk - mnt->sb->s_first_data_block) / mnt->blocks_per_group;
+        uint32_t bit   = (blk - mnt->sb->s_first_data_block) % mnt->blocks_per_group;
+
+        uint8_t *bitmap = (uint8_t *)kmalloc(mnt->block_size);
+        if (!bitmap) continue;
+
+        if (block_cache_read(mnt->group_desc[group].bg_block_bitmap, bitmap) == 0) {
+            bitmap[bit / 8] &= ~(1 << (bit % 8));
+            block_cache_write(mnt->group_desc[group].bg_block_bitmap, bitmap);
+            mnt->group_desc[group].bg_free_blocks_count++;
+            mnt->sb->s_free_blocks_count++;
+            ext2_write_superblock(mnt);
+            ext2_write_gdt(mnt);
+        }
+        kfree(bitmap);
+
+        inode->i_block[i] = 0;
+    }
+
+    inode->i_blocks = 0;
+    inode->i_size   = 0;
+    vnode->size     = 0;
+
+    ext2_write_inode(mnt, vnode->ino, inode);
+    return 0;
+}
+
 // Initialize ext2 filesystem type
 void ext2_init(void) {
     ext2_fs_type.name = "ext2";
@@ -1145,6 +1185,7 @@ void ext2_init(void) {
     ext2_fs_type.ops.create = ext2_create;
     ext2_fs_type.ops.unlink = ext2_unlink;
     ext2_fs_type.ops.mkdir = ext2_mkdir;
+    ext2_fs_type.ops.truncate = ext2_truncate;
     ext2_fs_type.next = NULL;
     
     vfs_register_fs(&ext2_fs_type);
