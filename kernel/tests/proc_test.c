@@ -12,6 +12,7 @@
 #include "tests/test.h"
 #include "elf/elf.h"
 #include "trap/syscall.h"
+#include "sys/procinfo.h"
 
 static int passed = 0;
 static int failed = 0;
@@ -335,6 +336,73 @@ void proc_waitpid_test_run(void) {
 
     proc_free(parent);
     current = wp_saved;
+
+    printk("\n========================================\n");
+    printk("  Results: %d passed, %d failed\n", passed, failed);
+    printk("========================================\n\n");
+}
+
+/*
+ * procinfo_test_run — kernel-side unit tests for sys_procinfo.
+ *
+ * Runs before the scheduler starts, so we manipulate proctab directly
+ * rather than relying on running processes.  At minimum, proc_init()
+ * has already inserted init (pid 1) into the table.
+ */
+void procinfo_test_run(void) {
+    printk("\n========================================\n");
+    printk("       sys_procinfo Tests\n");
+    printk("========================================\n\n");
+
+    struct proc_info buf[MAX_PROCS];
+
+    /* ── max_count=0: must return 0, must not touch the buffer ───────── */
+    int r0 = sys_procinfo(buf, 0);
+    TEST("procinfo: max_count=0 returns 0", r0 == 0);
+
+    /* ── normal call: at least init is present ───────────────────────── */
+    int n = sys_procinfo(buf, MAX_PROCS);
+    TEST("procinfo: returns > 0 (at least init)", n > 0);
+
+    /* ── init process (pid 1) appears in the output ─────────────────── */
+    int init_found = 0;
+    for (int i = 0; i < n; i++) {
+        if (buf[i].pid == 1) { init_found = 1; break; }
+    }
+    TEST("procinfo: init (pid=1) found in output", init_found);
+
+    /* ── all returned states are non-zero (PROC_UNUSED filtered out) ─── */
+    int all_states_nonzero = 1;
+    for (int i = 0; i < n; i++) {
+        if (buf[i].state == 0) { all_states_nonzero = 0; break; }
+    }
+    TEST("procinfo: no PROC_UNUSED entries returned", all_states_nonzero);
+
+    /* ── all returned PIDs positive ──────────────────────────────────── */
+    int all_pids_ok = 1;
+    for (int i = 0; i < n; i++) {
+        if (buf[i].pid <= 0) { all_pids_ok = 0; break; }
+    }
+    TEST("procinfo: all PIDs positive", all_pids_ok);
+
+    /* ── max_count=1: returns exactly 1 ─────────────────────────────── */
+    struct proc_info one;
+    int r1 = sys_procinfo(&one, 1);
+    TEST("procinfo: max_count=1 returns exactly 1", r1 == 1);
+
+    /* ── count increases after proc_alloc ───────────────────────────── */
+    struct proc *extra = proc_alloc();
+    if (extra) {
+        extra->state = PROC_CREATED;
+        int n2 = sys_procinfo(buf, MAX_PROCS);
+        TEST("procinfo: count increases after proc_alloc", n2 == n + 1);
+        proc_free(extra);
+        int n3 = sys_procinfo(buf, MAX_PROCS);
+        TEST("procinfo: count back to baseline after proc_free", n3 == n);
+    } else {
+        TEST("procinfo: proc_alloc for count test", 0);
+        TEST("procinfo: count back to baseline after proc_free", 0);
+    }
 
     printk("\n========================================\n");
     printk("  Results: %d passed, %d failed\n", passed, failed);

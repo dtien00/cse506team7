@@ -35,6 +35,7 @@
 .global nice
 .global sched_yield
 .global pause
+.global procinfo
 
 mmap:
     li a7, 14
@@ -217,5 +218,10 @@ sched_yield:
 
 pause:
     li a7, 28
+    ecall
+    ret
+
+procinfo:
+    li a7, 26
     ecall
     ret

@@ -48,6 +48,7 @@ void run_all_tests(void) {
     sched_nice_test_run();
     proc_test_run();
     proc_waitpid_test_run();
+    procinfo_test_run();
     libc_syscall_test_run();
     timer_test_run();
     kill_test_run();

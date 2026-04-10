@@ -1,5 +1,6 @@
 #include "trap/syscall.h"
 #include "arch/riscv.h"
+#include "sys/procinfo.h"
 #include "errno.h"
 #include "kernel/printk.h"
 #include "kernel/resource.h"
@@ -239,6 +240,10 @@ void syscall_handler(trap_frame *frame) {
 
         case SYS_pause:
             ret = sys_pause();
+            break;
+
+        case SYS_procinfo:
+            ret = sys_procinfo((struct proc_info *) arg0, (int) arg1);
             break;
 
         default:
@@ -1112,3 +1117,26 @@ int sys_pause(void) {
     return -1;
 }
 
+/*
+ * A POSIX-conforming ps should show at minimum: PID, PPID, state, priority (if implemented), and name
+ * NOTE: As of now, PIDs are strictly incremented only. If we look to implement PID recycling, this would risk PID races,
+ * and after a certain PID value limit reached, would look for the lowest available PID value.
+*/
+int sys_procinfo(struct proc_info *infos, int max_count) {
+    int count = 0;
+    // infos points into user space; enable SUM so S-mode can write U-bit pages.
+    set_csr_bit(sstatus, SSTATUS_SUM);
+    for (int i = 0; i < MAX_PROCS && count < max_count; i++) {
+        struct proc *p = &proctab[i];
+        if (p->state == PROC_UNUSED) continue;
+        infos[count].pid       = p->pid;
+        infos[count].ppid      = p->parent ? p->parent->pid : 0;
+        strncpy(infos[count].name, p->name, 15);
+        infos[count].state     = (int)p->state;
+        infos[count].priority  = p->priority;
+        infos[count].cpu_ticks = p->utime_ticks;
+        count++;
+    }
+    clear_csr_bit(sstatus, SSTATUS_SUM);
+    return count;
+}
