@@ -1,3 +1,6 @@
+#ifndef _SYS_PROCINFO_H
+#define _SYS_PROCINFO_H
+
 struct proc_info {
     int   pid;
     int   ppid;
@@ -6,3 +9,5 @@ struct proc_info {
     int   priority; // 0 if not implemented
     uint64_t cpu_ticks;
 };
+
+#endif /* _SYS_PROCINFO_H */
