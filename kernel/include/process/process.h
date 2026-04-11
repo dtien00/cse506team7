@@ -140,6 +140,7 @@ struct proc* proc_next_ready(void);
 void proc_ready(struct proc *p);
 void proc_block(struct proc *p);
 void proc_unblock(struct proc *p);
+void mlfq_boost(void);
 
 // Debug
 void proc_dump(void);

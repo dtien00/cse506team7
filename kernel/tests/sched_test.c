@@ -144,9 +144,148 @@ void sched_priority_test_run(void) {
     proc_free(lo); proc_free(mid); proc_free(hi);
 }
 
+/*
+ * sched_fairness_test_run — kernel unit tests for mlfq_boost().
+ *
+ * Verifies starvation-prevention: every MLFQ_BOOST_INTERVAL ticks the kernel
+ * calls mlfq_boost() which must physically move READY processes from lower
+ * queues into mlfq[0], not merely update the mlfq_level field.
+ *
+ * BT1: READY process at level > 0 is physically re-queued at level 0.
+ * BT2: BLOCKED process gets mlfq_level reset to 0 but stays BLOCKED.
+ * BT3: READY process already at level 0 is not re-inserted (no duplicate).
+ * BT4: Two processes at levels 1 and 2 both land at level 0 after boost.
+ * BT5: RUNNING process gets mlfq_level and total_time reset.
+ */
 void sched_fairness_test_run(void) {
-    printk("[sched_fairness_test_run] Not implemented yet.\n");
-    TEST("sched_fairness_test_run stub", 0);
+    printk("\n========================================\n");
+    printk("  MLFQ Boost (mlfq_boost) Tests\n");
+    printk("========================================\n\n");
+
+    /* ── BT1: READY at level 2 → physically re-queued at level 0 ─────── */
+    printk("=== BT1: READY process boosted from level 2 to level 0 ===\n");
+    {
+        struct proc *p = proc_alloc();
+        TEST("BT1: proc_alloc", p != NULL);
+        if (p) {
+            p->mlfq_level = 2;
+            p->total_time = 3;
+            proc_ready(p);        /* enqueued in mlfq[2] */
+
+            mlfq_boost();
+
+            TEST("BT1: mlfq_level reset to 0", p->mlfq_level == 0);
+            TEST("BT1: time_slice reset to 1",  p->time_slice == 1);
+            TEST("BT1: total_time reset to 0",  p->total_time == 0);
+
+            /* Process must now be physically in mlfq[0]; the scheduler
+             * should return it on the very next call (no other ready procs). */
+            struct proc *got = proc_next_ready();
+            TEST("BT1: proc_next_ready returns boosted proc", got == p);
+
+            proc_free(p);
+        }
+    }
+
+    /* ── BT2: BLOCKED → mlfq_level reset, state unchanged ──────────────── */
+    printk("\n=== BT2: BLOCKED process mlfq_level reset, stays BLOCKED ===\n");
+    {
+        struct proc *p = proc_alloc();
+        TEST("BT2: proc_alloc", p != NULL);
+        if (p) {
+            /* Set state directly — the process is not in blocked_queue, but
+             * mlfq_boost only reads p->state and writes p->mlfq_level for
+             * BLOCKED processes, so this is safe for a unit test. */
+            p->state      = PROC_BLOCKED;
+            p->mlfq_level = 3;
+
+            mlfq_boost();
+
+            TEST("BT2: mlfq_level reset to 0", p->mlfq_level == 0);
+            TEST("BT2: state still BLOCKED",    p->state == PROC_BLOCKED);
+
+            proc_free(p);
+        }
+    }
+
+    /* ── BT3: already at level 0 — no duplicate enqueue ────────────────── */
+    printk("\n=== BT3: level-0 READY process is left untouched ===\n");
+    {
+        struct proc *p = proc_alloc();
+        TEST("BT3: proc_alloc", p != NULL);
+        if (p) {
+            p->mlfq_level = 0;
+            proc_ready(p);        /* enqueued in mlfq[0] */
+
+            mlfq_boost();         /* mlfq_level == 0: boost skips this proc */
+
+            TEST("BT3: mlfq_level still 0", p->mlfq_level == 0);
+            TEST("BT3: time_slice still 1", p->time_slice == 1);
+
+            struct proc *first  = proc_next_ready();
+            struct proc *second = proc_next_ready(); /* must be NULL — no duplicate */
+            TEST("BT3: dequeued exactly once",    first == p);
+            TEST("BT3: no duplicate in mlfq[0]", second == NULL);
+
+            proc_free(p);
+        }
+    }
+
+    /* ── BT4: two processes at levels 1 and 2 both land at level 0 ─────── */
+    printk("\n=== BT4: multiple procs at different levels all boosted ===\n");
+    {
+        struct proc *a = proc_alloc();
+        struct proc *b = proc_alloc();
+        TEST("BT4: alloc a and b", a != NULL && b != NULL);
+        if (a && b) {
+            a->mlfq_level = 1; a->priority = 5;
+            b->mlfq_level = 2; b->priority = 5;
+            proc_ready(a);   /* mlfq[1] */
+            proc_ready(b);   /* mlfq[2] */
+
+            mlfq_boost();    /* both should move to mlfq[0] */
+
+            TEST("BT4: a.mlfq_level == 0", a->mlfq_level == 0);
+            TEST("BT4: b.mlfq_level == 0", b->mlfq_level == 0);
+
+            /* Drain mlfq[0]; both procs must appear, nothing else. */
+            struct proc *first  = proc_next_ready();
+            struct proc *second = proc_next_ready();
+            struct proc *third  = proc_next_ready();
+            TEST("BT4: both procs dequeued from level 0",
+                 (first == a || first == b) && (second == a || second == b) && first != second);
+            TEST("BT4: no third proc (queues fully drained)", third == NULL);
+        }
+        if (a) proc_free(a);
+        if (b) proc_free(b);
+    }
+
+    /* ── BT5: RUNNING process — mlfq_level and total_time reset ─────────── */
+    printk("\n=== BT5: RUNNING process fields reset ===\n");
+    {
+        struct proc *p = proc_alloc();
+        TEST("BT5: proc_alloc", p != NULL);
+        if (p) {
+            /* Simulate a running process that has burned through ticks. */
+            p->state      = PROC_RUNNING;
+            p->mlfq_level = 3;
+            p->total_time = 7;
+
+            mlfq_boost();
+
+            TEST("BT5: mlfq_level reset to 0", p->mlfq_level == 0);
+            TEST("BT5: total_time reset to 0",  p->total_time == 0);
+            TEST("BT5: state still RUNNING",    p->state == PROC_RUNNING);
+
+            /* Clean up: restore to UNUSED so proc_free is safe. */
+            p->state = PROC_UNUSED;
+            proc_free(p);
+        }
+    }
+
+    printk("\n========================================\n");
+    printk("  Results: %d passed, %d failed\n", passed, failed);
+    printk("========================================\n");
 }
 
 void sched_idle_test_run(void) {
