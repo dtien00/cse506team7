@@ -1,7 +1,9 @@
 #pragma once
 
 #include "kernel/types.h"
+#include "kernel/resource.h"
 #include "trap/trap.h"
+#include "process/process.h"
 
 // System call numbers
 #define SYS_exit     1
@@ -31,6 +33,11 @@
 #define SYS_waitpid  25
 #define SYS_sigprocmask 26
 #define SYS_getcwd   27
+#define SYS_getrusage 28
+#define SYS_nice      29
+#define SYS_procinfo  30
+#define SYS_yield     31
+#define SYS_pause     32
 #define SYS_dup2     33
 #define SYS_getgid   47
 #define SYS_chdir    49
@@ -79,3 +86,8 @@ int sys_sigprocmask(int how, const uint32_t *set, uint32_t *oldset);
 int    sys_chdir(const char *path);
 char  *sys_getcwd(char *buf, size_t size);
 int sys_fs_getdents(int fd, void *dirp, uint32_t count);
+int    sys_getrusage(int who, struct rusage *usage);
+int    sys_nice(int increment);
+int    sys_procinfo(struct proc_info *infos, int max_count);
+int    sys_yield(void);
+int    sys_pause(void);

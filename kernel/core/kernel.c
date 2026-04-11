@@ -39,23 +39,26 @@ static void boot_wait_for_first_tick(void) {
 }
 
 void run_all_tests(void) {
-    ext2_populate_test_run();
-    // mem_test_run();
+    // ext2_populate_test_run();
+    mem_test_run();
     // trap_test_run();
-    // fs_test_run();
+    fs_test_run();
     
-    // sched_test_run();
-    // sched_timeslice_test_run();
-    // sched_priority_test_run();
-    // sched_fairness_test_run();
-    // sched_idle_test_run();
-    // proc_test_run();
-    // proc_waitpid_test_run();
-    // libc_syscall_test_run();
-    // timer_test_run();
-    // kill_test_run();
-    // cow_test_run();
-    // stack_growth_test_run();
+    sched_test_run();
+    sched_timeslice_test_run();
+    sched_priority_test_run();
+    sched_fairness_test_run();
+    sched_idle_test_run();
+    sched_nice_test_run();
+    proc_test_run();
+    proc_waitpid_test_run();
+    procinfo_test_run();
+    libc_syscall_test_run();
+    timer_test_run();
+    kill_test_run();
+    cow_test_run();
+    stack_growth_test_run();
+    accounting_test_run();
 
     // printk("%d passed, %d failed\n", passed, failed);
 }

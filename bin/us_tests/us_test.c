@@ -39,6 +39,13 @@ void run_test_sched(us_test_group_t *group);
 void run_test_signal(us_test_group_t *group);
 void run_test_stack_growth(us_test_group_t *group);
 void run_test_dirent(us_test_group_t *group);
+void run_test_getrusage(us_test_group_t *group);
+void run_test_nice(us_test_group_t *group);
+void run_test_nice_extended(us_test_group_t *group);
+void run_test_yield(us_test_group_t *group);
+void run_test_pause(us_test_group_t *group);
+void run_test_procinfo(us_test_group_t *group);
+
 
 
 /* base groups + 6 fs_persist sub-groups */
@@ -72,6 +79,12 @@ int main(void) {
     run_test_signal(&groups[idx++]);
     run_test_dirent(&groups[idx++]);
     run_test_stack_growth(&groups[idx++]);
+    run_test_getrusage(&groups[14]);
+    run_test_nice(&groups[15]);
+    run_test_nice_extended(&groups[16]);
+    run_test_yield(&groups[17]);
+    run_test_pause(&groups[18]);
+    run_test_procinfo(&groups[19]);
 
     return ut_suite_end(groups, idx);
 }

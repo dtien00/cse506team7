@@ -1,7 +1,9 @@
 #include "trap/syscall.h"
 #include "arch/riscv.h"
+#include "process/process.h"
 #include "errno.h"
 #include "kernel/printk.h"
+#include "kernel/resource.h"
 #include "lib/string.h"
 #include "mm/kmalloc.h"
 #include "mm/pmm.h"
@@ -245,6 +247,26 @@ void syscall_handler(trap_frame *frame) {
             ret = sys_fs_getdents((int)arg0, (void *)arg1, (uint32_t)arg2);
             break;
 
+        case SYS_getrusage:
+            ret = sys_getrusage((int)arg0, (struct rusage *)arg1);
+            break;
+
+        case SYS_nice:
+            ret = sys_nice((int)arg0);
+            break;
+
+        case SYS_yield:
+            ret = sys_yield();
+            break;
+
+        case SYS_pause:
+            ret = sys_pause();
+            break;
+
+        case SYS_procinfo:
+            ret = sys_procinfo((struct proc_info *) arg0, (int) arg1);
+            break;
+
         default:
             printk("Unknown system call: %d\n", syscall_num);
             ret = -1;
@@ -288,6 +310,8 @@ pid_t sys_fork(void) {
     }
 
     child->signal_mask = current->signal_mask; // Fork child inherits parent's signal mask
+    child->priority    = current->priority;    /* POSIX: nice value is inherited across fork */
+    child->mlfq_level  = 0;                    /* fresh MLFQ slate — child has used no CPU yet */
     child->fs = fs_struct_copy(current->fs);
     if (!child->fs) {
         vma_free_all(child->vma_list);
@@ -549,13 +573,17 @@ pid_t sys_getppid(void) {
 
 int sys_sleep(int seconds) {
     if (seconds <= 0) return 0;
-    uint64_t wake = timer_ticks + (uint64_t)seconds * TICKS_PER_SEC;
-    // printk("  [kernel] sys_sleep: seconds=%d timer_ticks=%lu wake_tick=%lu\n",
-    //       seconds, (unsigned long)timer_ticks, (unsigned long)wake);
-    current->wake_tick = wake;
-    // printk("  [kernel] sys_sleep: calling proc_sleep (going to sleep)\n");
+    uint64_t wake_at = timer_ticks + (uint64_t)seconds * TICKS_PER_SEC;
+    current->wake_tick = wake_at;
     proc_sleep(current);   // sleep on self; timer_handler calls proc_wakeup(p)
-    // printk("  [kernel] sys_sleep: woke up, timer_ticks=%lu\n", (unsigned long)timer_ticks);
+    // Clear wake_tick: if we were woken early by a signal, a stale non-zero
+    // wake_tick would cause the timer to attempt proc_wakeup() on a running process.
+    current->wake_tick = 0;
+    // POSIX: return the number of seconds left to sleep if interrupted early.
+    if (timer_ticks < wake_at) {
+        uint64_t ticks_left = wake_at - timer_ticks;
+        return (int)(ticks_left / TICKS_PER_SEC);
+    }
     return 0;
 }
 
@@ -566,6 +594,40 @@ int sys_uptime(void) {
 
 int sys_kill(pid_t pid, int sig) {
     if (sig < 0 || sig > 31) return -1;
+
+    // POSIX: kill(-1, sig) broadcasts to all processes except init (PID 1) and the caller.
+    // Returns -1 (ESRCH) if no eligible targets exist.
+    if (pid == -1) {
+        if (sig == 0) return 0;  // validity check — always succeeds
+        int sent = 0;
+        for (int i = 0; i < MAX_PROCS; i++) {
+            struct proc *p = &proctab[i];
+            // Skip: not yet live, already dead, init, or self.
+            // PROC_CREATED is excluded: the process has no signal context yet
+            // (no trapframe, no user page table, not yet scheduled).
+            if (p->state == PROC_UNUSED ||
+                p->state == PROC_ZOMBIE  ||
+                p->state == PROC_CREATED) continue;
+            if (p->pid == 1 || p == current) continue;
+            sent++;
+            if (sig == KERNEL_SIGCONT) {
+                p->pending_signals &= ~KERNEL_STOP_SIGS;
+                if (p->state == PROC_STOPPED)
+                    proc_unstop(p);
+            } else if (sig == KERNEL_SIGSTOP) {
+                p->pending_signals &= ~(1U << KERNEL_SIGCONT);
+                if (p->state == PROC_READY || p->state == PROC_BLOCKED)
+                    proc_stop(p);
+                else
+                    p->pending_signals |= KERNEL_STOP_SIGS;
+            } else {
+                p->pending_signals |= (1U << sig);
+                if (p->state == PROC_BLOCKED)
+                    proc_unblock(p);
+            }
+        }
+        return (sent > 0) ? 0 : -1;
+    }
 
     struct proc *target = proc_find(pid);
     if (!target || target->state == PROC_UNUSED || target->state == PROC_ZOMBIE)
@@ -952,8 +1014,8 @@ char *sys_getcwd(char *buf, size_t size) {
 
 // Fills user buffer `dirp` with fs_dent records for the directory
 // referenced by `fd`.  Returns bytes written, 0 at end-of-directory, -errno.
-int sys_fs_getdents(int fd, void *dirp, uint32_t count)
-{
+
+int sys_fs_getdents(int fd, void *dirp, uint32_t count){
     if (!current || !dirp) return -EINVAL;
 
     file_t *f = fd_get(&current->fds, fd);
@@ -979,4 +1041,126 @@ int sys_fs_getdents(int fd, void *dirp, uint32_t count)
 
     kfree(kbuf);
     return n;
+}
+/* ------------------------------------------------------------------ */
+/* sys_getrusage                                                        */
+/* ------------------------------------------------------------------ */
+
+int sys_getrusage(int who, struct rusage *usage) {
+    if (!current || !usage) return -1;
+
+    uint64_t ticks;
+    if (who == RUSAGE_SELF) {
+        ticks = current->utime_ticks;
+    } else if (who == RUSAGE_CHILDREN) {
+        ticks = current->children_utime;
+    } else {
+        return -1;
+    }
+
+    struct rusage ku;
+    ku.ru_utime.tv_sec  = ticks / TICKS_PER_SEC;
+    ku.ru_utime.tv_usec = (ticks % TICKS_PER_SEC) * (1000000ULL / TICKS_PER_SEC);
+    ku.ru_stime.tv_sec  = 0;
+    ku.ru_stime.tv_usec = 0;
+
+    set_csr_bit(sstatus, SSTATUS_SUM);
+    *usage = ku;
+    clear_csr_bit(sstatus, SSTATUS_SUM);
+
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* sys_nice                                                             */
+/* ------------------------------------------------------------------ */
+
+/*
+ * sys_nice(increment) — adjust the calling process's scheduling priority.
+ *
+ * Convention (matching struct proc.priority): 0 = highest, 19 = lowest,
+ * which mirrors the Unix nice-value range [0, 19] used by this kernel.
+ *
+ * Positive increment lowers priority (background work).
+ * Negative increment raises priority; clamped to 0 regardless of privilege
+ * because this kernel has no uid concept.
+ *
+ * POSIX semantics:
+ *   nice(0)  — returns current priority without changing it.
+ *   Return value is the new priority on success, -1 if current == NULL.
+ *
+ * Overflow safety: intermediate arithmetic is widened to long (64-bit on
+ * RISC-V) before clamping so that INT_MIN/INT_MAX arguments cannot wrap.
+ */
+int sys_nice(int increment) {
+    if (!current) return -1;
+    long new_prio = (long)current->priority + (long)increment;
+    if (new_prio < 0)  new_prio = 0;
+    if (new_prio > 19) new_prio = 19;
+    current->priority = (int)new_prio;
+    return (int)new_prio;
+}
+
+/*
+ * sys_yield() — voluntarily relinquish the CPU.
+ *
+ * Calls proc_yield(), which re-enqueues the calling process as READY at
+ * its current MLFQ level (priority preserved, no demotion) and switches
+ * to the scheduler.  The process resumes normally once the scheduler
+ * selects it again.
+ *
+ * If no other process is runnable, proc_yield() re-selects the same
+ * process immediately — one extra context switch but no functional issue.
+ *
+ * POSIX sched_yield() always returns 0.
+ */
+int sys_yield(void) {
+    proc_yield();
+    return 0;
+}
+
+/*
+ * sys_pause() — suspend the calling process until any signal is delivered.
+ *
+ * Uses &current->pending_signals as the sleep channel so the timer's
+ * proc_wakeup(p) call (which uses the proc pointer as channel) cannot
+ * accidentally wake us. Only proc_unblock() from sys_kill wakes us.
+ *
+ * proc_sleep() checks SIGSTOP and KERNEL_FATAL_SIGS on wakeup and
+ * handles them (stop or exit) before returning here.
+ *
+ * POSIX: always returns -1 (EINTR).
+ */
+int sys_pause(void) {
+    // If a non-fatal, unmasked signal is already pending, return immediately.
+    // (Fatal ones were caught at syscall entry; we'd never reach here if they were set.)
+    uint32_t check = current->pending_signals & ~current->signal_mask
+                     & ~KERNEL_FATAL_SIGS & ~KERNEL_STOP_SIGS;
+    if (check) return -1;
+    proc_sleep(&current->pending_signals);
+    return -1;
+}
+
+/*
+ * A POSIX-conforming ps should show at minimum: PID, PPID, state, priority (if implemented), and name
+ * NOTE: As of now, PIDs are strictly incremented only. If we look to implement PID recycling, this would risk PID races,
+ * and after a certain PID value limit reached, would look for the lowest available PID value.
+*/
+int sys_procinfo(struct proc_info *infos, int max_count) {
+    int count = 0;
+    // infos points into user space; enable SUM so S-mode can write U-bit pages.
+    set_csr_bit(sstatus, SSTATUS_SUM);
+    for (int i = 0; i < MAX_PROCS && count < max_count; i++) {
+        struct proc *p = &proctab[i];
+        if (p->state == PROC_UNUSED) continue;
+        infos[count].pid       = p->pid;
+        infos[count].ppid      = p->parent ? p->parent->pid : 0;
+        strncpy(infos[count].name, p->name, 15);
+        infos[count].state     = (int)p->state;
+        infos[count].priority  = p->priority;
+        infos[count].cpu_ticks = p->utime_ticks;
+        count++;
+    }
+    clear_csr_bit(sstatus, SSTATUS_SUM);
+    return count;
 }

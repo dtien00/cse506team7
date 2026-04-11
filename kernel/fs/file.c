@@ -205,15 +205,26 @@ int path_resolve(const char *base, const char *input, char *out) {
 }
 
 file_t *file_open(const char *path) {
-    if (!path || !current || !current->fs) return NULL;
-
-    char cwd[MAX_PATH];
-    if (fs_struct_get_cwd(current->fs, cwd, MAX_PATH) < 0)
-        return NULL;
+    if (!path) return NULL;
 
     char resolved[MAX_PATH];
-    if (path_resolve(cwd, path, resolved) < 0)
-        return NULL;
+    if (path[0] == '/') {
+        /*
+         * Absolute path — CWD is irrelevant.  Resolve directly from root
+         * so kernel-internal callers (exec, tests) can open files by
+         * absolute path without a live process context.
+         */
+        if (path_resolve("/", path, resolved) < 0)
+            return NULL;
+    } else {
+        /* Relative path — requires a process with an initialized cwd. */
+        if (!current || !current->fs) return NULL;
+        char cwd[MAX_PATH];
+        if (fs_struct_get_cwd(current->fs, cwd, MAX_PATH) < 0)
+            return NULL;
+        if (path_resolve(cwd, path, resolved) < 0)
+            return NULL;
+    }
 
     // printk("opening file at: %s", resolved);
 
