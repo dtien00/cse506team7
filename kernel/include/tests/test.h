@@ -29,4 +29,5 @@ void timer_test_run(void);
 void kill_test_run(void);
 void cow_test_run(void);
 void stack_growth_test_run(void);
+void ext2_populate_test_run(void);
 void accounting_test_run(void);

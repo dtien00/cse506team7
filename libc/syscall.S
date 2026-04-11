@@ -14,6 +14,7 @@
 .global getuid
 .global getgid
 .global lseek
+.global sync
 .global pipe
 .global dup
 .global dup2
@@ -36,6 +37,7 @@
 .global sched_yield
 .global pause
 .global procinfo
+
 
 mmap:
     li a7, 14
@@ -113,7 +115,12 @@ getgid:
     ret
 
 lseek:
-    li a7, 18
+    li a7, 17
+    ecall
+    ret
+
+sync:
+    li a7, 20
     ecall
     ret
 
@@ -138,7 +145,7 @@ chdir:
     ret
 
 getcwd:
-    li a7, 19
+    li a7, 27
     ecall
     ret
 
@@ -153,7 +160,7 @@ fstat:
     ret
 
 mkdir:
-    li a7, 83
+    li a7, 19
     ecall
     ret
 
@@ -173,7 +180,7 @@ fs_getdents:
     ret
 
 unlink:
-    li a7, 87
+    li a7, 18
     ecall
     ret
 
@@ -198,30 +205,31 @@ readlink:
     ret
 
 sigprocmask:
-    li a7, 20
+    li a7, 26
     ecall
     ret
+
 getrusage:
-    li a7, 24
-    ecall
-    ret
-
-nice:
-    li a7, 25
-    ecall
-    ret
-
-sched_yield:
-    li a7, 27
-    ecall
-    ret
-
-pause:
     li a7, 28
     ecall
     ret
 
+nice:
+    li a7, 29
+    ecall
+    ret
+
 procinfo:
-    li a7, 26
+    li a7, 30
+    ecall
+    ret
+
+sched_yield:
+    li a7, 31
+    ecall
+    ret
+
+pause:
+    li a7, 32
     ecall
     ret

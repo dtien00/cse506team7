@@ -74,7 +74,11 @@ void *pmm_alloc_page(void) {
       bitmap_set(i);
       free_pages--;
       refcounts[i] = 1;
-      return (void *)(mem_start_addr + i * PGSIZE);
+      void *ret = (void *)(mem_start_addr + i * PGSIZE);
+      // if ((uintptr_t)ret == 0x804b7000)
+      //     printk("PMM: pmm_alloc_page returning 0x804b7000! ra=%p\n",
+      //            __builtin_return_address(0));
+      return ret;
     }
   }
   
@@ -85,7 +89,13 @@ void pmm_free_page(void *page) {
   if (page == NULL) {
     return;
   }
-  
+
+  // Poison canary: detect when init's page table root (or any suspicious
+  // page) is freed.  Adjust the address once you know which page is dying.
+  // if ((uintptr_t)page == 0x804b7000)
+  //     printk("PMM: pmm_free_page(0x804b7000) called! ra=%p\n",
+  //            __builtin_return_address(0));
+
   uintptr_t addr = (uintptr_t)page;
   
   // Validate address

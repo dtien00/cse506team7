@@ -7,6 +7,9 @@
 // UART is IRQ 10 on the QEMU virt machine
 #define PLIC_UART_IRQ 10
 
+// virtio-blk is IRQ 1 on the QEMU virt machine (first virtio device)
+#define PLIC_VIRTIO_IRQ 1
+
 // Register addresses (supervisor-mode, hart 0)
 // Priority:  one uint32_t per IRQ source
 #define PLIC_PRIORITY(irq) (*(volatile uint32_t *) (PLIC_BASE + 4 * (irq)))

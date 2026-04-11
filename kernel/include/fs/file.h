@@ -33,6 +33,9 @@ typedef struct file {
     // for type FILE_PIPE only
     pipe_t *pipe;
     int pipe_flags;
+
+    // actual file flags
+    int flags;
 } file_t;
 
 // File descriptor table (lives in process_t)

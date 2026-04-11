@@ -1,8 +1,8 @@
 #include "unistd.h"
 #include "sys/stat.h"
 
-#define SYS_exit   1
-#define SYS_sleep  11
+#define SYS_exit  1
+#define SYS_sleep 11
 #define SYS_uptime 12
 
 void _exit(int status) {

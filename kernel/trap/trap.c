@@ -7,9 +7,10 @@
 #include "mm/vmm.h"
 #include "mm/pmm.h"
 #include "mm/vma.h"
-#include "string.h"   // memset
+#include "lib/string.h"   // memset
 #include "drivers/plic.h"
 #include "drivers/uart.h"
+#include "drivers/virtio.h"
 
 #define TIMER_INTERVAL 1000000ULL // ~0.1 second at 10 MHz clock
 
@@ -131,6 +132,7 @@ void trap_init(void) {
 }
 
 static void handle_interrupt(trap_frame *frame) {
+    // printk("Handling interrupt");
     uint64_t interrupt_code = frame->scause & ~SCAUSE_INTERRUPT; // calculate exception code by removing interrupt bit
 
     switch (interrupt_code) {
@@ -144,18 +146,18 @@ static void handle_interrupt(trap_frame *frame) {
             timer_handler();
             break;
 
-        case SCAUSE_S_EXTERNAL_INT:
-            // printk("External interrupt\n");
+        case SCAUSE_S_EXTERNAL_INT: {
             uint32_t irq = plic_claim();
             if (irq == PLIC_UART_IRQ) {
-                // handle the interrupt - adds to the driver's char buffer which a waiting read() can query later
                 uart_handle_interrupt();
+            } else if (irq == PLIC_VIRTIO_IRQ) {
+                virtio_blk_irq();
             }
-            // complete the interrupt
             if (irq != 0) {
                 plic_complete(irq);
             }
             break;
+        }
 
         default:
             printk("Unknown interrupt: %d\n", interrupt_code);
@@ -489,11 +491,16 @@ uint64_t timer_ticks = 0;
 void timer_handler(void) {
     timer_ticks++;
     sbi_set_timer(read_csr(time) + TIMER_INTERVAL);
+    if (timer_ticks % 5 == 0)
+        // printk("  [kernel] timer_handler: tick=%d current=%d\n",
+        //        (unsigned long)timer_ticks, current ? current->pid : -1);
 
     // Wake any processes whose timed sleep deadline has expired.
     for (int i = 0; i < MAX_PROCS; i++) {
         struct proc *p = &proctab[i];
         if (p->state == PROC_BLOCKED && p->wake_tick != 0 && timer_ticks >= p->wake_tick) {
+            // printk("  [kernel] timer_handler: waking pid=%d at tick=%lu\n",
+            //        p->pid, (unsigned long)timer_ticks);
             p->wake_tick = 0;
             proc_wakeup(p);  // p slept on itself (chan == p)
         }

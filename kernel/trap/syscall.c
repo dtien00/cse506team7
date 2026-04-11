@@ -1,6 +1,6 @@
 #include "trap/syscall.h"
 #include "arch/riscv.h"
-#include "sys/procinfo.h"
+#include "process/process.h"
 #include "errno.h"
 #include "kernel/printk.h"
 #include "kernel/resource.h"
@@ -11,6 +11,7 @@
 #include "mm/vma.h"
 #include "process/process.h"
 #include "trap/trap.h"
+#include "fs/block_cache.h"
 #include "signal.h"
 
 
@@ -170,11 +171,15 @@ void syscall_handler(trap_frame *frame) {
             break;
 
         case SYS_sleep:
+            // printk("  [kernel] syscall_handler: dispatching SYS_sleep(%d)\n", (int)arg0);
             ret = sys_sleep((int) arg0);
+            // printk("  [kernel] syscall_handler: SYS_sleep returned %d\n", ret);
             break;
 
         case SYS_uptime:
+            // printk("  [kernel] syscall_handler: dispatching SYS_uptime\n");
             ret = sys_uptime();
+            // printk("  [kernel] syscall_handler: SYS_uptime returned %d\n", ret);
             break;
 
         case SYS_kill:
@@ -194,6 +199,22 @@ void syscall_handler(trap_frame *frame) {
             ret = sys_brk((void *) arg0);
             break;
 
+        case SYS_lseek:
+            ret = (uint64_t)(int64_t)sys_lseek((int) arg0, (off_t) arg1, (int) arg2);
+            break;
+
+        case SYS_unlink:
+            ret = sys_unlink((const char *) arg0);
+            break;
+
+        case SYS_mkdir:
+            ret = sys_mkdir((const char *) arg0, (mode_t) arg1);
+            break;
+
+        case SYS_sync:
+            ret = sys_sync();
+            break;
+
         case SYS_pipe:
             ret = sys_pipe((int *) arg0);
             break;
@@ -205,17 +226,13 @@ void syscall_handler(trap_frame *frame) {
         case SYS_dup2:
             ret = sys_dup2((int) arg0, (int) arg1);
             break;
-        
+
         case SYS_waitpid:
             ret = sys_waitpid((pid_t) arg0, (int *) arg1, (int) arg2);
             break;
 
         case SYS_sigprocmask:
             ret = sys_sigprocmask((int)arg0, (uint32_t *)arg1, (uint32_t *)arg2);
-            break;
-
-        case SYS_lseek:
-            ret = (uint64_t)(int64_t)sys_lseek((int)arg0, (off_t)arg1, (int)arg2);
             break;
 
         case SYS_chdir:
@@ -393,9 +410,36 @@ int sys_open(const char *path, int flags) {
     kpath[MAX_PATH - 1] = '\0';
     clear_csr_bit(sstatus, SSTATUS_SUM);
 
-    // Everything below works entirely in kernel memory
-    file_t *f = file_open(kpath);
+    // Resolve path relative to cwd before doing anything else
+    char cwd[MAX_PATH];
+    if (fs_struct_get_cwd(current->fs, cwd, MAX_PATH) < 0) return -ENAMETOOLONG;
+    char resolved[MAX_PATH];
+    if (path_resolve(cwd, kpath, resolved) < 0) return -ENAMETOOLONG;
+
+    // If O_CREAT is set and the file doesn't exist, create it
+    if (flags & O_CREAT) {
+        dentry_t *d = vfs_lookup(resolved);
+        if (!d) {
+            if (vfs_create(resolved, 0644) < 0) return -ENOENT;
+        } else {
+            dentry_put(d);
+        }
+    }
+
+    file_t *f = file_open(resolved);
     if (!f) return -ENOENT;
+
+    f->flags = flags;
+
+    // O_TRUNC: discard existing content
+    if ((flags & O_TRUNC) && (flags & (O_WRONLY | O_RDWR))) {
+        if (f->vnode && f->vnode->mount && f->vnode->mount->fs_type->ops.truncate)
+            f->vnode->mount->fs_type->ops.truncate(f->vnode);
+    }
+
+    // O_APPEND: start writes at end of file
+    if (flags & O_APPEND)
+        f->offset = f->vnode ? f->vnode->size : 0;
 
     return fd_alloc(&current->fds, f);
 }
@@ -544,6 +588,7 @@ int sys_sleep(int seconds) {
 }
 
 int sys_uptime(void) {
+    // printk("  [kernel] sys_uptime: timer_ticks=%lu\n", (unsigned long)timer_ticks);
     return (int)timer_ticks;
 }
 
@@ -854,6 +899,56 @@ void *sys_sbrk(intptr_t increment) {
     return old_break;
 }
 
+off_t sys_lseek(int fd, off_t offset, int whence) {
+    if (!current) return -1;
+
+    file_t *f = fd_get(&current->fds, fd);
+    if (!f) {
+        printk("sys_lseek: invalid fd %d\n", fd);
+        return -1;
+    }
+
+    // Don't allow seeking on stdin/stdout/stderr
+    if (f->type == FILE_STDIN || f->type == FILE_STDOUT) {
+        return -1;
+    }
+
+    return (off_t)file_lseek(f, (size_t)offset, whence);
+}
+
+int sys_unlink(const char *path) {
+    if (!current) return -1;
+
+    set_csr_bit(sstatus, SSTATUS_SUM);
+    char kpath[MAX_PATH];
+    strncpy(kpath, path, MAX_PATH - 1);
+    kpath[MAX_PATH - 1] = '\0';
+    clear_csr_bit(sstatus, SSTATUS_SUM);
+
+    return vfs_unlink(kpath);
+}
+
+int sys_mkdir(const char *path, mode_t mode) {
+    if (!current) return -1;
+
+    set_csr_bit(sstatus, SSTATUS_SUM);
+    char kpath[MAX_PATH];
+    strncpy(kpath, path, MAX_PATH - 1);
+    kpath[MAX_PATH - 1] = '\0';
+    clear_csr_bit(sstatus, SSTATUS_SUM);
+
+    char cwd[MAX_PATH];
+    if (fs_struct_get_cwd(current->fs, cwd, MAX_PATH) < 0) return -ENAMETOOLONG;
+    char resolved[MAX_PATH];
+    if (path_resolve(cwd, kpath, resolved) < 0) return -ENAMETOOLONG;
+
+    return vfs_mkdir(resolved, mode);
+}
+
+int sys_sync(void) {
+    return block_cache_flush();
+}
+
 int sys_sigprocmask(int how, const uint32_t *set, uint32_t *oldset) {
     if (!current) return -1;
 
@@ -885,20 +980,6 @@ int sys_sigprocmask(int how, const uint32_t *set, uint32_t *oldset) {
     return 0;
 }
 
-/* ------------------------------------------------------------------ */
-/* sys_lseek                                                           */
-/* ------------------------------------------------------------------ */
-
-off_t sys_lseek(int fd, off_t offset, int whence) {
-    file_t *f = fd_get(&current->fds, fd);
-    if (!f) return -1;
-    return (off_t)file_lseek(f, (size_t)offset, whence);
-}
-
-/* ------------------------------------------------------------------ */
-/* sys_chdir                                                           */
-/* ------------------------------------------------------------------ */
-
 int sys_chdir(const char *path) {
     if (!current || !path) return -EINVAL;
 
@@ -908,12 +989,8 @@ int sys_chdir(const char *path) {
     kpath[MAX_PATH - 1] = '\0';
     clear_csr_bit(sstatus, SSTATUS_SUM);
 
-    return vfs_chdir(kpath);   // VFS owns everything below
+    return vfs_chdir(kpath);
 }
-
-/* ------------------------------------------------------------------ */
-/* sys_getcwd                                                          */
-/* ------------------------------------------------------------------ */
 
 char *sys_getcwd(char *buf, size_t size) {
     if (!current || !buf || size == 0 || !current->fs) return NULL;
@@ -922,6 +999,8 @@ char *sys_getcwd(char *buf, size_t size) {
     char kbuf[MAX_PATH];
     if (fs_struct_get_cwd(current->fs, kbuf, MAX_PATH) < 0)
         return NULL;
+    printk("[sys_getcwd] pid=%d cwd='%s' cwd_dentry=%p\n",
+           current->pid, kbuf, current->fs->cwd);
 
     size_t cwd_len = strlen(kbuf);
     if (cwd_len + 1 > size) return NULL;   // user buffer too small
@@ -933,9 +1012,6 @@ char *sys_getcwd(char *buf, size_t size) {
     return buf;
 }
 
-/* ------------------------------------------------------------------ */
-/* sys_getdents64                                                     */
-/* ------------------------------------------------------------------ */
 // Fills user buffer `dirp` with fs_dent records for the directory
 // referenced by `fd`.  Returns bytes written, 0 at end-of-directory, -errno.
 

@@ -8,7 +8,7 @@
 #include "mm/kmalloc.h"   // needed for kmalloc/kfree in exec()
 #include "mm/vma.h"
 #include "types.h"
-#include "string.h"
+#include "lib/string.h"
 #include "elf/elf.h"
 #include "fs/file.h"
 
@@ -65,9 +65,9 @@ void proc_init(void) {
     init->fs = fs_struct_alloc();
     fs_struct_set_root(init->fs, "/");   // set where "/" is
     fs_struct_set_cwd(init->fs, "/");    // set where we are
-
-    // Prepare argv for /bin/echo
-    static char *argv[] = { "sh", NULL };
+    // Prepare argv for /bin/init
+    static char *argv[] = { "init", NULL };
+    // Set current to init so exec uses the right process
     current = init;
     if (exec("/bin/init", argv) < 0) {
         printk("[init] exec failed for /bin/init, falling back to /bin/sh\n");
@@ -123,7 +123,11 @@ static void proc_free_pagetable(struct proc *p) {
     }
 }
 
-/* Full teardown — used by proc_exit() */
+/* Full teardown — used by proc_exit().
+ * Does NOT free the page table: the zombie must remain mapped until the
+ * parent calls waitpid() and proc_free() reaps it.  Freeing the page table
+ * here would return its physical pages to the PMM while the scheduler may
+ * still switch to them (e.g. for a sibling process). */
 void proc_destroy(struct proc *p) {
     if (!p) return;
 
@@ -408,7 +412,6 @@ int exec(const char *path, char *const argv[]) {
     // 3. Create a fresh page table and VMA list for the new image
     pagetable_t new_pt = vmm_create_pagetable();
     if (!new_pt) goto fail_file;
-
     struct vm_area *new_vma_list = NULL;
     vma_init(&new_vma_list);
 
@@ -465,13 +468,11 @@ int exec(const char *path, char *const argv[]) {
             remaining -= chunk;
         }
         // p_memsz > p_filesz (BSS) is already zero from memset above
-
         // Create VMA for this segment
         uint32_t vma_prot = 0;
         if (phdr.p_flags & PF_R) vma_prot |= VMA_PROT_READ;
         if (phdr.p_flags & PF_W) vma_prot |= VMA_PROT_WRITE;
         if (phdr.p_flags & PF_X) vma_prot |= VMA_PROT_EXEC;
-
         struct vm_area *seg_vma = vma_create(seg_start, seg_end, vma_prot, VMA_PRIVATE, VMA_TYPE_FILE);
         if (!seg_vma) goto fail_vma;
         if (vma_insert(&new_vma_list, seg_vma) != 0) {

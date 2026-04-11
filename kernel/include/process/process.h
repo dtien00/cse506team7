@@ -34,6 +34,15 @@
 extern struct proc *current;
 extern uint8_t kstacks[][KSTACK_SIZE];
 
+struct proc_info {
+    int   pid;
+    int   ppid;
+    char  name[16];
+    int   state;    // 0=unused,1=created,2=ready,3=running,4=blocked,5=zombie,6=stopped
+    int   priority; // 0 if not implemented
+    uint64_t cpu_ticks;
+};
+
 // Saved context for kernel-to-kernel context switch (callee-saved regs only).
 // Field order must match register save/load order in swtch.S.
 struct context {
