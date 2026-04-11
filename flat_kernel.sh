@@ -93,7 +93,12 @@ echo "Rewriting #include paths in $DEST/tools ..."
 
 find "$DEST/tools" -type f \( -name "*.c" -o -name "*.h" \) | while read -r filepath; do
     # ../kernel/include/fs/file.h  ->  ../kernel/include/kfile.h
-    perl -i -pe 's{#include\s*"\.\./kernel/[^"]*?([^"/]+\.h)"}{#include "../kernel/include/k$1"}g' "$filepath"
+    # kernel/types.h, fs/ext2.h (with -Ikernel/include in tree)  ->  ../kernel/include/ktypes.h, kext2.h
+    perl -i -pe '
+        s{#include\s*"\.\./kernel/[^"]*?([^"/]+\.h)"}{#include "../kernel/include/k$1"}g;
+        s{#include\s*"kernel/[^"]*?([^"/]+\.h)"}{#include "../kernel/include/k$1"}g;
+        s{#include\s*"fs/[^"]*?([^"/]+\.h)"}{#include "../kernel/include/k$1"}g;
+    ' "$filepath"
 done
 
 echo "Done. Flat copy is in '$DEST'."

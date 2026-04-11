@@ -1,8 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "../kernel/include/kernel/types.h"
-#include "../kernel/include/fs/ext2.h"
+#include "kernel/types.h"
+#include "fs/ext2.h"
 
 #define SEEK_SET 0
 #define SEEK_CUR 1

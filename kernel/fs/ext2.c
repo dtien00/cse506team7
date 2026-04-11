@@ -1064,9 +1064,17 @@ int ext2_mkdir(mount_t *mnt, const char *path, uint32_t mode) {
         kfree(path_copy);
         return -1;
     }
-    
+
     ext2_inode_t *parent_inode = (ext2_inode_t *)parent_vnode->fs_data;
-    
+
+    // Check if the directory already exists
+    if (ext2_lookup_in_dir(ext2_mnt, parent_inode, dirname) != 0) {
+        kfree(parent_vnode->fs_data);
+        kfree(parent_vnode);
+        kfree(path_copy);
+        return -17; // -EEXIST
+    }
+
     // Allocate new inode
     uint32_t new_ino = ext2_alloc_inode(ext2_mnt);
     if (new_ino == 0) {

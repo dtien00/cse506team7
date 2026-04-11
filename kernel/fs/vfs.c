@@ -291,8 +291,11 @@ dentry_t *vfs_lookup(const char *path) {
     }
 
     // Walk from root down, building a dentry chain.
-    // parent starts as NULL (the VFS root has no parent dentry here).
-    dentry_t *parent = NULL;
+    // Use the mount's root dentry as the initial parent so that single-component
+    // paths like "/mnt" get a proper parent and dentry_build_path can reconstruct
+    // the full path (otherwise parent=NULL makes the dentry self-referential,
+    // indistinguishable from the root, and dentry_build_path returns "/").
+    dentry_t *parent = mnt->root;
 
     for (int i = 0; i < ncomps; i++) {
         // Restore the slash that was nulled so the prefix up through
@@ -450,18 +453,14 @@ int vfs_chdir(const char *kpath) {
     if (path_resolve(cwd_str, kpath, resolved) < 0)
         return -ENAMETOOLONG;
 
-    // 3. Verify the target actually exists and is a directory
-    dentry_t *d = vfs_lookup(resolved);
-    if (!d) return -ENOENT;
-    if (d->d_vnode->type != VNODE_DIR) {
-        dentry_put(d);
-        return -ENOTDIR;
-    }
+    printk("[vfs_chdir] cwd='%s' input='%s' resolved='%s'\n",
+           cwd_str, kpath, resolved);
 
-    // 4. Hand off to fs_struct — it swaps the cwd dentry
-    const int ret = fs_struct_set_cwd(current->fs, resolved);
-    dentry_put(d);
-    return ret;
+    // 3. Hand off to fs_struct — it looks up, validates, and swaps the cwd dentry
+    int rc = fs_struct_set_cwd(current->fs, resolved);
+    printk("[vfs_chdir] fs_struct_set_cwd returned %d, new cwd dentry=%p\n",
+           rc, current->fs->cwd);
+    return rc;
 }
 
 // -----------------------------------------------------------------------------
