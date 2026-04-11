@@ -379,15 +379,25 @@ ssize_t sys_write(int fd, const void *buf, size_t count) {
     return n;
 }
 
+// int sys_open(const char *path, int flags) {
+//     (void) flags;
+//     if (!current || !path) return -EINVAL;
+//
+//     char kpath[MAX_PATH];
+//     strncpy_from_user(kpath, path, MAX_PATH - 1);
+//     kpath[MAX_PATH - 1] = '\0';
+//
+//     return file_open(kpath);
+// }
+
 int sys_open(const char *path, int flags) {
-    (void) flags;
     if (!current || !path) return -EINVAL;
 
     char kpath[MAX_PATH];
     strncpy_from_user(kpath, path, MAX_PATH - 1);
     kpath[MAX_PATH - 1] = '\0';
 
-    return file_open(kpath);
+    return file_open_with_flags(kpath, flags);
 }
 
 int sys_close(int fd) {

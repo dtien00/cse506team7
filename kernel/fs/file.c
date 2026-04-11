@@ -220,6 +220,10 @@ int path_resolve(const char *input, char *out) {
 }
 
 int file_open(const char *path) {
+    return file_open_with_flags(path, O_RDONLY);
+}
+
+int file_open_with_flags(const char *path, int flags) {
     if (!path || !current || !current->fs)
         return -EINVAL;
 
@@ -227,18 +231,43 @@ int file_open(const char *path) {
     if (path_resolve(path, resolved) != 0)
         return -ENAMETOOLONG;
 
+    if (flags & O_CREAT) {
+        dentry_t *existing = vfs_lookup(resolved);
+        if (existing) {
+            // vfs_lookup returns an unowned dentry; take a transient ref before put.
+            dentry_get(existing);
+            dentry_put(existing);
+            if (flags & O_EXCL)
+                return -EEXIST;
+        } else {
+            int create_rc = vfs_create(resolved, 0644);
+            if (create_rc < 0)
+                return create_rc;
+        }
+    }
+
     dentry_t *d = vfs_lookup(resolved);
     if (!d)
         return -ENOENT;
 
+    // Hold one owned ref for this open-file instance and all error unwind paths below.
+    dentry_get(d);
+
+    if ((flags & O_DIRECTORY) && d->d_vnode && d->d_vnode->type != VNODE_DIR) {
+        dentry_put(d);
+        return -ENOTDIR;
+    }
+
     // 2. Allocate the file_t wrapper
     file_t *f = NULL;
     f = kzalloc(sizeof(file_t));
-    if (!f)
+    if (!f) {
+        dentry_put(d);
         return -ENOMEM;
+    }
 
     // 3. Wire it up
-    dentry_get(d); // file_t now owns a reference to the dentry
+    // file_t now owns the ref acquired above.
     f->dentry = d;
     f->vnode = d->d_vnode;
     f->type = FILE_VNODE;
@@ -246,12 +275,22 @@ int file_open(const char *path) {
     f->ref_count = 1;
     f->pipe = NULL;
     f->pipe_flags = 0;
+    f->flags = flags;
+
+    if ((flags & O_TRUNC) && (flags & (O_WRONLY | O_RDWR))) {
+        if (f->vnode && f->vnode->mount && f->vnode->mount->fs_type && f->vnode->mount->fs_type->ops.truncate)
+            f->vnode->mount->fs_type->ops.truncate(f->vnode);
+    }
+
+    if (flags & O_APPEND)
+        f->offset = f->vnode ? f->vnode->size : 0;
 
     int fd = fd_alloc(&current->fds, f);
     if (fd < 0) {
         file_release(f);
         return -EMFILE;
     }
+
     return fd;
 }
 

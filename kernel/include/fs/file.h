@@ -1,7 +1,18 @@
 #pragma once
 #include "kernel/types.h"
 #include "fs/dentry.h"
-// process level manager
+
+// Open flags (must match libc/include/fcntl.h)
+#define O_RDONLY    0x0000
+#define O_WRONLY    0x0001
+#define O_RDWR      0x0002
+#define O_CREAT     0x0040
+#define O_EXCL      0x0080
+#define O_TRUNC     0x0200
+#define O_APPEND    0x0400
+#define O_NONBLOCK  0x0800
+#define O_DIRECTORY 0x10000
+#define O_CLOEXEC   0x80000
 
 #define MAX_FDS 16 // or however many per process
 #define MAX_PATH 256
@@ -75,6 +86,7 @@ void fd_init(fd_table_t *table); // sets up stdin/stdout/stderr
 // I/O operations (moved from vfs.h)
 int path_resolve(const char *input, char *out);
 int file_open(const char *path);
+int file_open_with_flags(const char *path, int flags);
 int file_close(int fd);
 int file_read(int fd, void *buf, size_t len);
 int file_write(int fd, const void *buf, size_t len);
