@@ -515,14 +515,11 @@ void timer_handler(void) {
         // time_slice == 0 means non-preemptible; do NOT yield here.
     }
 
-    // Starvation prevention: every MLFQ_BOOST_INTERVAL ticks, move all BLOCKED and lower-queue READY processes back to level 0.
-    if (timer_ticks % MLFQ_BOOST_INTERVAL == 0) {
-        for (int i = 0; i < MAX_PROCS; i++) {
-            if (proctab[i].state == PROC_BLOCKED ||
-                proctab[i].state == PROC_READY)
-                proctab[i].mlfq_level = 0;
-        }
-    }
+    // Starvation prevention: every MLFQ_BOOST_INTERVAL ticks, reset all
+    // eligible processes to level 0.  See mlfq_boost() in scheduler.c for
+    // the per-state logic (READY processes are physically re-queued).
+    if (timer_ticks % MLFQ_BOOST_INTERVAL == 0)
+        mlfq_boost();
 }
 
 // Set/clear the SIE (supervisor interrupt enable) bit in sstatus

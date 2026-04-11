@@ -109,11 +109,9 @@ void proc_yield(void) {
 //         swtch(&boot_context, &next->context);
 // }
 
-void proc_ready(struct proc *p) {
-    if (p->state == PROC_READY) return; // Guard clause against a process that's already in the READY state, which can corrupt MLFQ linked list.
-    p->state = PROC_READY;
-    p->time_slice = (1 << p->mlfq_level);
-    p->next = NULL;
+// Insert p into its MLFQ level, sorted by priority (lower value = higher priority).
+// Caller must set p->mlfq_level, p->time_slice, and p->next = NULL before calling.
+static void mlfq_insert(struct proc *p) {
     int lvl = p->mlfq_level;
     if (mlfq[lvl] == NULL || p->priority < mlfq[lvl]->priority) {
         p->next = mlfq[lvl];
@@ -125,6 +123,79 @@ void proc_ready(struct proc *p) {
         cur = cur->next;
     p->next = cur->next;
     cur->next = p;
+}
+
+void proc_ready(struct proc *p) {
+    if (p->state == PROC_READY) return; // Guard: already READY would corrupt the MLFQ list.
+    p->state = PROC_READY;
+    p->time_slice = (1 << p->mlfq_level);
+    p->next = NULL;
+    mlfq_insert(p);
+}
+
+/*
+ * mlfq_boost — starvation-prevention priority reset, called every
+ * MLFQ_BOOST_INTERVAL ticks by timer_handler.
+ *
+ * The old inline code only wrote p->mlfq_level = 0 for READY processes but
+ * left them sitting in their original queue (e.g. mlfq[2]).  proc_next_ready
+ * scans by queue index, so those processes kept their low scheduling priority
+ * until they happened to exhaust their current time slice and were re-enqueued.
+ * Under a steady stream of high-priority work they could be starved
+ * indefinitely despite the "boost".
+ *
+ * Correct per-state handling:
+ *
+ *   READY   — Dequeue from current level, reset mlfq_level to 0 and
+ *              time_slice to 1, reset total_time, and re-insert into
+ *              mlfq[0].  The process is immediately eligible to be
+ *              scheduled ahead of all lower-level work.
+ *              Processes already at level 0 are skipped (no-op).
+ *
+ *   BLOCKED — Just reset mlfq_level to 0.  The process is not in any
+ *              MLFQ queue; when it eventually wakes, proc_unblock() calls
+ *              proc_ready() which will enqueue it at level 0.
+ *
+ *   RUNNING — Not in any queue.  Reset mlfq_level and total_time so the
+ *              process re-enters the scheduler at level 0 on its next
+ *              yield or preemption.
+ */
+void mlfq_boost(void) {
+    for (int i = 0; i < MAX_PROCS; i++) {
+        struct proc *p = &proctab[i];
+
+        if (p->state == PROC_BLOCKED) {
+            p->mlfq_level = 0;
+
+        } else if (p->state == PROC_READY && p->mlfq_level > 0) {
+            // Dequeue from the current (lower) level.
+            int lvl = p->mlfq_level;
+            if (mlfq[lvl] == p) {
+                mlfq[lvl] = p->next;
+            } else {
+                struct proc *cur = mlfq[lvl], *prev = NULL;
+                while (cur) {
+                    if (cur == p) {
+                        if (prev) prev->next = cur->next;
+                        break;
+                    }
+                    prev = cur;
+                    cur = cur->next;
+                }
+            }
+            // Re-insert at level 0 with a fresh time slice.
+            p->next       = NULL;
+            p->mlfq_level = 0;
+            p->time_slice = 1;   /* 1 << 0 */
+            p->total_time = 0;
+            mlfq_insert(p);
+
+        } else if (p->state == PROC_RUNNING) {
+            // Not in any queue; reset so next enqueue lands at level 0.
+            p->mlfq_level = 0;
+            p->total_time = 0;
+        }
+    }
 }
 
 struct proc *proc_next_ready(void) {
