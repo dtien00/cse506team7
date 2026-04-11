@@ -23,7 +23,7 @@
  */
 
 #include <sys/wait.h>
-#include <sys/procinfo.h>
+#include "process/process.h"
 #include <signal.h>
 #include <unistd.h>
 #include "us_test_common.h"

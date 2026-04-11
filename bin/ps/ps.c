@@ -1,5 +1,5 @@
 #include <stdio.h>
-#include <sys/procinfo.h>
+#include "process/process.h"
 
 // Declared in libc/syscall.S -> kernel SYS_procinfo (26)
 int procinfo(struct proc_info *infos, int max_count);
