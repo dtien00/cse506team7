@@ -84,7 +84,6 @@ void fd_destroy(fd_table_t *table);
 void fd_init(fd_table_t *table); // sets up stdin/stdout/stderr
 
 // I/O operations (moved from vfs.h)
-int path_resolve(const char *input, char *out);
 int file_open(const char *path);
 int file_open_with_flags(const char *path, int flags);
 int file_close(int fd);

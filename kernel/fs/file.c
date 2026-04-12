@@ -138,85 +138,16 @@ void fd_destroy(fd_table_t *table) {
 // -----------------------------------------------------------------------------
 
 /* ------------------------------------------------------------------ */
-/* Resolves 'input' relative to 'base' (cwd) into 'out' (MAX_PATH).  */
-/* Handles absolute paths, ".", "..", and consecutive slashes.        */
-/* Returns 0 on success, -1 if the result would overflow MAX_PATH.   */
-/* This is basic, should switch to dentry caching and finding parent from there   */
+/* Normalize 'input' into an absolute path in 'out'.                  */
+/* Delegates entirely to dentry_normalize_path which handles ".", "..",*/
+/* consecutive slashes, and relative-to-cwd expansion.               */
+/* Returns 0 on success, negative errno on error.                     */
 /* ------------------------------------------------------------------ */
-int path_resolve(const char *input, char *out) {
-    char tmp[MAX_PATH];
-    int pos = 0;
-
-    if (input[0] == '/') {
-        /* Absolute path — copy as-is into tmp for normalization */
-        int i = 0;
-        while (input[i] && pos < MAX_PATH - 1)
-            tmp[pos++] = input[i++];
-        tmp[pos] = '\0';
-    } else {
-        /* Relative path — prepend base */
-        char cwd[MAX_PATH];
-        if (fs_struct_get_cwd(current->fs, cwd, MAX_PATH) != 0)
-            return -ENAMETOOLONG;
-
-        int i = 0;
-        while (cwd[i] && pos < MAX_PATH - 1)
-            tmp[pos++] = cwd[i++];
-        /* Add separator if base doesn't already end with '/' */
-        if (pos > 0 && tmp[pos - 1] != '/' && pos < MAX_PATH - 1)
-            tmp[pos++] = '/';
-        i = 0;
-        while (input[i] && pos < MAX_PATH - 1)
-            tmp[pos++] = input[i++];
-        tmp[pos] = '\0';
-    }
-
-    /* Normalize: walk components into out[] */
-    out[0] = '/';
-    int opos = 1;
-    out[opos] = '\0';
-
-    char *p = tmp;
-    if (*p == '/')
-        p++; /* skip the leading '/' we already placed */
-
-    while (*p) {
-        /* Find end of component */
-        char *slash = p;
-        while (*slash && *slash != '/')
-            slash++;
-        int clen = (int) (slash - p);
-
-        if (clen == 0) {
-            /* consecutive slash — skip */
-        } else if (clen == 1 && p[0] == '.') {
-            /* "." — current dir, skip */
-        } else if (clen == 2 && p[0] == '.' && p[1] == '.') {
-            /* ".." — go up one level */
-            if (opos > 1) {
-                opos--; /* back past the last written char */
-                while (opos > 1 && out[opos - 1] != '/')
-                    opos--;
-                if (opos > 1)
-                    opos--; /* remove the preceding '/' too */
-                out[opos] = '\0';
-            }
-            /* already at root — ".." is a no-op */
-        } else {
-            /* Normal component: append '/' + component */
-            if (opos + 1 + clen >= MAX_PATH)
-                return -1;
-            if (opos > 1)
-                out[opos++] = '/';
-            for (int i = 0; i < clen; i++)
-                out[opos++] = p[i];
-            out[opos] = '\0';
-        }
-
-        p = *slash ? slash + 1 : slash;
-    }
-
-    return 0;
+static int normalize_path(const char *input, char *out, size_t size) {
+    if (!current || !current->fs)
+        return -EINVAL;
+    return dentry_normalize_path(current->fs->cwd, vfs_get_root(),
+                                 input, out, size);
 }
 
 int file_open(const char *path) {
@@ -227,26 +158,28 @@ int file_open_with_flags(const char *path, int flags) {
     if (!path || !current || !current->fs)
         return -EINVAL;
 
-    char resolved[MAX_PATH];
-    if (path_resolve(path, resolved) != 0)
-        return -ENAMETOOLONG;
-
     if (flags & O_CREAT) {
         dentry_t *existing = NULL;
-        int exists = vfs_lookup(resolved, &existing);
+        int exists = vfs_lookup(path, &existing);
         if (exists == 0) {
             dentry_put(existing);
             if (flags & O_EXCL)
                 return -EEXIST;
         } else {
+            /* vfs_create uses vfs_find_mount() which does prefix matching,
+             * so it needs an already-normalized absolute path. */
+            char resolved[MAX_PATH];
+            if (normalize_path(path, resolved, sizeof(resolved)) != 0)
+                return -ENAMETOOLONG;
             int create_rc = vfs_create(resolved, 0644);
             if (create_rc < 0)
                 return create_rc;
         }
     }
 
+    /* vfs_lookup normalizes internally via dentry_normalize_path. */
     dentry_t *d = NULL;
-    int lookup_err = vfs_lookup(resolved, &d);
+    int lookup_err = vfs_lookup(path, &d);
     if (lookup_err)
         return lookup_err;
     // vfs_lookup returns ref=1 — that ref is owned by this open-file instance.
@@ -549,13 +482,9 @@ int file_stat(const char *kpath, struct stat *kst) {
     if (!kpath || !kst || !current || !current->fs)
         return -EINVAL;
 
-    // Resolve the path to a dentry (same path as file_open uses)
-    char resolved[MAX_PATH];
-    if (path_resolve(kpath, resolved) != 0)
-        return -ENAMETOOLONG;
-
+    /* vfs_lookup normalizes internally — no pre-processing needed. */
     dentry_t *d = NULL;
-    int lookup_err = vfs_lookup(resolved, &d);
+    int lookup_err = vfs_lookup(kpath, &d);
     if (lookup_err)
         return lookup_err;
 

@@ -337,22 +337,25 @@ void tmpfs_test(void) {
     }
 }
 
-void vfs_lookup_test(void) {
-    printk("=== vfs_lookup tests ===\n");
+void dentry_test(void) {
+    printk("=== dentry / vfs_lookup tests ===\n");
 
-    // Test 1: root lookup succeeds, returns ref=1
+    // ── vfs_lookup basics ────────────────────────────────────────────
+
+    // Root lookup: succeeds, correct type, ref held
     {
         dentry_t *d = NULL;
         int err = vfs_lookup("/", &d);
         TEST("vfs_lookup '/' returns 0", err == 0);
         TEST("vfs_lookup '/' dentry not NULL", d != NULL);
         if (d) {
-            TEST("vfs_lookup '/' has ref >= 1", d->d_ref >= 1);
+            TEST("'/' is VNODE_DIR", d->d_vnode && d->d_vnode->type == VNODE_DIR);
+            TEST("'/' ref >= 1", d->d_ref >= 1);
             dentry_put(d);
         }
     }
 
-    // Test 2: nonexistent path returns ENOENT
+    // Nonexistent path: ENOENT, out-param cleared
     {
         dentry_t *d = NULL;
         int err = vfs_lookup("/this/does/not/exist/ever", &d);
@@ -360,46 +363,175 @@ void vfs_lookup_test(void) {
         TEST("vfs_lookup nonexistent out-param is NULL", d == NULL);
     }
 
-    // Test 3: second lookup returns same dentry (cache hit)
-    // /hello.txt is populated by tarfs at boot.
+    // Known tarfs file at root
     {
-        dentry_t *d1 = NULL, *d2 = NULL;
-        int err1 = vfs_lookup("/hello.txt", &d1);
-        int err2 = vfs_lookup("/hello.txt", &d2);
-        TEST("first lookup /hello.txt succeeds", err1 == 0);
-        TEST("second lookup /hello.txt succeeds", err2 == 0);
-        if (err1 == 0 && err2 == 0)
-            TEST("cache hit: same dentry pointer returned", d1 == d2);
-        if (err1 == 0) dentry_put(d1);
-        if (err2 == 0) dentry_put(d2);
+        dentry_t *d = NULL;
+        int err = vfs_lookup("/hello.txt", &d);
+        TEST("vfs_lookup '/hello.txt' succeeds", err == 0);
+        if (d) {
+            TEST("'/hello.txt' is VNODE_REG",
+                 d->d_vnode && d->d_vnode->type == VNODE_REG);
+            dentry_put(d);
+        }
     }
 
-    // Test 4: dentry_normalize_path collapses double slashes
+    // Known directory
+    {
+        dentry_t *d = NULL;
+        int err = vfs_lookup("/bin", &d);
+        TEST("vfs_lookup '/bin' succeeds", err == 0);
+        if (d) {
+            TEST("'/bin' is VNODE_DIR",
+                 d->d_vnode && d->d_vnode->type == VNODE_DIR);
+            dentry_put(d);
+        }
+    }
+
+    // Multi-component nested path
+    {
+        dentry_t *d = NULL;
+        int err = vfs_lookup("/bin/init", &d);
+        TEST("vfs_lookup '/bin/init' succeeds", err == 0);
+        if (d) {
+            TEST("'/bin/init' is VNODE_REG",
+                 d->d_vnode && d->d_vnode->type == VNODE_REG);
+            dentry_put(d);
+        }
+    }
+
+    // Mount-point lookup crosses into the mounted fs
+    {
+        dentry_t *d = NULL;
+        int err = vfs_lookup("/tmp", &d);
+        TEST("vfs_lookup '/tmp' succeeds (crosses tmpfs mount)", err == 0);
+        if (d) {
+            TEST("'/tmp' resolves to VNODE_DIR",
+                 d->d_vnode && d->d_vnode->type == VNODE_DIR);
+            dentry_put(d);
+        }
+    }
+
+    // ── Dentry cache ─────────────────────────────────────────────────
+
+    // Two successive lookups of the same path return the same pointer
+    {
+        dentry_t *d1 = NULL, *d2 = NULL;
+        int e1 = vfs_lookup("/hello.txt", &d1);
+        int e2 = vfs_lookup("/hello.txt", &d2);
+        TEST("two lookups of '/hello.txt' both succeed", e1 == 0 && e2 == 0);
+        if (e1 == 0 && e2 == 0)
+            TEST("cache hit: same dentry pointer", d1 == d2);
+        if (e1 == 0) dentry_put(d1);
+        if (e2 == 0) dentry_put(d2);
+    }
+
+    // ── vfs_lookup_from ──────────────────────────────────────────────
+
+    // Relative lookup from root dentry
+    {
+        dentry_t *d = NULL;
+        int err = vfs_lookup_from(vfs_get_root(), "hello.txt", &d);
+        TEST("vfs_lookup_from(root, 'hello.txt') succeeds", err == 0);
+        if (d) dentry_put(d);
+    }
+
+    // Absolute path from non-root start still anchors at '/'
+    {
+        dentry_t *d = NULL;
+        int err = vfs_lookup_from(vfs_get_root(), "/bin/init", &d);
+        TEST("vfs_lookup_from(root, '/bin/init') succeeds", err == 0);
+        if (d) dentry_put(d);
+    }
+
+    // ── dentry_normalize_path ────────────────────────────────────────
+
+    // Double slashes collapsed
     {
         char out[256];
         int err = dentry_normalize_path(vfs_get_root(), vfs_get_root(),
                                         "//hello.txt", out, sizeof(out));
         TEST("normalize '//hello.txt' returns 0", err == 0);
-        TEST("normalize '//hello.txt' produces '/hello.txt'", strcmp(out, "/hello.txt") == 0);
+        TEST("normalize '//hello.txt' -> '/hello.txt'",
+             err == 0 && strcmp(out, "/hello.txt") == 0);
     }
 
-    // Test 5: dentry_split_path splits correctly
+    // Trailing slash stripped
+    {
+        char out[256];
+        int err = dentry_normalize_path(vfs_get_root(), vfs_get_root(),
+                                        "/bin/", out, sizeof(out));
+        TEST("normalize '/bin/' returns 0", err == 0);
+        TEST("normalize '/bin/' -> '/bin'",
+             err == 0 && strcmp(out, "/bin") == 0);
+    }
+
+    // Dot component is a no-op
+    {
+        char out[256];
+        int err = dentry_normalize_path(vfs_get_root(), vfs_get_root(),
+                                        "/bin/.", out, sizeof(out));
+        TEST("normalize '/bin/.' returns 0", err == 0);
+        TEST("normalize '/bin/.' -> '/bin'",
+             err == 0 && strcmp(out, "/bin") == 0);
+    }
+
+    // Dotdot goes up one level
+    {
+        char out[256];
+        int err = dentry_normalize_path(vfs_get_root(), vfs_get_root(),
+                                        "/bin/../hello.txt", out, sizeof(out));
+        TEST("normalize '/bin/../hello.txt' returns 0", err == 0);
+        TEST("normalize '/bin/../hello.txt' -> '/hello.txt'",
+             err == 0 && strcmp(out, "/hello.txt") == 0);
+    }
+
+    // Dotdot at root is clamped (no underflow)
+    {
+        char out[256];
+        int err = dentry_normalize_path(vfs_get_root(), vfs_get_root(),
+                                        "/../etc", out, sizeof(out));
+        TEST("normalize '/../etc' returns 0", err == 0);
+        TEST("normalize '/../etc' -> '/etc'",
+             err == 0 && strcmp(out, "/etc") == 0);
+    }
+
+    // ── dentry_split_path ────────────────────────────────────────────
+
+    // Three components
     {
         char buf[] = "/foo/bar/baz";
         char *comps[8];
         int n = dentry_split_path(buf, comps, 8);
-        TEST("split '/foo/bar/baz' returns 3", n == 3);
+        TEST("split '/foo/bar/baz' -> 3 components", n == 3);
         TEST("split comp[0]='foo'", n >= 1 && strcmp(comps[0], "foo") == 0);
         TEST("split comp[1]='bar'", n >= 2 && strcmp(comps[1], "bar") == 0);
         TEST("split comp[2]='baz'", n >= 3 && strcmp(comps[2], "baz") == 0);
     }
 
-    // Test 6: dentry_split_path on root returns 0 components
+    // Root yields 0 components
     {
         char buf[] = "/";
         char *comps[8];
         int n = dentry_split_path(buf, comps, 8);
-        TEST("split '/' returns 0 components", n == 0);
+        TEST("split '/' -> 0 components", n == 0);
+    }
+
+    // Single component
+    {
+        char buf[] = "/foo";
+        char *comps[8];
+        int n = dentry_split_path(buf, comps, 8);
+        TEST("split '/foo' -> 1 component", n == 1);
+        TEST("split '/foo' comp[0]='foo'",
+             n >= 1 && strcmp(comps[0], "foo") == 0);
+    }
+
+    // max_comps overflow returns -1
+    {
+        char buf[] = "/a/b/c";
+        char *comps[2];
+        int n = dentry_split_path(buf, comps, 2);
+        TEST("split 3-part path with max_comps=2 returns -1", n == -1);
     }
 }
 
@@ -422,7 +554,7 @@ void fs_test_run(void) {
     tmpfs_test();
     printk("\n");
 
-    vfs_lookup_test();
+    dentry_test();
     printk("\n");
     printk("\n========================================\n");
     printk("  Results: %d passed, %d failed\n", passed, failed);

@@ -901,10 +901,13 @@ int sys_mkdir(const char *path, mode_t mode) {
     kpath[MAX_PATH - 1] = '\0';
     clear_csr_bit(sstatus, SSTATUS_SUM);
 
-    char cwd[MAX_PATH];
-    if (fs_struct_get_cwd(current->fs, cwd, MAX_PATH) < 0) return -ENAMETOOLONG;
+    /* vfs_mkdir uses vfs_find_mount() prefix matching, so it needs a
+     * normalized absolute path.  dentry_normalize_path handles ".", "..",
+     * double slashes, and relative-to-cwd expansion. */
     char resolved[MAX_PATH];
-    if (path_resolve(kpath, resolved) < 0) return -ENAMETOOLONG;
+    if (dentry_normalize_path(current->fs->cwd, vfs_get_root(),
+                              kpath, resolved, sizeof(resolved)) < 0)
+        return -ENAMETOOLONG;
 
     return vfs_mkdir(resolved, mode);
 }
