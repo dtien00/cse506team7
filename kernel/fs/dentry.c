@@ -196,9 +196,18 @@ int dentry_build_path(dentry_t *d, dentry_t *root, char *buf, size_t size) {
     const char *segs[128];
     int n = 0;
     dentry_t *cur = d;
-    while (cur && cur != root && cur != cur->d_parent) {
-        segs[n++] = cur->d_name;
-        cur = cur->d_parent;
+
+    while (cur && cur != root) {
+        if (cur == cur->d_parent) {
+            /* Self-referencing mount root — cross to cover dentry in parent namespace */
+            dentry_t *cover = vfs_find_cover_for_root(cur);
+            if (!cover) break; /* global root or unknown mount */
+            cur = cover;       /* jump to cover; next iteration collects its name */
+        } else {
+            if (n >= 128) return -1;
+            segs[n++] = cur->d_name;
+            cur = cur->d_parent;
+        }
     }
 
     // build string by reversing

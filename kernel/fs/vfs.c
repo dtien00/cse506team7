@@ -303,6 +303,15 @@ mount_t *vfs_find_mount(const char *path) {
     return best;
 }
 
+dentry_t *vfs_find_cover_for_root(dentry_t *root_dentry) {
+    if (!root_dentry) return NULL;
+    for (mount_t *m = mounts; m; m = m->next) {
+        if (m->root == root_dentry)
+            return m->cover;
+    }
+    return NULL;
+}
+
 static mount_t *vfs_find_mount_for_cover(dentry_t *cover) {
     if (!cover) return NULL;
     for (mount_t *m = mounts; m; m = m->next) {
@@ -342,6 +351,19 @@ static int vfs_step(dentry_t *cur, mount_t **mnt, const char *comp,
         if (!is_last && child->d_vnode && child->d_vnode->type != VNODE_DIR)
             return -ENOTDIR;
         dentry_get(child);
+
+        // If the looked-up terminal component is a mount cover, expose mounted root.
+        if (is_last && (child->d_flags & DENTRY_COVER)) {
+            mount_t *cm = vfs_find_mount_for_cover(child);
+            if (cm && cm->root) {
+                dentry_get(cm->root);
+                dentry_put(child);
+                child = cm->root;
+                *mnt = cm;
+                *crossed = 1;
+            }
+        }
+
         *out = child;
         return 0;
     }
@@ -388,6 +410,19 @@ static int vfs_step(dentry_t *cur, mount_t **mnt, const char *comp,
             return -ENOMEM;
     }
     dentry_get(child);
+
+    // Same handoff for cache-miss path: terminal cover resolves to mounted root.
+    if (is_last && (child->d_flags & DENTRY_COVER)) {
+        mount_t *cm = vfs_find_mount_for_cover(child);
+        if (cm && cm->root) {
+            dentry_get(cm->root);
+            dentry_put(child);
+            child = cm->root;
+            *mnt = cm;
+            *crossed = 1;
+        }
+    }
+
     *out = child;
     return 0;
 }
@@ -506,19 +541,48 @@ int vfs_create(const char *path, uint32_t mode) {
 }
 
 int vfs_unlink(const char *path) {
-    if (!path) return -1;
+    if (!path)
+        return -EINVAL;
 
-    mount_t *mnt = vfs_find_mount(path);
-    if (!mnt) return -1;
+    dentry_t *d = NULL;
+    int err = vfs_lookup_from(
+        current && current->fs ? current->fs->cwd : vfs_root,
+        path, &d);
+    if (err)
+        return err;
 
-    const char *rel_path = path + strlen(mnt->mountpoint);
-    if (*rel_path == '/') rel_path++;
-
-    if (mnt->fs_type->ops.unlink) {
-        return mnt->fs_type->ops.unlink(mnt, rel_path);
+    mount_t *mnt = d->d_vnode ? d->d_vnode->mount : NULL;
+    if (!mnt) {
+        dentry_put(d);
+        return -ENOENT;
+    }
+    if (!mnt->fs_type->ops.unlink) {
+        dentry_put(d);
+        return -ENOSYS;
     }
 
-    return -1;
+    char rel_path[MAX_PATH];
+    if (dentry_build_path(d, mnt->root, rel_path, sizeof(rel_path)) != 0) {
+        dentry_put(d);
+        return -ENAMETOOLONG;
+    }
+
+    const char *rel = rel_path;
+    if (*rel == '/')
+        rel++;
+
+    int ret = mnt->fs_type->ops.unlink(mnt, rel);
+    if (ret == 0) {
+        // Drop non-structural cache entries so lookups do not resurrect removed files.
+        if (!(d->d_flags & (DENTRY_ROOT | DENTRY_COVER)))
+            dentry_detach(d);
+        dentry_put(d);
+        dentry_prune(d);
+    } else {
+        dentry_put(d);
+    }
+
+    return ret;
 }
 
 int vfs_readdir(dentry_t *dentry, uint32_t start_idx, void *buf, uint32_t bufsize, uint32_t *entries_out) {
@@ -595,6 +659,76 @@ int vfs_mkdir(const char *path, uint32_t mode) {
     }
 
     return -1;
+}
+
+int vfs_chmod(const char *path, mode_t mode) {
+    if (!path) return -EINVAL;
+
+    dentry_t *d = NULL;
+    int err = vfs_lookup_from(
+        current && current->fs ? current->fs->cwd : vfs_root,
+        path, &d);
+    if (err) return err;
+
+    vnode_t *vn = d->d_vnode;
+    vn->mode = mode & 0xFFF;
+
+    int ret = 0;
+    if (vn->mount && vn->mount->fs_type->ops.chmod)
+        ret = vn->mount->fs_type->ops.chmod(vn->mount, vn, mode);
+
+    dentry_put(d);
+    return ret;
+}
+
+int vfs_fchmod(vnode_t *vn, mode_t mode) {
+    if (!vn) return -EINVAL;
+
+    vn->mode = mode & 0xFFF;
+
+    if (vn->mount && vn->mount->fs_type->ops.chmod)
+        return vn->mount->fs_type->ops.chmod(vn->mount, vn, mode);
+
+    return 0;
+}
+
+int vfs_rmdir(const char *path) {
+    if (!path) return -EINVAL;
+
+    /* Verify the target exists and is a directory */
+    dentry_t *d = NULL;
+    int err = vfs_lookup_from(
+        current && current->fs ? current->fs->cwd : vfs_root,
+        path, &d);
+    if (err) return err;
+
+    if (!d->d_vnode || d->d_vnode->type != VNODE_DIR) {
+        dentry_put(d);
+        return -ENOTDIR;
+    }
+
+    mount_t *mnt = vfs_find_mount(path);
+    if (!mnt) {
+        dentry_put(d);
+        return -ENOENT;
+    }
+
+    const char *rel_path = path + strlen(mnt->mountpoint);
+    if (*rel_path == '/') rel_path++;
+
+    int ret = -ENOSYS;
+    if (mnt->fs_type->ops.rmdir)
+        ret = mnt->fs_type->ops.rmdir(mnt, rel_path);
+
+    if (ret == 0) {
+        /* Evict from dentry cache so future lookups see it's gone */
+        dentry_detach(d);
+        dentry_put(d);
+        dentry_prune(d);
+    } else {
+        dentry_put(d);
+    }
+    return ret;
 }
 
 // -----------------------------------------------------------------------------

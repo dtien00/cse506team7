@@ -4,6 +4,7 @@
 #include "fs/dentry.h"
 #include "fs/file.h"
 #include "fs/tmpfs.h"
+#include "process/process.h"
 #include "tests/test.h"
 #include "lib/string.h"
 #include "errno.h"
@@ -14,6 +15,24 @@
 
 static int passed = 0;
 static int failed = 0;
+
+static struct proc *fs_test_prev_current = NULL;
+
+static int fs_test_bind_to_init_proc(void) {
+    fs_test_prev_current = current;
+    struct proc *init = proc_find(1);
+    if (!init || !init->fs) {
+        fs_test_prev_current = NULL;
+        return -1;
+    }
+    current = init;
+    return 0;
+}
+
+static void fs_test_restore_current(void) {
+    current = fs_test_prev_current;
+    fs_test_prev_current = NULL;
+}
 
 void vfs_test(void) {
     printk("=== vfs tests ===\n");
@@ -536,6 +555,11 @@ void dentry_test(void) {
 }
 
 void fs_test_run(void) {
+    if (fs_test_bind_to_init_proc() < 0) {
+        TEST("fs_test setup: bind current to pid 1", 0);
+        return;
+    }
+
     printk("\n");
     printk("========================================\n");
     printk("       Filesystem Tests\n");
@@ -563,4 +587,6 @@ void fs_test_run(void) {
     if (failed > 0) {
         printk("WARN: %d test(s) failed — check output above\n", failed);
     }
+
+    fs_test_restore_current();
 }

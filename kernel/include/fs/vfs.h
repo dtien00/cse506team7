@@ -57,6 +57,8 @@ typedef struct filesystem_operations {
     int (*truncate)(vnode_t *vnode);
     int (*readdir)(struct mount *mnt, vnode_t *vnode, uint32_t start_idx, void *buf, uint32_t buf_size,
                    uint32_t *entries_out);
+    int (*chmod)(struct mount *mnt, vnode_t *vnode, mode_t mode);
+    int (*rmdir)(struct mount *mnt, const char *path);
 } fs_ops_t;
 
 typedef struct fs_struct {
@@ -88,6 +90,7 @@ int vfs_register_fs(fs_type_t *fs_type);
 int vfs_mount(const char *source, const char *target, const char *fstype);
 int vfs_unmount(const char *target);
 mount_t *vfs_find_mount(const char *path);
+dentry_t *vfs_find_cover_for_root(dentry_t *root_dentry);
 void vnode_put(vnode_t *vn);
 
 // VFS-level operations
@@ -97,6 +100,9 @@ int vfs_lookup(const char *path, dentry_t **out);
 int vfs_create(const char *path, uint32_t mode);
 int vfs_unlink(const char *path);
 int vfs_mkdir(const char *path, uint32_t mode);
+int vfs_chmod(const char *path, mode_t mode);
+int vfs_fchmod(vnode_t *vn, mode_t mode);
+int vfs_rmdir(const char *path);
 int vfs_chdir(const char *kpath);
 int vfs_readdir(dentry_t *dentry, uint32_t start_idx, void *buf, uint32_t bufsize, uint32_t *entries_out);
 

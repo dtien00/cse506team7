@@ -50,6 +50,7 @@
 #define SYS_readlink 89
 #define SYS_chmod    90
 #define SYS_fchmod   91
+#define SYS_rmdir    52
 
 // Initialize syscall subsystem
 void syscall_init(void);
@@ -62,7 +63,7 @@ void sys_exit(int status);
 pid_t sys_fork(void);
 ssize_t sys_read(int fd, void *buf, size_t count);
 ssize_t sys_write(int fd, const void *buf, size_t count);
-int sys_open(const char *path, int flags);
+int sys_open(const char *path, int flags, mode_t mode);
 int sys_close(int fd);
 pid_t sys_wait(int *status);
 int sys_exec(const char *path, char **argv);
@@ -89,6 +90,9 @@ char  *sys_getcwd(char *buf, size_t size);
 int sys_fs_getdents(int fd, void *dirp, uint32_t count);
 int sys_stat(const char *upath, struct stat *ustat);
 int sys_fstat(int fd, struct stat *ustat);
+int sys_chmod(const char *upath, mode_t mode);
+int sys_fchmod(int fd, mode_t mode);
+int sys_rmdir(const char *path);
 int    sys_getrusage(int who, struct rusage *usage);
 int    sys_nice(int increment);
 int    sys_procinfo(struct proc_info *infos, int max_count);

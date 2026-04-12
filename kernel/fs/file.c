@@ -151,16 +151,16 @@ static int normalize_path(const char *input, char *out, size_t size) {
 }
 
 int file_open(const char *path) {
-    return file_open_with_flags(path, O_RDONLY);
+    return file_open_with_flags(path, O_RDONLY, 0);
 }
 
-int file_open_with_flags(const char *path, int flags) {
+int file_open_with_flags(const char *path, int flags, mode_t mode) {
     if (!path || !current || !current->fs)
         return -EINVAL;
 
     if (flags & O_CREAT) {
         dentry_t *existing = NULL;
-        int exists = vfs_lookup(path, &existing);
+        int exists = vfs_lookup_from(current->fs->cwd, path, &existing);
         if (exists == 0) {
             dentry_put(existing);
             if (flags & O_EXCL)
@@ -171,18 +171,19 @@ int file_open_with_flags(const char *path, int flags) {
             char resolved[MAX_PATH];
             if (normalize_path(path, resolved, sizeof(resolved)) != 0)
                 return -ENAMETOOLONG;
-            int create_rc = vfs_create(resolved, 0644);
+            int create_rc = vfs_create(resolved, mode ? mode : 0644);
             if (create_rc < 0)
                 return create_rc;
         }
     }
 
-    /* vfs_lookup normalizes internally via dentry_normalize_path. */
+    /* Resolve relative to process cwd so paths like "." and "foo/bar"
+     * work correctly after chdir. Absolute paths are unaffected. */
     dentry_t *d = NULL;
-    int lookup_err = vfs_lookup(path, &d);
+    int lookup_err = vfs_lookup_from(current->fs->cwd, path, &d);
     if (lookup_err)
         return lookup_err;
-    // vfs_lookup returns ref=1 — that ref is owned by this open-file instance.
+    // vfs_lookup_from returns ref=1 — that ref is owned by this open-file instance.
 
     if ((flags & O_DIRECTORY) && d->d_vnode && d->d_vnode->type != VNODE_DIR) {
         dentry_put(d);
@@ -482,9 +483,8 @@ int file_stat(const char *kpath, struct stat *kst) {
     if (!kpath || !kst || !current || !current->fs)
         return -EINVAL;
 
-    /* vfs_lookup normalizes internally — no pre-processing needed. */
     dentry_t *d = NULL;
-    int lookup_err = vfs_lookup(kpath, &d);
+    int lookup_err = vfs_lookup_from(current->fs->cwd, kpath, &d);
     if (lookup_err)
         return lookup_err;
 

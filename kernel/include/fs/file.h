@@ -85,7 +85,7 @@ void fd_init(fd_table_t *table); // sets up stdin/stdout/stderr
 
 // I/O operations (moved from vfs.h)
 int file_open(const char *path);
-int file_open_with_flags(const char *path, int flags);
+int file_open_with_flags(const char *path, int flags, mode_t mode);
 int file_close(int fd);
 int file_read(int fd, void *buf, size_t len);
 int file_write(int fd, const void *buf, size_t len);

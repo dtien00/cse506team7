@@ -142,7 +142,7 @@ void syscall_handler(trap_frame *frame) {
             break;
 
         case SYS_open:
-            ret = sys_open((const char *) arg0, (int) arg1);
+            ret = sys_open((const char *) arg0, (int) arg1, (mode_t) arg2);
             break;
 
         case SYS_close:
@@ -268,6 +268,18 @@ void syscall_handler(trap_frame *frame) {
 
         case SYS_fstat:
             ret = sys_fstat((int)arg0, (void *)arg1);
+            break;
+
+        case SYS_chmod:
+            ret = sys_chmod((const char *)arg0, (mode_t)arg1);
+            break;
+
+        case SYS_fchmod:
+            ret = sys_fchmod((int)arg0, (mode_t)arg1);
+            break;
+
+        case SYS_rmdir:
+            ret = sys_rmdir((const char *)arg0);
             break;
 
         default:
@@ -414,14 +426,14 @@ ssize_t sys_write(int fd, const void *buf, size_t count) {
 //     return file_open(kpath);
 // }
 
-int sys_open(const char *path, int flags) {
+int sys_open(const char *path, int flags, mode_t mode) {
     if (!current || !path) return -EINVAL;
 
     char kpath[MAX_PATH];
     strncpy_from_user(kpath, path, MAX_PATH - 1);
     kpath[MAX_PATH - 1] = '\0';
 
-    return file_open_with_flags(kpath, flags);
+    return file_open_with_flags(kpath, flags, mode);
 }
 
 int sys_close(int fd) {
@@ -1174,4 +1186,44 @@ int sys_fstat(int fd, struct stat *ustat)
     // 2. Copy result to user
     copy_to_user(ustat, &kst, sizeof(struct stat));
     return 0;
+}
+
+int sys_chmod(const char *upath, mode_t mode) {
+    if (!current || !upath) return -EINVAL;
+
+    char kpath[MAX_PATH];
+    strncpy_from_user(kpath, upath, MAX_PATH - 1);
+    kpath[MAX_PATH - 1] = '\0';
+
+    char resolved[MAX_PATH];
+    if (dentry_normalize_path(current->fs->cwd, vfs_get_root(),
+                              kpath, resolved, sizeof(resolved)) < 0)
+        return -ENAMETOOLONG;
+
+    return vfs_chmod(resolved, mode);
+}
+
+int sys_fchmod(int fd, mode_t mode) {
+    if (!current) return -EINVAL;
+
+    file_t *f = fd_get(&current->fds, fd);
+    if (!f) return -EBADF;
+    if (f->type != FILE_VNODE || !f->vnode) return -EBADF;
+
+    return vfs_fchmod(f->vnode, mode);
+}
+
+int sys_rmdir(const char *path) {
+    if (!current || !path) return -EINVAL;
+
+    char kpath[MAX_PATH];
+    strncpy_from_user(kpath, path, MAX_PATH - 1);
+    kpath[MAX_PATH - 1] = '\0';
+
+    char resolved[MAX_PATH];
+    if (dentry_normalize_path(current->fs->cwd, vfs_get_root(),
+                              kpath, resolved, sizeof(resolved)) < 0)
+        return -ENAMETOOLONG;
+
+    return vfs_rmdir(resolved);
 }
