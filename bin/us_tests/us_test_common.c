@@ -33,7 +33,7 @@ void ut_check(us_test_group_t *group, int cond, const char *name, const char *fi
     } else {
         group->failed++;
         g_total_failed++;
-        printf("  [FAIL] %s (%s:%d)\n", name, file, line);
+        printf("  [FAIL] %s: %s (%s:%d)\n", group->name ? group->name : "(unnamed)", name, file, line);
     }
 }
 

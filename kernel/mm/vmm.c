@@ -263,6 +263,10 @@ void vmm_init(void) {
     }
   }
 
+  // Map Goldfish RTC: 0x101000 (1 page)
+  if (vmm_map(kernel_pagetable, 0x101000, 0x101000, PTE_R | PTE_W) != 0)
+      printk("VMM: Failed to map RTC page\n");
+
   // Map PLIC: 0x0C000000 - 0x10000000
   for (uintptr_t pa = 0x0C000000; pa < 0x10000000; pa += PGSIZE) {
       if (vmm_map(kernel_pagetable, pa, pa, PTE_R | PTE_W) != 0)

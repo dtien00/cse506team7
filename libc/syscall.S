@@ -38,6 +38,7 @@
 .global pause
 .global procinfo
 .global rmdir
+.global gettimeofday
 .global tcgetattr
 .global tcsetattr
 
@@ -242,13 +243,18 @@ pause:
     ecall
     ret
 
-tcgetattr:
+gettimeofday:
     li a7, 34
     ecall
     ret
 
-tcsetattr:
+tcgetattr:
     li a7, 35
+    ecall
+    ret
+
+tcsetattr:
+    li a7, 36
     ecall
     ret
 

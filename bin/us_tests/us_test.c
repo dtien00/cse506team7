@@ -30,6 +30,7 @@ void run_test_stdlib(us_test_group_t *group);
 void run_test_malloc(us_test_group_t *group);
 void run_test_file_io(us_test_group_t *group);
 void run_test_process(us_test_group_t *group);
+void run_test_mv_cp(us_test_group_t *group);
 void run_test_write(us_test_group_t *group);
 /* fs_persist fills multiple groups (one per sub-test) */
 void run_test_fs_persist(us_test_group_t groups[], int *count);
@@ -45,12 +46,17 @@ void run_test_nice_extended(us_test_group_t *group);
 void run_test_yield(us_test_group_t *group);
 void run_test_pause(us_test_group_t *group);
 void run_test_procinfo(us_test_group_t *group);
+void run_test_gettimeofday(us_test_group_t *group);
 void run_test_termios_tty(us_test_group_t *group);
 
+/* comprehensive libc conformance suites (each fills multiple groups) */
+void run_test_libc_string(us_test_group_t groups[], int *idx);
+void run_test_libc_ctype(us_test_group_t groups[], int *idx);
+void run_test_libc_stdio(us_test_group_t groups[], int *idx);
+void run_test_libc_stdlib(us_test_group_t groups[], int *idx);
 
-
-/* base groups + 6 fs_persist sub-groups */
-#define MAX_GROUPS 100
+/* base groups + 6 fs_persist sub-groups + libc conformance suites */
+#define MAX_GROUPS 200
 
 int main(void) {
     us_test_group_t groups[MAX_GROUPS];
@@ -72,6 +78,7 @@ int main(void) {
     run_test_malloc(&groups[idx++]);
     run_test_file_io(&groups[idx++]);
     run_test_process(&groups[idx++]);
+    run_test_mv_cp(&groups[idx++]);
     run_test_write(&groups[idx++]);
     run_test_fs_persist(groups, &idx);
     run_test_syscall(&groups[idx++]);
@@ -81,12 +88,19 @@ int main(void) {
     run_test_dirent(&groups[idx++]);
     run_test_termios_tty(&groups[idx++]);
     run_test_stack_growth(&groups[idx++]);
-    run_test_getrusage(&groups[14]);
-    run_test_nice(&groups[15]);
-    run_test_nice_extended(&groups[16]);
-    run_test_yield(&groups[17]);
-    run_test_pause(&groups[18]);
-    run_test_procinfo(&groups[19]);
+    run_test_getrusage(&groups[idx++]);
+    run_test_nice(&groups[idx++]);
+    run_test_nice_extended(&groups[idx++]);
+    run_test_yield(&groups[idx++]);
+    run_test_pause(&groups[idx++]);
+    run_test_procinfo(&groups[idx++]);
+    run_test_gettimeofday(&groups[idx++]);
+
+    /* comprehensive libc conformance tests */
+    run_test_libc_string(groups, &idx);
+    run_test_libc_ctype(groups, &idx);
+    run_test_libc_stdio(groups, &idx);
+    run_test_libc_stdlib(groups, &idx);
 
     return ut_suite_end(groups, idx);
 }

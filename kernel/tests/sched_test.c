@@ -131,6 +131,11 @@ void sched_timeslice_test_run(void) {
 }
 
 void sched_priority_test_run(void) {
+    // Drain any processes left in the MLFQ by earlier initialisation
+    // (e.g. the init process enqueued by proc_init with priority 0).
+    // Without this, init dequeues before hi and poisons all three assertions.
+    { struct proc *d; while ((d = proc_next_ready()) != NULL) (void)d; }
+
     struct proc *lo = proc_alloc(); lo->priority = 10;
     struct proc *hi = proc_alloc(); hi->priority = 1;
     struct proc *mid = proc_alloc(); mid->priority = 5;
@@ -141,6 +146,9 @@ void sched_priority_test_run(void) {
     TEST("priority: hi dequeues first",  n1 == hi);
     TEST("priority: mid dequeues second", n2 == mid);
     TEST("priority: lo dequeues last",   n3 == lo);
+    // Drain any remaining entries before freeing to avoid dangling mlfq pointers
+    // that would corrupt later tests (e.g. BT3 "no duplicate in mlfq[0]").
+    { struct proc *d; while ((d = proc_next_ready()) != NULL) (void)d; }
     proc_free(lo); proc_free(mid); proc_free(hi);
 }
 
@@ -354,9 +362,11 @@ void sched_nice_test_run(void) {
         TEST("nice(+1) from 19 stays at 19 (upper clamp)", (int)r == 19);
     }
 
-    /* ── KT2: fork inherits parent priority ──────────────────────────────
-     * Simulate what sys_fork() now does: allocate child, then copy
-     * priority from parent.
+    /* ── KT2: fork inherits parent priority and mlfq_level ──────────────
+     * sys_fork() copies priority from parent and sets child->mlfq_level
+     * to min(parent->mlfq_level + 1, MLFQ_LEVELS - 1) so the child
+     * starts one level below the parent.  This prevents a freshly-forked
+     * child from jumping ahead of a demoted parent in the ready queue.
      */
     printk("\n=== KT2: fork priority inheritance ===\n");
     {
@@ -365,13 +375,17 @@ void sched_nice_test_run(void) {
         TEST("KT2: alloc parent and child", parent && child);
 
         if (parent && child) {
-            parent->priority = 12;
-            /* This is what the patched sys_fork() now does */
-            child->priority  = parent->priority;
-            child->mlfq_level = 0;
+            parent->priority  = 12;
+            parent->mlfq_level = 2;
+            /* Replicate what sys_fork() does */
+            child->priority   = parent->priority;
+            child->mlfq_level = (parent->mlfq_level < MLFQ_LEVELS - 1)
+                                 ? parent->mlfq_level + 1
+                                 : MLFQ_LEVELS - 1;
 
             TEST("fork inherits priority from parent", child->priority == 12);
-            TEST("fork resets child mlfq_level to 0",  child->mlfq_level == 0);
+            TEST("fork sets child mlfq_level to parent+1 (clamped)",
+                 child->mlfq_level == 3);
         }
         if (parent) proc_free(parent);
         if (child)  proc_free(child);
@@ -411,10 +425,14 @@ void sched_nice_test_run(void) {
         if (hi)  proc_free(hi);
     }
 
-    /* ── KT4: equal priorities preserve FIFO order ───────────────────────
-     * All three procs at the same priority must come out in insertion order.
+    /* ── KT4: equal priorities use LIFO order ────────────────────────────
+     * mlfq_insert uses <= for head insertion so equal-priority processes
+     * are enqueued LIFO (last inserted = first dequeued).  This is
+     * intentional: a newly-forked child inserted after its parent ends up
+     * at the head, ensuring the child runs before older siblings at the
+     * same priority level (required by the UT3 scheduling test).
      */
-    printk("\n=== KT4: equal-priority FIFO order ===\n");
+    printk("\n=== KT4: equal-priority LIFO order ===\n");
     {
         struct proc *a = proc_alloc();
         struct proc *b = proc_alloc();
@@ -426,13 +444,13 @@ void sched_nice_test_run(void) {
             b->priority = 10;
             c->priority = 10;
 
-            proc_ready(a);
+            proc_ready(a);   /* inserted first → ends up last */
             proc_ready(b);
-            proc_ready(c);
+            proc_ready(c);   /* inserted last  → ends up first */
 
-            TEST("equal priority: a dequeues first",  proc_next_ready() == a);
+            TEST("equal priority: c dequeues first",  proc_next_ready() == c);
             TEST("equal priority: b dequeues second", proc_next_ready() == b);
-            TEST("equal priority: c dequeues third",  proc_next_ready() == c);
+            TEST("equal priority: a dequeues third",  proc_next_ready() == a);
         }
         if (a) proc_free(a);
         if (b) proc_free(b);

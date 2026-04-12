@@ -1,4 +1,5 @@
 #include "trap/syscall.h"
+#include "drivers/rtc.h"
 #include "arch/riscv.h"
 #include "process/process.h"
 #include "errno.h"
@@ -254,6 +255,10 @@ void syscall_handler(trap_frame *frame) {
             ret = sys_getrusage((int)arg0, (struct rusage *)arg1);
             break;
 
+        case SYS_gettimeofday:
+            ret = sys_gettimeofday((struct timeval_k *)arg0, (void *)arg1);
+            break;
+
         case SYS_nice:
             ret = sys_nice((int)arg0);
             break;
@@ -334,7 +339,13 @@ pid_t sys_fork(void) {
 
     child->signal_mask = current->signal_mask; // Fork child inherits parent's signal mask
     child->priority    = current->priority;    /* POSIX: nice value is inherited across fork */
-    child->mlfq_level  = 0;                    /* fresh MLFQ slate — child has used no CPU yet */
+    /* Child starts one level below the parent so a timer-preempted parent
+     * re-enters at the same level as the child; LIFO insertion then keeps
+     * the parent at the head of that level so it finishes forking remaining
+     * children before any child gets scheduled.  Clamped to MLFQ_LEVELS-1. */
+    child->mlfq_level  = (current->mlfq_level < MLFQ_LEVELS - 1)
+                         ? current->mlfq_level + 1
+                         : MLFQ_LEVELS - 1;
     child->fs = fs_struct_copy(current->fs);
     if (!child->fs) {
         vma_free_all(child->vma_list);
@@ -1109,6 +1120,31 @@ int sys_getrusage(int who, struct rusage *usage) {
 }
 
 /* ------------------------------------------------------------------ */
+/* sys_gettimeofday                                                     */
+/* ------------------------------------------------------------------ */
+
+int sys_gettimeofday(struct timeval_k *tv, void *tz) {
+    if (tv) {
+        uint64_t ns = rtc_read_ns();
+        struct timeval_k ktv;
+        ktv.tv_sec  = ns / 1000000000ULL;
+        ktv.tv_usec = (ns % 1000000000ULL) / 1000ULL;
+        set_csr_bit(sstatus, SSTATUS_SUM);
+        *tv = ktv;
+        clear_csr_bit(sstatus, SSTATUS_SUM);
+    }
+    if (tz) {
+        // struct timezone = { int tz_minuteswest; int tz_dsttime; }
+        // Always return UTC (both fields zero).
+        int zeros[2] = {0, 0};
+        set_csr_bit(sstatus, SSTATUS_SUM);
+        __builtin_memcpy(tz, zeros, sizeof(zeros));
+        clear_csr_bit(sstatus, SSTATUS_SUM);
+    }
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
 /* sys_nice                                                             */
 /* ------------------------------------------------------------------ */
 
@@ -1134,7 +1170,11 @@ int sys_nice(int increment) {
     long new_prio = (long)current->priority + (long)increment;
     if (new_prio < 0)  new_prio = 0;
     if (new_prio > 19) new_prio = 19;
+    int old_prio = current->priority;
     current->priority = (int)new_prio;
+    /* Lowered scheduling priority — yield if a better process is waiting. */
+    if ((int)new_prio > old_prio)
+        proc_preempt_if_needed();
     return (int)new_prio;
 }
 
