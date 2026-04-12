@@ -42,3 +42,12 @@ int strncmp(const char *a, const char *b, size_t n) {
     if (n == (size_t)-1) return 0;
     return (unsigned char)*a - (unsigned char)*b;
 }
+
+char *strrchr(const char *s, int c) {
+    const char *last = NULL;
+    do {
+        if (*s == (char)c)
+            last = s;
+    } while (*s++);
+    return (char *)last;
+}

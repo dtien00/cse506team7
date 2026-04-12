@@ -433,6 +433,7 @@ vnode_t *ext2_mount(mount_t *mnt, const char *source) {
     root_vnode->ino = EXT2_ROOT_INO;
     root_vnode->mode = root_inode->i_mode;
     root_vnode->size = root_inode->i_size;
+    root_vnode->type = ((root_inode->i_mode & 0xF000) == EXT2_S_IFDIR) ? VNODE_DIR : VNODE_REG;
     root_vnode->ref_count = 0;
     root_vnode->mount = mnt;
     root_vnode->fs_data = root_inode;

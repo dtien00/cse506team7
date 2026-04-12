@@ -10,3 +10,4 @@ flat_kernel/
 .claude/
 build/**
 .codex
+/docs/

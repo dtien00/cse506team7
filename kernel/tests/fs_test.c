@@ -1,6 +1,7 @@
 #include "kernel/printk.h"
 #include "kernel/types.h"
 #include "fs/vfs.h"
+#include "fs/dentry.h"
 #include "fs/file.h"
 #include "fs/tmpfs.h"
 #include "tests/test.h"
@@ -336,6 +337,72 @@ void tmpfs_test(void) {
     }
 }
 
+void vfs_lookup_test(void) {
+    printk("=== vfs_lookup tests ===\n");
+
+    // Test 1: root lookup succeeds, returns ref=1
+    {
+        dentry_t *d = NULL;
+        int err = vfs_lookup("/", &d);
+        TEST("vfs_lookup '/' returns 0", err == 0);
+        TEST("vfs_lookup '/' dentry not NULL", d != NULL);
+        if (d) {
+            TEST("vfs_lookup '/' has ref >= 1", d->d_ref >= 1);
+            dentry_put(d);
+        }
+    }
+
+    // Test 2: nonexistent path returns ENOENT
+    {
+        dentry_t *d = NULL;
+        int err = vfs_lookup("/this/does/not/exist/ever", &d);
+        TEST("vfs_lookup nonexistent returns -ENOENT", err == -ENOENT);
+        TEST("vfs_lookup nonexistent out-param is NULL", d == NULL);
+    }
+
+    // Test 3: second lookup returns same dentry (cache hit)
+    // /hello.txt is populated by tarfs at boot.
+    {
+        dentry_t *d1 = NULL, *d2 = NULL;
+        int err1 = vfs_lookup("/hello.txt", &d1);
+        int err2 = vfs_lookup("/hello.txt", &d2);
+        TEST("first lookup /hello.txt succeeds", err1 == 0);
+        TEST("second lookup /hello.txt succeeds", err2 == 0);
+        if (err1 == 0 && err2 == 0)
+            TEST("cache hit: same dentry pointer returned", d1 == d2);
+        if (err1 == 0) dentry_put(d1);
+        if (err2 == 0) dentry_put(d2);
+    }
+
+    // Test 4: dentry_normalize_path collapses double slashes
+    {
+        char out[256];
+        int err = dentry_normalize_path(vfs_get_root(), vfs_get_root(),
+                                        "//hello.txt", out, sizeof(out));
+        TEST("normalize '//hello.txt' returns 0", err == 0);
+        TEST("normalize '//hello.txt' produces '/hello.txt'", strcmp(out, "/hello.txt") == 0);
+    }
+
+    // Test 5: dentry_split_path splits correctly
+    {
+        char buf[] = "/foo/bar/baz";
+        char *comps[8];
+        int n = dentry_split_path(buf, comps, 8);
+        TEST("split '/foo/bar/baz' returns 3", n == 3);
+        TEST("split comp[0]='foo'", n >= 1 && strcmp(comps[0], "foo") == 0);
+        TEST("split comp[1]='bar'", n >= 2 && strcmp(comps[1], "bar") == 0);
+        TEST("split comp[2]='baz'", n >= 3 && strcmp(comps[2], "baz") == 0);
+    }
+
+    // Test 6: dentry_split_path on root returns 0 components
+    {
+        char buf[] = "/";
+        char *comps[8];
+        int n = dentry_split_path(buf, comps, 8);
+        TEST("split '/' returns 0 components", n == 0);
+    }
+}
+
 void fs_test_run(void) {
     printk("\n");
     printk("========================================\n");
@@ -353,6 +420,9 @@ void fs_test_run(void) {
     printk("\n");
 
     tmpfs_test();
+    printk("\n");
+
+    vfs_lookup_test();
     printk("\n");
     printk("\n========================================\n");
     printk("  Results: %d passed, %d failed\n", passed, failed);

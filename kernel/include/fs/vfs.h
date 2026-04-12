@@ -2,14 +2,13 @@
 #pragma once
 #include "fs/file.h"
 #include "kernel/types.h"
-// #include "types.h"
 
 // Forward declarations
 struct vnode;
 struct mount;
 struct filesystem_type;
 
-typedef unsigned long  ino_t;   // inode number
+typedef unsigned long ino_t; // inode number
 
 typedef enum {
     VNODE_REG, // regular file
@@ -79,6 +78,7 @@ typedef struct mount {
     fs_type_t *fs_type; // Filesystem type
     void *fs_data; // Filesystem-specific mount data
     dentry_t *root;
+    dentry_t *cover;
     struct mount *next; // Next mount in the list
 } mount_t;
 
@@ -92,12 +92,13 @@ void vnode_put(vnode_t *vn);
 
 // VFS-level operations
 dentry_t *vfs_get_root(void);
-dentry_t *vfs_lookup(const char *path);
+int vfs_lookup_from(dentry_t *start, const char *path, dentry_t **out);
+int vfs_lookup(const char *path, dentry_t **out);
 int vfs_create(const char *path, uint32_t mode);
 int vfs_unlink(const char *path);
 int vfs_mkdir(const char *path, uint32_t mode);
 int vfs_chdir(const char *kpath);
-int vfs_readdir(vnode_t *vnode, uint32_t start_idx, void *buf, uint32_t bufsize, uint32_t *entries_out);
+int vfs_readdir(dentry_t *dentry, uint32_t start_idx, void *buf, uint32_t bufsize, uint32_t *entries_out);
 
 fs_struct_t *fs_struct_alloc(void);
 fs_struct_t *fs_struct_copy(fs_struct_t *src); // used in fork

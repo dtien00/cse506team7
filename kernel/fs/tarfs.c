@@ -415,14 +415,15 @@ void tarfs_populate_ext2(mount_t *ext2_mnt) {
 
             // Write its contents if non-empty
             if (e->size > 0) {
-                dentry_t *dent = vfs_lookup(dst);
-                if (dent && dent->d_vnode) {
+                dentry_t *dent = NULL;
+                if (vfs_lookup(dst, &dent) == 0 && dent->d_vnode) {
                     vnode_t *vn = dent->d_vnode;
                     int written = vn->fs_type->ops.write(vn, e->data, 0, e->size);
                     if (written < 0)
                         printk("tarfs: write %s failed (%d)\n", dst, written);
                     else
                         printk("tarfs: copied %s (%d bytes)\n", dst, written);
+                    dentry_put(dent);
                 } else {
                     printk("tarfs: lookup after create failed for %s\n", dst);
                 }

@@ -931,7 +931,7 @@ int sys_fs_getdents(int fd, void *dirp, uint32_t count)
             f_put(f);
         return -EBADF;
     }
-    if (!f->vnode || f->vnode->type != VNODE_DIR) {
+    if (!f->dentry || !f->vnode || f->vnode->type != VNODE_DIR) {
         f_put(f);
         return -ENOTDIR;
     }
@@ -948,7 +948,7 @@ int sys_fs_getdents(int fd, void *dirp, uint32_t count)
     }
 
     uint32_t entries_read = 0;
-    int n = vfs_readdir(f->vnode, (uint32_t)f->offset,
+    int n = vfs_readdir(f->dentry, (uint32_t)f->offset,
                         kbuf, count, &entries_read);
 
     if (n > 0) {

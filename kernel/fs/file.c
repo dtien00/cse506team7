@@ -232,10 +232,9 @@ int file_open_with_flags(const char *path, int flags) {
         return -ENAMETOOLONG;
 
     if (flags & O_CREAT) {
-        dentry_t *existing = vfs_lookup(resolved);
-        if (existing) {
-            // vfs_lookup returns an unowned dentry; take a transient ref before put.
-            dentry_get(existing);
+        dentry_t *existing = NULL;
+        int exists = vfs_lookup(resolved, &existing);
+        if (exists == 0) {
             dentry_put(existing);
             if (flags & O_EXCL)
                 return -EEXIST;
@@ -246,12 +245,11 @@ int file_open_with_flags(const char *path, int flags) {
         }
     }
 
-    dentry_t *d = vfs_lookup(resolved);
-    if (!d)
-        return -ENOENT;
-
-    // Hold one owned ref for this open-file instance and all error unwind paths below.
-    dentry_get(d);
+    dentry_t *d = NULL;
+    int lookup_err = vfs_lookup(resolved, &d);
+    if (lookup_err)
+        return lookup_err;
+    // vfs_lookup returns ref=1 — that ref is owned by this open-file instance.
 
     if ((flags & O_DIRECTORY) && d->d_vnode && d->d_vnode->type != VNODE_DIR) {
         dentry_put(d);
@@ -556,13 +554,12 @@ int file_stat(const char *kpath, struct stat *kst) {
     if (path_resolve(kpath, resolved) != 0)
         return -ENAMETOOLONG;
 
-    dentry_t *d = vfs_lookup(resolved);
-    if (!d)
-        return -ENOENT;
+    dentry_t *d = NULL;
+    int lookup_err = vfs_lookup(resolved, &d);
+    if (lookup_err)
+        return lookup_err;
 
     int ret = vnode_fill_stat(d->d_vnode, kst);
-
-    // Drop the transient reference we got from vfs_lookup
     dentry_put(d);
     return ret;
 }
