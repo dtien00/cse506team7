@@ -222,6 +222,14 @@ void syscall_handler(trap_frame *frame) {
             ret = sys_dup2((int) arg0, (int) arg1);
             break;
 
+        case SYS_tcgetattr:
+            ret = sys_tcgetattr((int)arg0, (struct termios *)arg1);
+            break;
+
+        case SYS_tcsetattr:
+            ret = sys_tcsetattr((int)arg0, (int)arg1, (const struct termios *)arg2);
+            break;
+
         case SYS_waitpid:
             ret = sys_waitpid((pid_t) arg0, (int *) arg1, (int) arg2);
             break;
@@ -529,6 +537,49 @@ int sys_dup2(int oldfd, int newfd) {
 
     current->fds.files[newfd] = f;
     return newfd;
+}
+
+int sys_tcgetattr(int fd, struct termios *termios_p) {
+    if (!current || !termios_p)
+        return -EINVAL;
+
+    file_t *f = f_get(current, fd);
+    if (!f)
+        return -EBADF;
+
+    if (f->type != FILE_STDIN && f->type != FILE_STDOUT) {
+        f_put(f);
+        return -ENOTTY;
+    }
+
+    struct termios kt;
+    int rc = term_tcgetattr(&console_term, &kt);
+    if (rc == 0)
+        copy_to_user(termios_p, &kt, sizeof(kt));
+
+    f_put(f);
+    return rc;
+}
+
+int sys_tcsetattr(int fd, int action, const struct termios *termios_p) {
+    if (!current || !termios_p)
+        return -EINVAL;
+
+    file_t *f = f_get(current, fd);
+    if (!f)
+        return -EBADF;
+
+    if (f->type != FILE_STDIN && f->type != FILE_STDOUT) {
+        f_put(f);
+        return -ENOTTY;
+    }
+
+    struct termios kt;
+    copy_from_user(&kt, termios_p, sizeof(kt));
+    int rc = term_tcsetattr(&console_term, action, &kt);
+
+    f_put(f);
+    return rc;
 }
 
 pid_t sys_wait(int *status) {

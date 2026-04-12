@@ -38,6 +38,8 @@
 .global pause
 .global procinfo
 .global rmdir
+.global tcgetattr
+.global tcsetattr
 
 
 mmap:
@@ -239,3 +241,14 @@ pause:
     li a7, 32
     ecall
     ret
+
+tcgetattr:
+    li a7, 34
+    ecall
+    ret
+
+tcsetattr:
+    li a7, 35
+    ecall
+    ret
+
