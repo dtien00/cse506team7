@@ -1,21 +1,35 @@
 #include <fcntl.h>
 #include <unistd.h>
+#include <sys/stat.h>
 
 int main(int argc, char *argv[]) {
     char buf[4096];
     int n;
-    
+    struct stat src_stat;
+    struct stat dst_stat;
+
     if (argc != 3) {
         write(STDERR_FILENO, "cp: usage: cp src dest\n", 23);
         return 1;
     }
-    
+
+    if (stat(argv[1], &src_stat) < 0) {
+        write(STDERR_FILENO, "cp: cannot open source\n", 23);
+        return 1;
+    }
+
+    if (stat(argv[2], &dst_stat) == 0) {
+        if (src_stat.st_dev == dst_stat.st_dev && src_stat.st_ino == dst_stat.st_ino) {
+            return 0;
+        }
+    }
+
     int src_fd = open(argv[1], O_RDONLY);
     if (src_fd < 0) {
         write(STDERR_FILENO, "cp: cannot open source\n", 23);
         return 1;
     }
-    
+
     int dst_fd = open(argv[2], O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (dst_fd < 0) {
         close(src_fd);

@@ -30,6 +30,7 @@ void run_test_stdlib(us_test_group_t *group);
 void run_test_malloc(us_test_group_t *group);
 void run_test_file_io(us_test_group_t *group);
 void run_test_process(us_test_group_t *group);
+void run_test_mv_cp(us_test_group_t *group);
 void run_test_write(us_test_group_t *group);
 /* fs_persist fills multiple groups (one per sub-test) */
 void run_test_fs_persist(us_test_group_t groups[], int *count);
@@ -75,6 +76,7 @@ int main(void) {
     run_test_malloc(&groups[idx++]);
     run_test_file_io(&groups[idx++]);
     run_test_process(&groups[idx++]);
+    run_test_mv_cp(&groups[idx++]);
     run_test_write(&groups[idx++]);
     run_test_fs_persist(groups, &idx);
     run_test_syscall(&groups[idx++]);
