@@ -237,21 +237,60 @@ void srand(unsigned int seed) {
     next_rand = seed;
 }
 
+/* Simple in-process environment store: array of "KEY=VALUE" strings. */
+#define ENV_MAX 64
+static char *_env_store[ENV_MAX];  /* NULL-terminated pointers */
+static int   _env_count = 0;
+
+/* Find the index of name in _env_store, or -1 if not found. */
+static int env_find(const char *name) {
+    size_t nlen = strlen(name);
+    for (int i = 0; i < _env_count; i++) {
+        if (_env_store[i] &&
+            strncmp(_env_store[i], name, nlen) == 0 &&
+            _env_store[i][nlen] == '=')
+            return i;
+    }
+    return -1;
+}
+
 char* getenv(const char* name) {
-    (void)name;
-    return NULL;
+    int idx = env_find(name);
+    if (idx < 0) return NULL;
+    return _env_store[idx] + strlen(name) + 1; /* skip "NAME=" */
 }
 
 int setenv(const char* name, const char* value, int overwrite) {
-    (void)name;
-    (void)value;
-    (void)overwrite;
-    return -1;
+    int idx = env_find(name);
+    if (idx >= 0 && !overwrite)
+        return 0; /* exists, keep old value */
+
+    size_t nlen = strlen(name);
+    size_t vlen = strlen(value);
+    char *entry = malloc(nlen + 1 + vlen + 1); /* "NAME=VALUE\0" */
+    if (!entry) return -1;
+    memcpy(entry, name, nlen);
+    entry[nlen] = '=';
+    memcpy(entry + nlen + 1, value, vlen + 1);
+
+    if (idx >= 0) {
+        free(_env_store[idx]);
+        _env_store[idx] = entry;
+    } else {
+        if (_env_count >= ENV_MAX) { free(entry); return -1; }
+        _env_store[_env_count++] = entry;
+    }
+    return 0;
 }
 
 int unsetenv(const char* name) {
-    (void)name;
-    return -1;
+    int idx = env_find(name);
+    if (idx < 0) return 0; /* not present — success per POSIX */
+    free(_env_store[idx]);
+    /* Compact the array */
+    _env_store[idx] = _env_store[--_env_count];
+    _env_store[_env_count] = NULL;
+    return 0;
 }
 
 static void (*atexit_funcs[32])(void);

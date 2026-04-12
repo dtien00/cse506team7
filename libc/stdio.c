@@ -149,6 +149,10 @@ size_t fread(void *ptr, size_t size, size_t nmemb, FILE *stream) {
 
 int fseek(FILE *stream, long offset, int whence) {
     fflush(stream);
+    /* For SEEK_CUR, the fd is ahead of the logical position by the number
+       of buffered-but-unread bytes.  Compensate before invalidating. */
+    if (whence == SEEK_CUR)
+        offset -= (stream->buf_len - stream->buf_pos);
     stream->buf_pos = stream->buf_len = 0; /* invalidate read buffer */
     stream->eof = 0;
     return (lseek(stream->fd, offset, whence) < 0) ? -1 : 0;
