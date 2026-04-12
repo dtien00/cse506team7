@@ -529,8 +529,20 @@ int exec(const char *path, char *const argv[]) {
     }
     argv_uvas[argc] = 0;     // NULL terminator
 
-    // Align sp to 16 bytes, then push the argv pointer array
+    // Align sp to 16 bytes before the pointer arrays.
     sp &= ~(uintptr_t)0xF;
+
+    // Push envp[0] = NULL (empty environment).  This must sit between the
+    // argv pointer array and the argv strings so that the standard ABI
+    // envp = argv + (argc+1)*8 lands on a NULL, not on the string data.
+    sp -= sizeof(uintptr_t);
+    {
+        uintptr_t envp_pa = vmm_translate(new_pt, sp);
+        if (!envp_pa) { kfree(argv_uvas); goto fail_vma; }
+        *(uintptr_t *)envp_pa = 0;
+    }
+
+    // Push the argv pointer array (argv[0]...argv[argc-1], NULL).
     sp -= (uint64_t)(argc + 1) * sizeof(uintptr_t);
     for (int i = 0; i <= argc; i++) {
         uintptr_t slot_va = sp + (uint64_t)i * sizeof(uintptr_t);
@@ -539,6 +551,19 @@ int exec(const char *path, char *const argv[]) {
         *(uintptr_t *)slot_pa = argv_uvas[i];
     }
     uintptr_t user_argv = sp;
+
+    // Push argc below the argv array so that sp points to argc on entry.
+    // Required by the standard Linux/POSIX _start ABI:
+    //   *(sp+0)             = argc
+    //   *(sp+8)             = argv[0]          (user_argv)
+    //   *(sp + (argc+1)*8)  = NULL             (argv terminator)
+    //   *(sp + (argc+2)*8)  = NULL             (envp[0], empty env)
+    sp -= sizeof(uintptr_t);
+    {
+        uintptr_t argc_pa = vmm_translate(new_pt, sp);
+        if (!argc_pa) { kfree(argv_uvas); goto fail_vma; }
+        *(uintptr_t *)argc_pa = (uintptr_t)argc;
+    }
     kfree(argv_uvas);
 
     // 7. Commit: install new address space, then tear down the old one.
