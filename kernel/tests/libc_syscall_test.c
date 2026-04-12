@@ -111,12 +111,12 @@ static void test_sys_file_io(void) {
     TEST("file_open nonexistent returns error", bad < 0);
 
     /* Write to tarfs file returns error (read-only filesystem) */
-    // int rf = file_open("/hello.txt");
-    // if (rf >= 0) {
-    //     int w = file_write(rf, "x", 1);
-    //     TEST("file_write to tarfs returns error", w < 0);
-    //     file_close(rf);
-    // }
+    int rf = file_open("/hello.txt");
+    if (rf >= 0) {
+        int w = file_write(rf, "x", 1);
+        TEST("file_write to tarfs returns error", w < 0);
+        file_close(rf);
+    }
 
     test_teardown_proc();
 }

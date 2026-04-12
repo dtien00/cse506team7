@@ -44,7 +44,7 @@ static void test_basic_rw(us_test_group_t *group) {
     ut_group_begin(group, "fs_persist.basic_rw");
 
     /* create and write */
-    int fd = open("/persist_basic.txt", O_CREAT | O_WRONLY | O_TRUNC);
+    int fd = open("/mnt/basic.txt", O_CREAT | O_WRONLY | O_TRUNC);
     TEST(group, "open for create returns valid fd", fd >= 0);
     if (fd < 0) { ut_group_end(group); return; }
 
@@ -54,7 +54,7 @@ static void test_basic_rw(us_test_group_t *group) {
     TEST(group, "close after write succeeds", close(fd) == 0);
 
     /* flush to disk, then re-open — verifies data survives a cache flush */
-    int n = flush_and_read("/persist_basic.txt", buf, sizeof(buf));
+    int n = flush_and_read("/mnt/basic.txt", buf, sizeof(buf));
     TEST(group, "read after flush returns positive bytes", n > 0);
     TEST(group, "read after flush content matches written", strcmp(buf, msg) == 0);
 
@@ -70,26 +70,26 @@ static void test_open_flags(us_test_group_t *group) {
     ut_group_begin(group, "fs_persist.open_flags");
 
     /* seed file */
-    write_file("/persist_flags.txt", "original\n");
+    write_file("/mnt/flags.txt", "original\n");
 
     /* O_TRUNC should discard old content */
-    int fd = open("/persist_flags.txt", O_WRONLY | O_TRUNC, 0644);
+    int fd = open("/mnt/flags.txt", O_WRONLY | O_TRUNC, 0644);
     TEST(group, "O_TRUNC open succeeds", fd >= 0);
     if (fd >= 0) {
         write(fd, "new\n", 4);
         close(fd);
-        int n = flush_and_read("/persist_flags.txt", buf, sizeof(buf));
+        int n = flush_and_read("/mnt/flags.txt", buf, sizeof(buf));
         TEST(group, "O_TRUNC discards old content after flush", strcmp(buf, "new\n") == 0);
         (void)n;
     }
 
     /* O_APPEND should add to end */
-    fd = open("/persist_flags.txt", O_WRONLY | O_APPEND, 0644);
+    fd = open("/mnt/flags.txt", O_WRONLY | O_APPEND, 0644);
     TEST(group, "O_APPEND open succeeds", fd >= 0);
     if (fd >= 0) {
         write(fd, "appended\n", 9);
         close(fd);
-        int n = flush_and_read("/persist_flags.txt", buf, sizeof(buf));
+        int n = flush_and_read("/mnt/flags.txt", buf, sizeof(buf));
         TEST(group, "O_APPEND extends file after flush", n > 4);
         TEST(group, "O_APPEND content correct after flush", strcmp(buf, "new\nappended\n") == 0);
         (void)n;
@@ -106,9 +106,9 @@ static void test_lseek(us_test_group_t *group) {
 
     ut_group_begin(group, "fs_persist.lseek");
 
-    write_file("/persist_seek.txt", "0123456789");
+    write_file("/mnt/seek.txt", "0123456789");
 
-    int fd = open("/persist_seek.txt", O_RDWR);
+    int fd = open("/mnt/seek.txt", O_RDWR);
     TEST(group, "open seek file succeeds", fd >= 0);
     if (fd < 0) { ut_group_end(group); return; }
 
@@ -138,7 +138,7 @@ static void test_lseek(us_test_group_t *group) {
 
     /* flush and verify the appended byte survived */
     sync();
-    fd = open("/persist_seek.txt", O_RDONLY);
+    fd = open("/mnt/seek.txt", O_RDONLY);
     TEST(group, "re-open after flush succeeds", fd >= 0);
     if (fd >= 0) {
         pos = lseek(fd, 0, SEEK_END);
@@ -160,16 +160,16 @@ static void test_directories(us_test_group_t *group) {
     ut_group_begin(group, "fs_persist.directories");
 
     /* mkdir */
-    int r = mkdir("/persist_subdir", 0755);
+    int r = mkdir("/mnt/subdir", 0755);
     TEST(group, "mkdir returns 0", r == 0);
 
     /* open missing dir should fail */
-    int fd = open("/persist_no_such_dir/file.txt", O_CREAT | O_WRONLY, 0644);
+    int fd = open("/mnt/no_such_dir/file.txt", O_CREAT | O_WRONLY, 0644);
     TEST(group, "open in missing dir fails", fd < 0);
     if (fd >= 0) close(fd);
 
     /* create file in new subdir */
-    fd = open("/persist_subdir/nested.txt", O_CREAT | O_WRONLY, 0644);
+    fd = open("/mnt/subdir/nested.txt", O_CREAT | O_WRONLY, 0644);
     TEST(group, "create file in new subdir succeeds", fd >= 0);
     if (fd >= 0) {
         write(fd, "nested\n", 7);
@@ -178,15 +178,15 @@ static void test_directories(us_test_group_t *group) {
 
     /* flush and re-read nested file — checks inode + data blocks hit disk */
     char buf[64];
-    int n = flush_and_read("/persist_subdir/nested.txt", buf, sizeof(buf));
+    int n = flush_and_read("/mnt/subdir/nested.txt", buf, sizeof(buf));
     TEST(group, "nested file readable after flush", n > 0);
     TEST(group, "nested file content correct after flush", strcmp(buf, "nested\n") == 0);
 
     /* nested mkdir */
-    r = mkdir("/persist_subdir/inner", 0755);
+    r = mkdir("/mnt/subdir/inner", 0755);
     TEST(group, "nested mkdir succeeds", r == 0);
 
-    fd = open("/persist_subdir/inner/deep.txt", O_CREAT | O_WRONLY, 0644);
+    fd = open("/mnt/subdir/inner/deep.txt", O_CREAT | O_WRONLY, 0644);
     TEST(group, "create file in nested subdir succeeds", fd >= 0);
     if (fd >= 0) {
         write(fd, "deep\n", 5);
@@ -194,7 +194,7 @@ static void test_directories(us_test_group_t *group) {
     }
 
     /* flush and verify deeply nested file */
-    n = flush_and_read("/persist_subdir/inner/deep.txt", buf, sizeof(buf));
+    n = flush_and_read("/mnt/subdir/inner/deep.txt", buf, sizeof(buf));
     TEST(group, "deep file readable after flush", n > 0);
     TEST(group, "deep file content correct after flush", strcmp(buf, "deep\n") == 0);
 
@@ -210,7 +210,7 @@ static void test_partial_io(us_test_group_t *group) {
     ut_group_begin(group, "fs_persist.partial_io");
 
     /* write in two chunks */
-    int fd = open("/persist_partial.txt", O_CREAT | O_WRONLY | O_TRUNC, 0644);
+    int fd = open("/mnt/partial.txt", O_CREAT | O_WRONLY | O_TRUNC, 0644);
     TEST(group, "open partial.txt for write succeeds", fd >= 0);
     if (fd >= 0) {
         ssize_t w1 = write(fd, "ABCD", 4);
@@ -221,7 +221,7 @@ static void test_partial_io(us_test_group_t *group) {
     }
 
     /* read in pieces */
-    fd = open("/persist_partial.txt", O_RDONLY);
+    fd = open("/mnt/partial.txt", O_RDONLY);
     TEST(group, "open partial.txt for read succeeds", fd >= 0);
     if (fd >= 0) {
         int n1 = (int)read(fd, buf, 4);
@@ -240,7 +240,7 @@ static void test_partial_io(us_test_group_t *group) {
     }
 
     /* flush and re-read the whole file in one shot */
-    int fn = flush_and_read("/persist_partial.txt", buf, sizeof(buf));
+    int fn = flush_and_read("/mnt/partial.txt", buf, sizeof(buf));
     TEST(group, "partial.txt readable after flush", fn == 8);
     TEST(group, "partial.txt full content correct after flush",
          fn == 8 && buf[0]=='A' && buf[3]=='D' && buf[4]=='E' && buf[7]=='H');
@@ -257,23 +257,23 @@ static void test_sync(us_test_group_t *group) {
     ut_group_begin(group, "fs_persist.sync");
 
     /* basic: write → sync → read */
-    write_file("/persist_sync_me.txt", "first\n");
+    write_file("/mnt/sync_me.txt", "first\n");
     sync();
     TEST(group, "sync does not crash", 1);
-    int n = read_file("/persist_sync_me.txt", buf, sizeof(buf));
+    int n = read_file("/mnt/sync_me.txt", buf, sizeof(buf));
     TEST(group, "file readable after sync", n > 0);
     TEST(group, "content correct after sync", strcmp(buf, "first\n") == 0);
 
     /* overwrite → sync → read: old content must be gone */
-    write_file("/persist_sync_me.txt", "second\n");
+    write_file("/mnt/sync_me.txt", "second\n");
     sync();
-    n = read_file("/persist_sync_me.txt", buf, sizeof(buf));
+    n = read_file("/mnt/sync_me.txt", buf, sizeof(buf));
     TEST(group, "overwritten content correct after sync", strcmp(buf, "second\n") == 0);
 
     /* multiple sync calls in a row must not corrupt anything */
     sync();
     sync();
-    n = read_file("/persist_sync_me.txt", buf, sizeof(buf));
+    n = read_file("/mnt/sync_me.txt", buf, sizeof(buf));
     TEST(group, "content stable after repeated sync", strcmp(buf, "second\n") == 0);
 
     ut_group_end(group);

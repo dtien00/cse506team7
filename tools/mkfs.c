@@ -2,8 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
-// #include "../kernel/include/kernel/types.h"
-#include "../kernel/include/fs/ext2_disk_format.h"
+#include "fs/ext2.h"
 
 #define SEEK_SET 0
 #define SEEK_CUR 1

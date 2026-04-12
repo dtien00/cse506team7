@@ -41,6 +41,7 @@ static void boot_wait_for_first_tick(void) {
 void run_all_tests(void) {
     // ext2_populate_test_run();
     mem_test_run();
+    // trap_test_run();
     fs_test_run();
     
     sched_test_run();
@@ -48,13 +49,16 @@ void run_all_tests(void) {
     sched_priority_test_run();
     sched_fairness_test_run();
     sched_idle_test_run();
+    sched_nice_test_run();
     proc_test_run();
     proc_waitpid_test_run();
+    procinfo_test_run();
     libc_syscall_test_run();
     timer_test_run();
     kill_test_run();
     cow_test_run();
     stack_growth_test_run();
+    accounting_test_run();
 
     // printk("%d passed, %d failed\n", passed, failed);
 }
@@ -123,21 +127,8 @@ void boot(uint64_t hart_id, uint64_t dtb) {
     }
     block_cache_init();
     ext2_init();
-    if (vfs_mount(NULL, "/", "ext2") < 0) {
-        printk("FATAL: failed to mount ext2 at '/'\n");
-        boot_fallback_to_idle();
-    }
 
-    // On first boot (superblock flag == 0), copy the read-only tarfs image
-    // into the writable ext2 root so the rest of the system sees a full tree.
-    mount_t *ext2_mnt = vfs_find_mount("/");
-    tarfs_populate_ext2(ext2_mnt);
-    block_cache_flush(); // flush dirs/files written directly by populate (bypasses file_write)
-
-    // Mount tarfs at /initrd.  vfs_mount creates a cover dentry automatically;
-    // no vfs_mkdir needed and doing so would prevent the mount (dentry_attach
-    // rejects duplicate names under the same parent).
-    if (vfs_mount(NULL, "/initrd", "tarfs") < 0) {
+    if (vfs_mount(NULL, "/", "tarfs") < 0) {
         printk("WARNING: failed to mount tarfs at '/initrd'\n");
     }
 
@@ -146,6 +137,18 @@ void boot(uint64_t hart_id, uint64_t dtb) {
         printk("FATAL: failed to mount tmpfs at '/tmp'\n");
         boot_fallback_to_idle();
     }
+
+    if (vfs_mount(NULL, "/mnt", "ext2") < 0) {
+        printk("FATAL: failed to mount ext2 at '/'\n");
+        boot_fallback_to_idle();
+    }
+
+    // root does not need to be writeable.
+    // // On first boot (superblock flag == 0), copy the read-only tarfs image
+    // // into the writable ext2 root so the rest of the system sees a full tree.
+    // mount_t *ext2_mnt = vfs_find_mount("/");
+    // tarfs_populate_ext2(ext2_mnt);
+    // block_cache_flush(); // flush dirs/files written directly by populate (bypasses file_write)
 
     syscall_init();
 

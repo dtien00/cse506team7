@@ -12,6 +12,7 @@
 #include "tests/test.h"
 #include "elf/elf.h"
 #include "trap/syscall.h"
+#include "process/process.h"
 
 static int passed = 0;
 static int failed = 0;
@@ -85,6 +86,7 @@ void proc_test_run(void) {
         TEST("wait: no more children", proc_wait(NULL) == -1);
 
         current = wait_saved;
+        proc_free(parent);  // must free parent; leaving it in proctab pollutes later tests
     }
     printk("\n========================================\n");
     printk("    End of Process Tests\n");
@@ -114,6 +116,11 @@ void proc_test_run(void) {
         TEST("fork: child linked to parent", fork_child && fork_child->parent == current);
 
         if (fork_child) {
+            // sys_fork() enqueued the child via proc_ready(); drain it from
+            // the MLFQ before manually transitioning to ZOMBIE so that
+            // proc_free() (inside sys_wait) doesn't leave a stale MLFQ pointer.
+            { struct proc *d; do { d = proc_next_ready(); } while (d && d != fork_child); }
+
             // Force deterministic wait() behavior in unit-test context.
             fork_child->state = PROC_ZOMBIE;
             fork_child->exit_code = 0;
@@ -132,13 +139,20 @@ void proc_test_run(void) {
     printk("=== End of Fork() Tests ===\n\n");
         // === exec() setup test ===
     printk("=== exec() Tests ===\n");
-    struct proc *ep = proc_alloc();
-    TEST("exec: proc_alloc for exec test", ep != NULL);
+    /*
+     * Use proc_create() rather than proc_alloc() so that ep->fs, ep->vma_list,
+     * ep->priority, and ep->mlfq_level are fully initialized — the same state
+     * a real process has before calling exec().  proc_alloc() only memstes the
+     * struct to zero and does not run any of the per-process setup code.
+     */
+    struct proc *ep = proc_create("exec_test");
+    TEST("exec: proc_create for exec test", ep != NULL);
     if (ep) {
-        ep->pid = 200;
-        strncpy(ep->name, "exec_test", MAX_NAME - 1);
-        ep->state = PROC_CREATED;
-        ep->pagetable = NULL;
+        ep->fs = fs_struct_alloc();
+        if (ep->fs) {
+            fs_struct_set_root(ep->fs, "/");
+            fs_struct_set_cwd(ep->fs, "/");
+        }
         ep->trapframe = NULL;
 
         struct proc *saved = current;
@@ -164,8 +178,15 @@ void proc_test_run(void) {
                                      : vmm_kernel_pagetable();
             vmm_switch(restore_pt);
         }
-        // Free the pagetable (don't schedule the process)
+        // Free the pagetable and fs_struct (don't schedule the process).
+        // proc_free only handles vma_list; fs must be released separately
+        // since proc_destroy is not declared in the public process.h header.
         vmm_free_pagetable(ep->pagetable);
+        ep->pagetable = NULL;
+        if (ep->fs) {
+            fs_struct_free(ep->fs);
+            ep->fs = NULL;
+        }
         proc_free(ep);
     }
 
@@ -190,6 +211,9 @@ void proc_test_run(void) {
         TEST("fork/wait sanity: child created", child_proc != NULL);
 
         if (child_proc) {
+            // Same as above: drain child from MLFQ before manual ZOMBIE transition.
+            { struct proc *d; do { d = proc_next_ready(); } while (d && d != child_proc); }
+
             child_proc->state = PROC_ZOMBIE;
             child_proc->exit_code = 0;
 
@@ -326,6 +350,73 @@ void proc_waitpid_test_run(void) {
 
     proc_free(parent);
     current = wp_saved;
+
+    printk("\n========================================\n");
+    printk("  Results: %d passed, %d failed\n", passed, failed);
+    printk("========================================\n\n");
+}
+
+/*
+ * procinfo_test_run — kernel-side unit tests for sys_procinfo.
+ *
+ * Runs before the scheduler starts, so we manipulate proctab directly
+ * rather than relying on running processes.  At minimum, proc_init()
+ * has already inserted init (pid 1) into the table.
+ */
+void procinfo_test_run(void) {
+    printk("\n========================================\n");
+    printk("       sys_procinfo Tests\n");
+    printk("========================================\n\n");
+
+    struct proc_info buf[MAX_PROCS];
+
+    /* ── max_count=0: must return 0, must not touch the buffer ───────── */
+    int r0 = sys_procinfo(buf, 0);
+    TEST("procinfo: max_count=0 returns 0", r0 == 0);
+
+    /* ── normal call: at least init is present ───────────────────────── */
+    int n = sys_procinfo(buf, MAX_PROCS);
+    TEST("procinfo: returns > 0 (at least init)", n > 0);
+
+    /* ── init process (pid 1) appears in the output ─────────────────── */
+    int init_found = 0;
+    for (int i = 0; i < n; i++) {
+        if (buf[i].pid == 1) { init_found = 1; break; }
+    }
+    TEST("procinfo: init (pid=1) found in output", init_found);
+
+    /* ── all returned states are non-zero (PROC_UNUSED filtered out) ─── */
+    int all_states_nonzero = 1;
+    for (int i = 0; i < n; i++) {
+        if (buf[i].state == 0) { all_states_nonzero = 0; break; }
+    }
+    TEST("procinfo: no PROC_UNUSED entries returned", all_states_nonzero);
+
+    /* ── all returned PIDs positive ──────────────────────────────────── */
+    int all_pids_ok = 1;
+    for (int i = 0; i < n; i++) {
+        if (buf[i].pid <= 0) { all_pids_ok = 0; break; }
+    }
+    TEST("procinfo: all PIDs positive", all_pids_ok);
+
+    /* ── max_count=1: returns exactly 1 ─────────────────────────────── */
+    struct proc_info one;
+    int r1 = sys_procinfo(&one, 1);
+    TEST("procinfo: max_count=1 returns exactly 1", r1 == 1);
+
+    /* ── count increases after proc_alloc ───────────────────────────── */
+    struct proc *extra = proc_alloc();
+    if (extra) {
+        extra->state = PROC_CREATED;
+        int n2 = sys_procinfo(buf, MAX_PROCS);
+        TEST("procinfo: count increases after proc_alloc", n2 == n + 1);
+        proc_free(extra);
+        int n3 = sys_procinfo(buf, MAX_PROCS);
+        TEST("procinfo: count back to baseline after proc_free", n3 == n);
+    } else {
+        TEST("procinfo: proc_alloc for count test", 0);
+        TEST("procinfo: count back to baseline after proc_free", 0);
+    }
 
     printk("\n========================================\n");
     printk("  Results: %d passed, %d failed\n", passed, failed);

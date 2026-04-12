@@ -263,11 +263,21 @@ static const char *direct_child_name(const char *entry_name, const char *dir, in
         return NULL; // skip the root entry itself
 
     if (dlen == 0) {
-        // Root directory: child has no '/' in its name
-        for (int i = 0; i < elen; i++)
-            if (stripped[i] == '/')
+        // Root directory: strip leading "./" (tar -C . produces "./name") then
+        // verify there is no further '/' — that would make it a deeper entry.
+        const char *p = stripped;
+        int plen = elen;
+        if (plen >= 2 && p[0] == '.' && p[1] == '/')
+            p += 2, plen -= 2;
+        if (plen == 0)
+            return NULL;
+        for (int i = 0; i < plen; i++)
+            if (p[i] == '/')
                 return NULL;
-        return entry_name; // caller will use this pointer for name
+        // Skip the "./" prefix in the original name so the caller displays
+        // just "bin", not "./bin".
+        int skip = (entry_name[0] == '.' && entry_name[1] == '/') ? 2 : 0;
+        return entry_name + skip;
     }
 
     // Non-root: must start with dir + '/'

@@ -105,7 +105,7 @@ thirdparty: build/libc/crt.S.o build/libc.a
 
 build/tools/mkfs: tools/mkfs.c
 	@mkdir -p $(@D)
-	gcc -Wall -o $@ $<
+	gcc -Wall -Ikernel/include -Ilibc/include -o $@ $<
 
 $(DISK_IMG): build/tools/mkfs
 	build/tools/mkfs $@ $(DISK_SIZE)
