@@ -45,6 +45,7 @@ void run_test_nice_extended(us_test_group_t *group);
 void run_test_yield(us_test_group_t *group);
 void run_test_pause(us_test_group_t *group);
 void run_test_procinfo(us_test_group_t *group);
+void run_test_gettimeofday(us_test_group_t *group);
 
 
 
@@ -85,6 +86,7 @@ int main(void) {
     run_test_yield(&groups[17]);
     run_test_pause(&groups[18]);
     run_test_procinfo(&groups[19]);
+    run_test_gettimeofday(&groups[20]);
 
-    return ut_suite_end(groups, idx);
+    return ut_suite_end(groups, 21);
 }

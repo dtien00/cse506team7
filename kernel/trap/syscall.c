@@ -331,7 +331,13 @@ pid_t sys_fork(void) {
 
     child->signal_mask = current->signal_mask; // Fork child inherits parent's signal mask
     child->priority    = current->priority;    /* POSIX: nice value is inherited across fork */
-    child->mlfq_level  = 0;                    /* fresh MLFQ slate — child has used no CPU yet */
+    /* Child starts one level below the parent so a timer-preempted parent
+     * re-enters at the same level as the child; LIFO insertion then keeps
+     * the parent at the head of that level so it finishes forking remaining
+     * children before any child gets scheduled.  Clamped to MLFQ_LEVELS-1. */
+    child->mlfq_level  = (current->mlfq_level < MLFQ_LEVELS - 1)
+                         ? current->mlfq_level + 1
+                         : MLFQ_LEVELS - 1;
     child->fs = fs_struct_copy(current->fs);
     if (!child->fs) {
         vma_free_all(child->vma_list);
@@ -1113,7 +1119,11 @@ int sys_nice(int increment) {
     long new_prio = (long)current->priority + (long)increment;
     if (new_prio < 0)  new_prio = 0;
     if (new_prio > 19) new_prio = 19;
+    int old_prio = current->priority;
     current->priority = (int)new_prio;
+    /* Lowered scheduling priority — yield if a better process is waiting. */
+    if ((int)new_prio > old_prio)
+        proc_preempt_if_needed();
     return (int)new_prio;
 }
 
