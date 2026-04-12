@@ -1,5 +1,6 @@
 #include "drivers/drivers.h"
 #include "drivers/plic.h"
+#include "drivers/rtc.h"
 #include "kernel/console.h"
 
 void drivers_init(void) {
@@ -7,6 +8,8 @@ void drivers_init(void) {
     plic_init();
     // Console backends — registered before console_init() activates one
     console_uart_register();
+    // Real-time clock
+    rtc_init();
 
     // Future drivers get registered here:
     // virtio_init();

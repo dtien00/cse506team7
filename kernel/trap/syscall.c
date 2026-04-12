@@ -1,4 +1,5 @@
 #include "trap/syscall.h"
+#include "drivers/rtc.h"
 #include "arch/riscv.h"
 #include "process/process.h"
 #include "errno.h"
@@ -244,6 +245,10 @@ void syscall_handler(trap_frame *frame) {
 
         case SYS_getrusage:
             ret = sys_getrusage((int)arg0, (struct rusage *)arg1);
+            break;
+
+        case SYS_gettimeofday:
+            ret = sys_gettimeofday((struct timeval_k *)arg0, (void *)arg1);
             break;
 
         case SYS_nice:
@@ -1054,6 +1059,31 @@ int sys_getrusage(int who, struct rusage *usage) {
     *usage = ku;
     clear_csr_bit(sstatus, SSTATUS_SUM);
 
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* sys_gettimeofday                                                     */
+/* ------------------------------------------------------------------ */
+
+int sys_gettimeofday(struct timeval_k *tv, void *tz) {
+    if (tv) {
+        uint64_t ns = rtc_read_ns();
+        struct timeval_k ktv;
+        ktv.tv_sec  = ns / 1000000000ULL;
+        ktv.tv_usec = (ns % 1000000000ULL) / 1000ULL;
+        set_csr_bit(sstatus, SSTATUS_SUM);
+        *tv = ktv;
+        clear_csr_bit(sstatus, SSTATUS_SUM);
+    }
+    if (tz) {
+        // struct timezone = { int tz_minuteswest; int tz_dsttime; }
+        // Always return UTC (both fields zero).
+        int zeros[2] = {0, 0};
+        set_csr_bit(sstatus, SSTATUS_SUM);
+        __builtin_memcpy(tz, zeros, sizeof(zeros));
+        clear_csr_bit(sstatus, SSTATUS_SUM);
+    }
     return 0;
 }
 
