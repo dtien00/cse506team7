@@ -117,10 +117,12 @@ void proc_yield(void) {
 // }
 
 // Insert p into its MLFQ level, sorted by priority (lower value = higher priority).
+// Equal-priority processes are inserted at the HEAD (LIFO within a priority band),
+// so a newly-forked child runs before older siblings at the same priority.
 // Caller must set p->mlfq_level, p->time_slice, and p->next = NULL before calling.
 static void mlfq_insert(struct proc *p) {
     int lvl = p->mlfq_level;
-    if (mlfq[lvl] == NULL || p->priority < mlfq[lvl]->priority) {
+    if (mlfq[lvl] == NULL || p->priority <= mlfq[lvl]->priority) {
         p->next = mlfq[lvl];
         mlfq[lvl] = p;
         return;
@@ -138,6 +140,38 @@ void proc_ready(struct proc *p) {
     p->time_slice = (1 << p->mlfq_level);
     p->next = NULL;
     mlfq_insert(p);
+}
+
+/*
+ * proc_preempt_if_needed — yield if a higher-priority process is waiting.
+ *
+ * Called by sys_nice() after a process lowers its own scheduling priority
+ * (positive nice increment).  If any MLFQ level holds a process whose
+ * priority number is strictly less than current's (i.e. higher scheduling
+ * priority), we voluntarily yield so it can run immediately.
+ *
+ * This mirrors the standard POSIX expectation: a process that nice()s
+ * itself down should give way to better-priority work without waiting for
+ * the next timer tick.
+ *
+ * Interrupts are already disabled here: sys_nice() is reached through
+ * handle_exception → syscall_handler, and RISC-V hardware clears
+ * sstatus.SIE on every trap.
+ */
+void proc_preempt_if_needed(void) {
+    if (!current) return;
+    for (int i = 0; i < MLFQ_LEVELS; i++) {
+        if (mlfq[i] && mlfq[i]->priority < current->priority) {
+            // If the higher-priority process is at a deeper level than current,
+            // bump current's mlfq_level to match.  Without this, current would
+            // re-insert at its shallower level after proc_yield() and be picked
+            // again before the higher-priority process gets the CPU.
+            if (current->mlfq_level < i)
+                current->mlfq_level = i;
+            proc_yield();
+            return;
+        }
+    }
 }
 
 /*

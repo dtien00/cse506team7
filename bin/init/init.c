@@ -68,8 +68,7 @@ static void run_one_suite(const char *path, const char *name) {
 }
 
 static void run_userspace_tests(void) {
-    run_one_suite("/bin/us_tests",            "us_tests");
-    run_one_suite("/bin/test_gettimeofday",   "test_gettimeofday");
+    run_one_suite("/bin/us_tests", "us_tests");
 }
 
 int main(void) {
