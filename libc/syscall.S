@@ -37,6 +37,7 @@
 .global sched_yield
 .global pause
 .global procinfo
+.global rmdir
 
 
 mmap:
@@ -161,6 +162,11 @@ fstat:
 
 mkdir:
     li a7, 19
+    ecall
+    ret
+
+rmdir:
+    li a7, 52
     ecall
     ret
 

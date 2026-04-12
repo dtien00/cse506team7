@@ -491,16 +491,11 @@ uint64_t timer_ticks = 0;
 void timer_handler(void) {
     timer_ticks++;
     sbi_set_timer(read_csr(time) + TIMER_INTERVAL);
-    if (timer_ticks % 5 == 0)
-        // printk("  [kernel] timer_handler: tick=%d current=%d\n",
-        //        (unsigned long)timer_ticks, current ? current->pid : -1);
 
     // Wake any processes whose timed sleep deadline has expired.
     for (int i = 0; i < MAX_PROCS; i++) {
         struct proc *p = &proctab[i];
         if (p->state == PROC_BLOCKED && p->wake_tick != 0 && timer_ticks >= p->wake_tick) {
-            // printk("  [kernel] timer_handler: waking pid=%d at tick=%lu\n",
-            //        p->pid, (unsigned long)timer_ticks);
             p->wake_tick = 0;
             proc_wakeup(p);  // p slept on itself (chan == p)
         }

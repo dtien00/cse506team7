@@ -55,16 +55,15 @@ void schedule(void) {
     while (1) {
         // Keep scheduler bookkeeping + context handoff atomic w.r.t. timer IRQs.
         interrupts_off();
-        // printk("   I am trying...\n");
+
         struct proc *next = proc_next_ready();
         if (next != NULL) {
-            // printk("  next is not null. Let us go to (%d)!\n", next->pid);
             next->state = PROC_RUNNING;
             current = next;
 
             // Kernel execution for this process (sleep/wait resume, syscall
             // return path, then sret) must use that process's page table.
-            if (next->pagetable){
+            if (next->pagetable) {
                 // Verify the kernel VA at the current PC is reachable through
                 // next's page table before switching SATP — if it isn't, the
                 // CPU will hang silently after the csrw satp instruction.
@@ -73,11 +72,9 @@ void schedule(void) {
                 uintptr_t mapped_pa = vmm_translate(next->pagetable, pc);
                 (void) mapped_pa;
                 vmm_switch(next->pagetable);
-            }else{
-                // printk("  Initializing new pagetable...");
+            } else
                 vmm_switch(vmm_kernel_pagetable());
-            }
-            // printk("    done. \n");
+
             // Do not re-enable interrupts here; new context controls that.
             swtch(&scheduler_context, &next->context);
             // Returns here when this CPU is handed back to the scheduler
@@ -303,14 +300,9 @@ void proc_sleep(void *chan) {
 }
 
 void proc_wakeup(void *chan) {
-    // printk("  [kernel] proc_wakeup: chan=%p\n", chan);
     for (int i = 0; i < MAX_PROCS; i++) {
         struct proc *p = &proctab[i];
-        if (p->state == PROC_BLOCKED) {
-            // printk("  [kernel] proc_wakeup: checking pid=%d chan=%p vs %p\n", p->pid, p->chan, chan);
-        }
         if (p->state == PROC_BLOCKED && p->chan == chan) {
-            // printk("  [kernel] proc_wakeup: unblocking pid=%d\n", p->pid);
             proc_unblock(p);
         }
     }

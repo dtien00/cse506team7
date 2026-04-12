@@ -229,6 +229,44 @@ void run_test_dirent(us_test_group_t *group) {
         closedir(scan);
     }
 
+    /* ── mountpoint readdir: terminal cover must resolve to mounted root ── */
+    {
+        char mp_path[128];
+        char mp_name[96];
+        snprintf(mp_name, sizeof(mp_name), ".dirent_mp_sentinel_%d", (int) getpid());
+        snprintf(mp_path, sizeof(mp_path), "/tmp/%s", mp_name);
+
+        int fd = open(mp_path, O_CREAT | O_RDWR | O_TRUNC, 0644);
+        if (fd < 0) {
+            SKIP(group, "mountpoint readdir: opendir(/tmp) sees file created in /tmp",
+                 "cannot create sentinel under /tmp");
+        } else {
+            close(fd);
+
+            DIR *tmpd = opendir("/tmp");
+            TEST(group, "mountpoint readdir: opendir(/tmp) succeeds", tmpd != NULL);
+
+            if (!tmpd) {
+                SKIP(group, "mountpoint readdir: opendir(/tmp) sees file created in /tmp",
+                     "opendir(/tmp) failed");
+            } else {
+                int found = 0;
+                struct dirent *te;
+                while ((te = readdir(tmpd)) != NULL) {
+                    if (strcmp(te->d_name, mp_name) == 0) {
+                        found = 1;
+                        break;
+                    }
+                }
+
+                TEST(group, "mountpoint readdir: opendir(/tmp) sees file created in /tmp", found);
+                closedir(tmpd);
+            }
+
+            unlink(mp_path);
+        }
+    }
+
     /* ── dirfd ───────────────────────────────────────────────────────── */
 
     DIR *dfd_dir = opendir("/");

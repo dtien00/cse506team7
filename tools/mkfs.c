@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "kernel/types.h"
+#include <stdint.h>
 #include "fs/ext2.h"
 
 #define SEEK_SET 0

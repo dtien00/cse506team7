@@ -32,10 +32,7 @@ uint64_t *vmm_walk(pagetable_t pagetable, uintptr_t va, int alloc) {
       if (pagetable == NULL) {
         return NULL;
       }
-      if ((uintptr_t)pagetable == 0x804b7000)
-          printk("VMM WALK BUG: allocated 0x804b7000 as intermediate table! ra=%p\n",
-                 __builtin_return_address(0));
-
+      
       // Zero out the new page table
       for (int i = 0; i < 512; i++) {
         pagetable[i] = 0;
@@ -125,10 +122,6 @@ uintptr_t vmm_translate(pagetable_t pagetable, uintptr_t va) {
 pagetable_t vmm_create_pagetable(void) {
     pagetable_t pt = (pagetable_t)pmm_alloc_page();
     if (pt == NULL) return NULL;
-
-    // if ((uintptr_t)pt == 0x804b7000)
-    //     printk("VMM CREATE: allocated 0x804b7000 as new pagetable root! ra=%p\n",
-    //            __builtin_return_address(0));
 
     for (int i = 0; i < 512; i++) pt[i] = 0;
 
@@ -350,7 +343,6 @@ static int vmm_copy_pagetable_recursive(pagetable_t child, pagetable_t parent, i
 
 // Clone a parent's page table for fork()
 pagetable_t vmm_copy_pagetable(pagetable_t parent) {
-  // uint64_t before = parent[KERNBASE >> 30];
   pagetable_t child = vmm_create_pagetable();
   if (!child) return NULL;
   // Recursively copy user mappings (levels 2, 1, 0)
@@ -358,9 +350,5 @@ pagetable_t vmm_copy_pagetable(pagetable_t parent) {
     vmm_free_pagetable(child);
     return NULL;
   }
-  // uint64_t after = parent[KERNBASE >> 30];
-  // if (before != after)
-  //     printk("VMM FORK BUG: parent L2[%d] changed: %p -> %p (parent pt=%p)\n",
-  //            (int)(KERNBASE >> 30), before, after, parent);
   return child;
 }

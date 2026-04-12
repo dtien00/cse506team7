@@ -51,7 +51,7 @@
 #define PTE_G (1UL << 5) // Global
 #define PTE_A (1UL << 6) // Accessed
 #define PTE_D (1UL << 7) // Dirty
-#define PTE_COW (1UL << 8)   // Copy-on-write (software bit)
+#define PTE_COW (1UL << 8) // Copy-on-write (software bit)
 
 // Page table entry manipulation
 #define PTE_PPN_SHIFT 10
@@ -164,4 +164,52 @@ static inline uint64_t r_tp(void) {
         uint64_t _r;                                                                                                   \
         asm volatile("mv %0, " #reg : "=r"(_r));                                                                       \
         _r;                                                                                                            \
+    })
+
+/*
+ * WITH_USER_ACCESS(statements)
+ * Opens the SUM window, runs statements, then closes it.
+ * The close always runs — no early-return leaks.
+ *
+ * Usage:
+ *   WITH_USER_ACCESS(
+ *       strncpy(kbuf, uptr, MAXPATH - 1);
+ *   );
+ */
+#define WITH_USER_ACCESS(stmts)                                                                                        \
+    do {                                                                                                               \
+        set_csr_bit(sstatus, SSTATUS_SUM);                                                                             \
+        stmts clear_csr_bit(sstatus, SSTATUS_SUM);                                                                     \
+    } while (0)
+
+/*
+ * copy_from_user(dst_kbuf, src_uptr, len)
+ * copy_to_user(dst_uptr, src_kbuf, len)
+ *
+ * Both return 0 on success.
+ * Add bounds checking here later if you want fault isolation.
+ */
+#define copy_from_user(dst, src, len)                                                                                  \
+    ({                                                                                                                 \
+        set_csr_bit(sstatus, SSTATUS_SUM);                                                                             \
+        memcpy((dst), (src), (len));                                                                                   \
+        clear_csr_bit(sstatus, SSTATUS_SUM);                                                                           \
+        0;                                                                                                             \
+    })
+
+#define copy_to_user(dst, src, len)                                                                                    \
+    ({                                                                                                                 \
+        set_csr_bit(sstatus, SSTATUS_SUM);                                                                             \
+        memcpy((dst), (src), (len));                                                                                   \
+        clear_csr_bit(sstatus, SSTATUS_SUM);                                                                           \
+        0;                                                                                                             \
+    })
+
+// Specialised string copy from user (like Linux strncpy_from_user)
+#define strncpy_from_user(dst, src, n)                                                                                 \
+    ({                                                                                                                 \
+        set_csr_bit(sstatus, SSTATUS_SUM);                                                                             \
+        strncpy((dst), (src), (n));                                                                                    \
+        clear_csr_bit(sstatus, SSTATUS_SUM);                                                                           \
+        0;                                                                                                             \
     })

@@ -1,7 +1,7 @@
 #ifndef _DIRENT_H
 #define _DIRENT_H
 
-#include "types.h"
+#include "sys/types.h"
 
 #define DT_UNKNOWN 0
 #define DT_FIFO 1
