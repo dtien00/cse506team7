@@ -27,6 +27,7 @@ void sched_nice_test_run(void);
 void libc_syscall_test_run(void);
 void timer_test_run(void);
 void kill_test_run(void);
+void sigaction_test_run(void);
 void cow_test_run(void);
 void stack_growth_test_run(void);
 void ext2_populate_test_run(void);

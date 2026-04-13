@@ -9,6 +9,7 @@
 #define MAX_PROCS 64
 #define MAX_NAME 16
 #define KSTACK_SIZE 4096
+#define MAX_HANDLERS 32
 
 // Kernel-internal signal numbers (mirrors libc/include/signal.h)
 #define KERNEL_SIGINT    2
@@ -137,6 +138,9 @@ struct proc {
 
     // Working directory (absolute path, always starts with '/')
     // char cwd[MAX_PATH];
+
+    // Signal handlers
+    void *handlers[32];
 };
 
 extern struct proc proctab[];

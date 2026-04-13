@@ -48,6 +48,7 @@ void run_test_pause(us_test_group_t *group);
 void run_test_procinfo(us_test_group_t *group);
 void run_test_gettimeofday(us_test_group_t *group);
 void run_test_alarm(us_test_group_t *group);
+void run_test_sigaction(us_test_group_t *group);
 
 /* comprehensive libc conformance suites (each fills multiple groups) */
 void run_test_libc_string(us_test_group_t groups[], int *idx);
@@ -95,6 +96,7 @@ int main(void) {
     run_test_procinfo(&groups[idx++]);
     run_test_gettimeofday(&groups[idx++]);
     run_test_alarm(&groups[idx++]);
+    run_test_sigaction(&groups[idx++]);
 
     /* comprehensive libc conformance tests */
     run_test_libc_string(groups, &idx);

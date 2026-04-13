@@ -5,6 +5,7 @@
 #include "process/process.h"
 #include "process/swtch.h"
 #include "trap/trap.h"
+#include "signal.h"
 
 struct proc proctab[MAX_PROCS];
 // struct proc *ready_queue = NULL;
@@ -323,6 +324,20 @@ void proc_sleep(void *chan) {
         prev->pending_signals &= ~pending_stop;
         proc_stop(prev);
         // Resumes here after SIGCONT.
+    }
+
+    // Clear any SIG_IGN'd pending signals before the fatal-signal check so that
+    // a sleeping process with SIG_IGN set on a normally-fatal signal is not killed.
+    // SIGKILL and SIGSTOP can never be ignored (POSIX).
+    {
+        uint32_t tmp = prev->pending_signals & ~prev->signal_mask;
+        while (tmp) {
+            int s = kernel_ctz((uint32_t)(tmp));
+            tmp &= tmp - 1;
+            if (s != KERNEL_SIGKILL && s != KERNEL_SIGSTOP &&
+                prev->handlers[s] == (void *)SIG_IGN)
+                prev->pending_signals &= ~(1u << s);
+        }
     }
 
     // Fatal signals - respect signal mask

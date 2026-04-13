@@ -1,5 +1,6 @@
 #include "process/process.h"
 #include "kernel/printk.h"
+#include "signal.h"
 #include "trap/trap.h"
 #include "arch/riscv.h"
 #include "fs/vfs.h"
@@ -106,6 +107,9 @@ struct proc* proc_create(const char *name) {
     p->mlfq_level = 0;
     p->trapframe = NULL;
     p->trapframe_owned = 0;
+    for (int i = 0; i < MAX_HANDLERS; i++) { // Initialize all entries to SIG_DFL (0)
+        p->handlers[i] = 0;
+    }
 
     // Initialize VMA list
     vma_init(&p->vma_list);
@@ -546,6 +550,11 @@ int exec(const char *path, char *const argv[]) {
     // NOTE: current->priority (nice value) and current->signal_mask are
     // intentionally NOT reset here — POSIX requires both to be preserved
     // across exec().  Do not clear these fields in future refactors.
+    // Signal dispositions: SIG_IGN survives exec(); all others reset to SIG_DFL.
+    for (int i = 0; i < 32; i++) {
+        if (current->handlers[i] != (void *)SIG_IGN)
+            current->handlers[i] = (void *)SIG_DFL;
+    }
     pagetable_t old_pt = current->pagetable;
     struct vm_area *old_vma_list = current->vma_list;
 

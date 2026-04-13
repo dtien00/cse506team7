@@ -40,6 +40,7 @@
 .global rmdir
 .global gettimeofday
 .global alarm
+.global sigaction
 
 
 mmap:
@@ -249,5 +250,10 @@ gettimeofday:
 
 alarm:
     li a7, 35
+    ecall
+    ret
+
+sigaction:
+    li a7, 36
     ecall
     ret

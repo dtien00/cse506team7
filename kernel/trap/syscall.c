@@ -51,6 +51,19 @@ void syscall_handler(trap_frame *frame) {
             // Re-evaluate signals — new ones may have arrived while stopped.
         }
 
+        // Clear any pending signals whose disposition is SIG_IGN.
+        // SIGKILL (bit 9) can never be ignored even if handlers[9] == SIG_IGN.
+        {
+            uint32_t tmp = current->pending_signals & ~current->signal_mask;
+            while (tmp) {
+                int s = kernel_ctz((uint32_t)(tmp));
+                tmp &= tmp - 1;
+                if (s != KERNEL_SIGKILL && s != KERNEL_SIGSTOP &&
+                    current->handlers[s] == (void *)SIG_IGN)
+                    current->pending_signals &= ~(1u << s);
+            }
+        }
+
         // Check if this process has a fatal pending signal before handling anything.
         // This catches processes that were signaled while running (not sleeping).
         // Fatal signals: filtered by signal_mask (except SIGKILL which can't be masked,
@@ -291,6 +304,12 @@ void syscall_handler(trap_frame *frame) {
             ret = sys_alarm((unsigned int) arg0);
             break;
 
+        case SYS_sigaction:
+            ret = sys_sigaction((int)arg0,
+                                (const struct sigaction *)arg1,
+                                (struct sigaction *)arg2);
+            break;
+
         default:
             printk("Unknown system call: %d\n", syscall_num);
             ret = -1;
@@ -334,6 +353,8 @@ pid_t sys_fork(void) {
     }
 
     child->signal_mask = current->signal_mask; // Fork child inherits parent's signal mask
+    // POSIX: child inherits parent's signal disposition table across fork
+    memcpy(child->handlers, current->handlers, sizeof(current->handlers));
     child->priority    = current->priority;    /* POSIX: nice value is inherited across fork */
     /* Child starts one level below the parent so a timer-preempted parent
      * re-enters at the same level as the child; LIFO insertion then keeps
@@ -1287,4 +1308,34 @@ unsigned int sys_alarm(unsigned int seconds) {
         return 0;
     // Ceiling division: round up so partial ticks count as a full second
     return (unsigned int)((old - timer_ticks + TICKS_PER_SEC - 1) / TICKS_PER_SEC);
+}
+
+int sys_sigaction(int sig, const struct sigaction *act, struct sigaction *oldact) {
+    if (!current) return -1;
+    if (sig < 1 || sig >= 32) return -EINVAL;
+    // SIGKILL and SIGSTOP cannot be caught or ignored — POSIX
+    if (sig == SIGKILL || sig == SIGSTOP) return -EINVAL;
+
+    set_csr_bit(sstatus, SSTATUS_SUM);
+
+    // Return previous disposition in oldact if the caller wants it
+    if (oldact != NULL) {
+        oldact->sa_handler = (sighandler_t)current->handlers[sig];
+        oldact->sa_mask    = 0;
+        oldact->sa_flags   = 0;
+    }
+
+    // Install new disposition — only SIG_DFL (0) and SIG_IGN (1) accepted;
+    // custom function pointers require a signal-return trampoline (BLOCKED-8).
+    if (act != NULL) {
+        sighandler_t h = act->sa_handler;
+        if (h != SIG_DFL && h != SIG_IGN) {
+            clear_csr_bit(sstatus, SSTATUS_SUM);
+            return -EINVAL;
+        }
+        current->handlers[sig] = (void *)h;
+    }
+
+    clear_csr_bit(sstatus, SSTATUS_SUM);
+    return 0;
 }

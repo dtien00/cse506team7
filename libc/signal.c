@@ -8,17 +8,19 @@ int raise(int sig) {
 }
 
 sighandler_t signal(int signum, sighandler_t handler) {
-    (void)signum;
-    (void)handler;
-    return SIG_DFL;
+    struct sigaction act, oldact;
+    act.sa_handler  = handler;
+    act.sa_mask     = 0;
+    act.sa_flags    = 0;
+    act.sa_restorer = 0;
+    if (sigaction(signum, &act, &oldact) < 0)
+        return SIG_ERR;
+    return oldact.sa_handler;
 }
 
-int sigaction(int signum, const struct sigaction *act, struct sigaction *oldact) {
-    (void)signum;
-    (void)act;
-    (void)oldact;
-    return -1;
-}
+/* sigaction() itself is provided by the ecall stub in syscall.S (SYS_sigaction = 36).
+ * Only SIG_DFL and SIG_IGN are accepted; custom function pointers return -EINVAL
+ * because the kernel has no signal-return trampoline (BLOCKED-8 in TRAILBLAZE.md). */
 
 /* sigset stubs — no kernel signal infrastructure */
 
