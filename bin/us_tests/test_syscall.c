@@ -9,9 +9,7 @@ void run_test_syscall(us_test_group_t *group) {
     ut_group_begin(group, "syscall");
 
     /* ── uptime ─────────────────────────────────────────────────────── */
-    // printf("[syscall] calling uptime()...\n");
     int t1 = uptime();
-    // printf("[syscall] uptime() returned %d\n", t1);
     TEST(group, "uptime: returns non-negative value", t1 >= 0);
 
     int t2 = uptime();
@@ -19,13 +17,10 @@ void run_test_syscall(us_test_group_t *group) {
 
     /* ── sleep ──────────────────────────────────────────────────────── */
     int before = uptime();
-    // printf("[syscall] trying to sleep...\n");
     sleep(1);
-    // printf("[syscall] I have awoken??\n");
     int after  = uptime();
     int delta  = after - before;
 
-    // printf("This was the delta: %d\n", delta);
     TEST(group, "sleep(1): uptime advances by at least 1 tick", delta >= 1);
     /*
      * QEMU virt timer fires at ~10 Hz (TIMER_INTERVAL=1,000,000 at 10 MHz).

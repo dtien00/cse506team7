@@ -1,17 +1,7 @@
 #include "sys/time.h"
 #include "stddef.h"
 
-int gettimeofday(struct timeval* tv, struct timezone* tz) {
-    if (tv) {
-        tv->tv_sec = 0;
-        tv->tv_usec = 0;
-    }
-    if (tz) {
-        tz->tz_minuteswest = 0;
-        tz->tz_dsttime = 0;
-    }
-    return 0;
-}
+// gettimeofday() is implemented as a syscall wrapper in syscall.S (SYS_gettimeofday = 34)
 
 int settimeofday(const struct timeval* tv, const struct timezone* tz) {
     (void)tv;

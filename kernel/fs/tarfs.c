@@ -218,7 +218,7 @@ vnode_t *tarfs_lookup(mount_t *mnt, const char *path) {
         return NULL;
 
     vnode->ino = (uint64_t) entry; // Use entry pointer as inode number
-    vnode->mode = 0644; // Default read permissions
+    vnode->mode = (uint32_t)octal_to_size(entry->header->mode, sizeof(entry->header->mode));
     vnode->size = entry->size;
     vnode->ref_count = 0;
     vnode->mount = mnt;
@@ -263,11 +263,21 @@ static const char *direct_child_name(const char *entry_name, const char *dir, in
         return NULL; // skip the root entry itself
 
     if (dlen == 0) {
-        // Root directory: child has no '/' in its name
-        for (int i = 0; i < elen; i++)
-            if (stripped[i] == '/')
+        // Root directory: strip leading "./" (tar -C . produces "./name") then
+        // verify there is no further '/' — that would make it a deeper entry.
+        const char *p = stripped;
+        int plen = elen;
+        if (plen >= 2 && p[0] == '.' && p[1] == '/')
+            p += 2, plen -= 2;
+        if (plen == 0)
+            return NULL;
+        for (int i = 0; i < plen; i++)
+            if (p[i] == '/')
                 return NULL;
-        return entry_name; // caller will use this pointer for name
+        // Skip the "./" prefix in the original name so the caller displays
+        // just "bin", not "./bin".
+        int skip = (entry_name[0] == '.' && entry_name[1] == '/') ? 2 : 0;
+        return entry_name + skip;
     }
 
     // Non-root: must start with dir + '/'
@@ -415,14 +425,15 @@ void tarfs_populate_ext2(mount_t *ext2_mnt) {
 
             // Write its contents if non-empty
             if (e->size > 0) {
-                dentry_t *dent = vfs_lookup(dst);
-                if (dent && dent->d_vnode) {
+                dentry_t *dent = NULL;
+                if (vfs_lookup(dst, &dent) == 0 && dent->d_vnode) {
                     vnode_t *vn = dent->d_vnode;
                     int written = vn->fs_type->ops.write(vn, e->data, 0, e->size);
                     if (written < 0)
                         printk("tarfs: write %s failed (%d)\n", dst, written);
                     else
                         printk("tarfs: copied %s (%d bytes)\n", dst, written);
+                    dentry_put(dent);
                 } else {
                     printk("tarfs: lookup after create failed for %s\n", dst);
                 }

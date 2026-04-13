@@ -46,27 +46,29 @@ static pid_t wait_for_pid(pid_t target, int *status_out) {
     }
 }
 
-static void run_userspace_tests(void) {
-    char *argv[] = { "us_tests", NULL };
+static void run_one_suite(const char *path, const char *name) {
+    char *argv[] = { (char *)name, NULL };
     int status = 0;
 
-    pid_t test_pid = spawn_exec("/bin/us_tests",
-                                argv,
-                                "init: fork for /bin/us_tests failed\n",
-                                "init: exec /bin/us_tests failed\n");
-    if (test_pid < 0)
+    pid_t pid = spawn_exec(path, argv,
+                           "init: fork for test suite failed\n",
+                           "init: exec test suite failed\n");
+    if (pid < 0)
         return;
 
-    if (wait_for_pid(test_pid, &status) < 0) {
-        write_fd(STDERR_FILENO, "init: wait for /bin/us_tests failed\n");
+    if (wait_for_pid(pid, &status) < 0) {
+        write_fd(STDERR_FILENO, "init: wait for test suite failed\n");
         return;
     }
 
-    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-        write_fd(STDOUT_FILENO, "init: userspace tests reported failures\n");
-    } else {
-        write_fd(STDOUT_FILENO, "init: userspace tests passed\n");
-    }
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+        write_fd(STDOUT_FILENO, "init: test suite reported failures\n");
+    else
+        write_fd(STDOUT_FILENO, "init: test suite passed\n");
+}
+
+static void run_userspace_tests(void) {
+    run_one_suite("/bin/us_tests", "us_tests");
 }
 
 int main(void) {

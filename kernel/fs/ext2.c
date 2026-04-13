@@ -433,6 +433,7 @@ vnode_t *ext2_mount(mount_t *mnt, const char *source) {
     root_vnode->ino = EXT2_ROOT_INO;
     root_vnode->mode = root_inode->i_mode;
     root_vnode->size = root_inode->i_size;
+    root_vnode->type = ((root_inode->i_mode & 0xF000) == EXT2_S_IFDIR) ? VNODE_DIR : VNODE_REG;
     root_vnode->ref_count = 0;
     root_vnode->mount = mnt;
     root_vnode->fs_data = root_inode;
@@ -1295,6 +1296,72 @@ done:
     return (int)buf_off;
 }
 
+static int ext2_chmod(mount_t *mnt, vnode_t *vnode, mode_t mode) {
+    if (!mnt || !mnt->fs_data || !vnode) return -EINVAL;
+
+    ext2_mount_data_t *ext2_mnt = (ext2_mount_data_t *)mnt->fs_data;
+
+    ext2_inode_t inode;
+    if (ext2_read_inode(ext2_mnt, (uint32_t)vnode->ino, &inode) != 0)
+        return -EIO;
+
+    /* Preserve file-type bits (top 4 bits), replace permission bits */
+    inode.i_mode = (inode.i_mode & ~(uint16_t)0x0FFF) | (uint16_t)(mode & 0x0FFF);
+
+    return ext2_write_inode(ext2_mnt, (uint32_t)vnode->ino, &inode);
+}
+
+static int ext2_rmdir(mount_t *mnt, const char *path) {
+    if (!mnt || !mnt->fs_data || !path) return -EINVAL;
+
+    ext2_mount_data_t *ext2_mnt = (ext2_mount_data_t *)mnt->fs_data;
+
+    /* Look up the target — must be a directory */
+    vnode_t *target = ext2_lookup(mnt, path);
+    if (!target) return -ENOENT;
+    if (target->type != VNODE_DIR) {
+        kfree(target->fs_data);
+        kfree(target);
+        return -ENOTDIR;
+    }
+
+    /* Check directory is empty: scan entries, fail on anything besides . and .. */
+    uint8_t *dir_buf = (uint8_t *)kmalloc(ext2_mnt->block_size);
+    if (!dir_buf) {
+        kfree(target->fs_data);
+        kfree(target);
+        return -ENOMEM;
+    }
+
+    ext2_inode_t *dir_inode = (ext2_inode_t *)target->fs_data;
+    if (block_cache_read(dir_inode->i_block[0], dir_buf) == 0) {
+        uint32_t offset = 0;
+        while (offset < ext2_mnt->block_size) {
+            ext2_dirent_t *de = (ext2_dirent_t *)(dir_buf + offset);
+            if (de->rec_len == 0) break;
+            if (de->inode != 0) {
+                char name[256];
+                memcpy(name, de->name, de->name_len);
+                name[de->name_len] = '\0';
+                if (strcmp(name, ".") != 0 && strcmp(name, "..") != 0) {
+                    kfree(dir_buf);
+                    kfree(target->fs_data);
+                    kfree(target);
+                    return -ENOTEMPTY;
+                }
+            }
+            offset += de->rec_len;
+        }
+    }
+
+    kfree(dir_buf);
+    kfree(target->fs_data);
+    kfree(target);
+
+    /* Directory is empty — reuse unlink to remove the entry from the parent */
+    return ext2_unlink(mnt, path);
+}
+
 // Initialize ext2 filesystem type
 void ext2_init(void) {
     ext2_fs_type.name = "ext2";
@@ -1308,6 +1375,8 @@ void ext2_init(void) {
     ext2_fs_type.ops.mkdir = ext2_mkdir;
     ext2_fs_type.ops.truncate = ext2_truncate;
     ext2_fs_type.ops.readdir  = ext2_readdir;
+    ext2_fs_type.ops.chmod    = ext2_chmod;
+    ext2_fs_type.ops.rmdir    = ext2_rmdir;
     ext2_fs_type.next = NULL;
     
     vfs_register_fs(&ext2_fs_type);

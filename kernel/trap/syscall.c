@@ -1,4 +1,5 @@
 #include "trap/syscall.h"
+#include "drivers/rtc.h"
 #include "arch/riscv.h"
 #include "process/process.h"
 #include "errno.h"
@@ -27,7 +28,6 @@
 
 #define MAX_ARGS 64
 #define KARG_MAX 256
-#define MAX_PATH    256
 
 void syscall_init(void) { printk("Syscall: Initialized\n"); }
 
@@ -143,7 +143,7 @@ void syscall_handler(trap_frame *frame) {
             break;
 
         case SYS_open:
-            ret = sys_open((const char *) arg0, (int) arg1);
+            ret = sys_open((const char *) arg0, (int) arg1, (mode_t) arg2);
             break;
 
         case SYS_close:
@@ -171,15 +171,11 @@ void syscall_handler(trap_frame *frame) {
             break;
 
         case SYS_sleep:
-            // printk("  [kernel] syscall_handler: dispatching SYS_sleep(%d)\n", (int)arg0);
             ret = sys_sleep((int) arg0);
-            // printk("  [kernel] syscall_handler: SYS_sleep returned %d\n", ret);
             break;
 
         case SYS_uptime:
-            // printk("  [kernel] syscall_handler: dispatching SYS_uptime\n");
             ret = sys_uptime();
-            // printk("  [kernel] syscall_handler: SYS_uptime returned %d\n", ret);
             break;
 
         case SYS_kill:
@@ -251,6 +247,10 @@ void syscall_handler(trap_frame *frame) {
             ret = sys_getrusage((int)arg0, (struct rusage *)arg1);
             break;
 
+        case SYS_gettimeofday:
+            ret = sys_gettimeofday((struct timeval_k *)arg0, (void *)arg1);
+            break;
+
         case SYS_nice:
             ret = sys_nice((int)arg0);
             break;
@@ -265,6 +265,26 @@ void syscall_handler(trap_frame *frame) {
 
         case SYS_procinfo:
             ret = sys_procinfo((struct proc_info *) arg0, (int) arg1);
+            break;
+
+        case SYS_stat:
+            ret = sys_stat((char *)arg0, (void *)arg1);
+            break;
+
+        case SYS_fstat:
+            ret = sys_fstat((int)arg0, (void *)arg1);
+            break;
+
+        case SYS_chmod:
+            ret = sys_chmod((const char *)arg0, (mode_t)arg1);
+            break;
+
+        case SYS_fchmod:
+            ret = sys_fchmod((int)arg0, (mode_t)arg1);
+            break;
+
+        case SYS_rmdir:
+            ret = sys_rmdir((const char *)arg0);
             break;
 
         default:
@@ -311,7 +331,13 @@ pid_t sys_fork(void) {
 
     child->signal_mask = current->signal_mask; // Fork child inherits parent's signal mask
     child->priority    = current->priority;    /* POSIX: nice value is inherited across fork */
-    child->mlfq_level  = 0;                    /* fresh MLFQ slate — child has used no CPU yet */
+    /* Child starts one level below the parent so a timer-preempted parent
+     * re-enters at the same level as the child; LIFO insertion then keeps
+     * the parent at the head of that level so it finishes forking remaining
+     * children before any child gets scheduled.  Clamped to MLFQ_LEVELS-1. */
+    child->mlfq_level  = (current->mlfq_level < MLFQ_LEVELS - 1)
+                         ? current->mlfq_level + 1
+                         : MLFQ_LEVELS - 1;
     child->fs = fs_struct_copy(current->fs);
     if (!child->fs) {
         vma_free_all(child->vma_list);
@@ -366,89 +392,63 @@ pid_t sys_fork(void) {
 }
 
 ssize_t sys_read(int fd, void *buf, size_t count) {
-    file_t *f = fd_get(&current->fds, fd);
-    if (!f) return -1;
-    if (f->type == FILE_PIPE)
-        return file_read(f, buf, count);
-    set_csr_bit(sstatus, SSTATUS_SUM);
-    int n = file_read(f, buf, count);
-    clear_csr_bit(sstatus, SSTATUS_SUM);
+    if (!current || !buf)
+        return -EINVAL;
+    if (count == 0)
+        return 0;
+
+    char *kbuf = (char *) kmalloc(count);
+    if (!kbuf)
+        return -ENOMEM;
+
+    int n = file_read(fd, kbuf, count);
+    if (n > 0)
+        copy_to_user(buf, kbuf, (size_t) n);
+
+    kfree(kbuf);
     return n;
 }
 
 ssize_t sys_write(int fd, const void *buf, size_t count) {
-    if (count == 0) return 0;
-    if (!current || fd < 0 || fd >= MAX_FDS) return -EBADF;
+    if (!current || !buf)
+        return -EINVAL;
+    if (count == 0)
+        return 0;
 
-    file_t *f = fd_get(&current->fds, fd);
-    if (!f) return -EBADF;
+    char *kbuf = (char *) kmalloc(count);
+    if (!kbuf)
+        return -ENOMEM;
 
-    /* Console path — active until vfs_write has a console driver */
-    if (f->type == FILE_STDOUT || f->type == FILE_STDIN) {
-        set_csr_bit(sstatus, SSTATUS_SUM);
-        const char *str = (const char *)buf;
-        for (size_t i = 0; i < count; i++)
-            printk_char(str[i]);
-        clear_csr_bit(sstatus, SSTATUS_SUM);
-        return (ssize_t)count;
-    }
-    if (f->type == FILE_PIPE)
-        return file_write(f, buf, count);
-    set_csr_bit(sstatus, SSTATUS_SUM);
-    ssize_t n = file_write(f, buf, count);
-    clear_csr_bit(sstatus, SSTATUS_SUM);
+    copy_from_user(kbuf, buf, count);
+    int n = file_write(fd, kbuf, count);
+
+    kfree(kbuf);
     return n;
 }
 
-int sys_open(const char *path, int flags) {
+// int sys_open(const char *path, int flags) {
+//     (void) flags;
+//     if (!current || !path) return -EINVAL;
+//
+//     char kpath[MAX_PATH];
+//     strncpy_from_user(kpath, path, MAX_PATH - 1);
+//     kpath[MAX_PATH - 1] = '\0';
+//
+//     return file_open(kpath);
+// }
+
+int sys_open(const char *path, int flags, mode_t mode) {
     if (!current || !path) return -EINVAL;
 
-    // SUM open only for the copy — nothing else
-    set_csr_bit(sstatus, SSTATUS_SUM);
     char kpath[MAX_PATH];
-    strncpy(kpath, path, MAX_PATH - 1);
+    strncpy_from_user(kpath, path, MAX_PATH - 1);
     kpath[MAX_PATH - 1] = '\0';
-    clear_csr_bit(sstatus, SSTATUS_SUM);
 
-    // Resolve path relative to cwd before doing anything else
-    char cwd[MAX_PATH];
-    if (fs_struct_get_cwd(current->fs, cwd, MAX_PATH) < 0) return -ENAMETOOLONG;
-    char resolved[MAX_PATH];
-    if (path_resolve(cwd, kpath, resolved) < 0) return -ENAMETOOLONG;
-
-    // If O_CREAT is set and the file doesn't exist, create it
-    if (flags & O_CREAT) {
-        dentry_t *d = vfs_lookup(resolved);
-        if (!d) {
-            if (vfs_create(resolved, 0644) < 0) return -ENOENT;
-        } else {
-            dentry_put(d);
-        }
-    }
-
-    file_t *f = file_open(resolved);
-    if (!f) return -ENOENT;
-
-    f->flags = flags;
-
-    // O_TRUNC: discard existing content
-    if ((flags & O_TRUNC) && (flags & (O_WRONLY | O_RDWR))) {
-        if (f->vnode && f->vnode->mount && f->vnode->mount->fs_type->ops.truncate)
-            f->vnode->mount->fs_type->ops.truncate(f->vnode);
-    }
-
-    // O_APPEND: start writes at end of file
-    if (flags & O_APPEND)
-        f->offset = f->vnode ? f->vnode->size : 0;
-
-    return fd_alloc(&current->fds, f);
+    return file_open_with_flags(kpath, flags, mode);
 }
 
 int sys_close(int fd) {
-    file_t *f = fd_get(&current->fds, fd);
-    if (!f) return -1;
-    fd_close(&current->fds, fd);
-    return 0;
+    return file_close(fd);
 }
 
 int sys_pipe(int pipefd[2]) {
@@ -510,13 +510,12 @@ int sys_pipe(int pipefd[2]) {
 int sys_dup(int oldfd) {
     if (!current) return -EBADF;
 
-    file_t *f = fd_get(&current->fds, oldfd);
+    file_t *f = f_get(current, oldfd);
     if (!f) return -EBADF;
 
-    file_ref(f);
     int newfd = fd_alloc(&current->fds, f);
     if (newfd < 0) {
-        file_close(f);
+        f_put(f);
         return -EMFILE;
     }
 
@@ -527,16 +526,18 @@ int sys_dup2(int oldfd, int newfd) {
     if (!current) return -EBADF;
     if (newfd < 0 || newfd >= MAX_FDS) return -EBADF;
 
-    file_t *f = fd_get(&current->fds, oldfd);
+    file_t *f = f_get(current, oldfd);
     if (!f) return -EBADF;
 
-    if (oldfd == newfd) return newfd;
+    if (oldfd == newfd) {
+        f_put(f);
+        return newfd;
+    }
 
     if (fd_get(&current->fds, newfd)) {
         fd_close(&current->fds, newfd);
     }
 
-    file_ref(f);
     current->fds.files[newfd] = f;
     return newfd;
 }
@@ -588,7 +589,6 @@ int sys_sleep(int seconds) {
 }
 
 int sys_uptime(void) {
-    // printk("  [kernel] sys_uptime: timer_ticks=%lu\n", (unsigned long)timer_ticks);
     return (int)timer_ticks;
 }
 
@@ -900,20 +900,7 @@ void *sys_sbrk(intptr_t increment) {
 }
 
 off_t sys_lseek(int fd, off_t offset, int whence) {
-    if (!current) return -1;
-
-    file_t *f = fd_get(&current->fds, fd);
-    if (!f) {
-        printk("sys_lseek: invalid fd %d\n", fd);
-        return -1;
-    }
-
-    // Don't allow seeking on stdin/stdout/stderr
-    if (f->type == FILE_STDIN || f->type == FILE_STDOUT) {
-        return -1;
-    }
-
-    return (off_t)file_lseek(f, (size_t)offset, whence);
+    return (off_t) file_lseek(fd, (size_t) offset, whence);
 }
 
 int sys_unlink(const char *path) {
@@ -937,10 +924,13 @@ int sys_mkdir(const char *path, mode_t mode) {
     kpath[MAX_PATH - 1] = '\0';
     clear_csr_bit(sstatus, SSTATUS_SUM);
 
-    char cwd[MAX_PATH];
-    if (fs_struct_get_cwd(current->fs, cwd, MAX_PATH) < 0) return -ENAMETOOLONG;
+    /* vfs_mkdir uses vfs_find_mount() prefix matching, so it needs a
+     * normalized absolute path.  dentry_normalize_path handles ".", "..",
+     * double slashes, and relative-to-cwd expansion. */
     char resolved[MAX_PATH];
-    if (path_resolve(cwd, kpath, resolved) < 0) return -ENAMETOOLONG;
+    if (dentry_normalize_path(current->fs->cwd, vfs_get_root(),
+                              kpath, resolved, sizeof(resolved)) < 0)
+        return -ENAMETOOLONG;
 
     return vfs_mkdir(resolved, mode);
 }
@@ -983,13 +973,11 @@ int sys_sigprocmask(int how, const uint32_t *set, uint32_t *oldset) {
 int sys_chdir(const char *path) {
     if (!current || !path) return -EINVAL;
 
-    set_csr_bit(sstatus, SSTATUS_SUM);
     char kpath[MAX_PATH];
-    strncpy(kpath, path, MAX_PATH - 1);
+    strncpy_from_user(kpath, path, MAX_PATH - 1);
     kpath[MAX_PATH - 1] = '\0';
-    clear_csr_bit(sstatus, SSTATUS_SUM);
 
-    return vfs_chdir(kpath);
+    return vfs_chdir(kpath);   // VFS owns everything below
 }
 
 char *sys_getcwd(char *buf, size_t size) {
@@ -1005,41 +993,50 @@ char *sys_getcwd(char *buf, size_t size) {
     size_t cwd_len = strlen(kbuf);
     if (cwd_len + 1 > size) return NULL;   // user buffer too small
 
-    set_csr_bit(sstatus, SSTATUS_SUM);
-    memcpy(buf, kbuf, cwd_len + 1);
-    clear_csr_bit(sstatus, SSTATUS_SUM);
+    copy_to_user(buf, kbuf, cwd_len + 1);
 
     return buf;
 }
 
 // Fills user buffer `dirp` with fs_dent records for the directory
 // referenced by `fd`.  Returns bytes written, 0 at end-of-directory, -errno.
-
-int sys_fs_getdents(int fd, void *dirp, uint32_t count){
+int sys_fs_getdents(int fd, void *dirp, uint32_t count)
+{
     if (!current || !dirp) return -EINVAL;
 
-    file_t *f = fd_get(&current->fds, fd);
-    if (!f || f->type != FILE_VNODE)              return -EBADF;
-    if (!f->vnode || f->vnode->type != VNODE_DIR) return -ENOTDIR;
+    file_t *f = f_get(current, fd);
+    if (!f || f->type != FILE_VNODE) {
+        if (f)
+            f_put(f);
+        return -EBADF;
+    }
+    if (!f->dentry || !f->vnode || f->vnode->type != VNODE_DIR) {
+        f_put(f);
+        return -ENOTDIR;
+    }
 
-    if (count == 0) return 0;
+    if (count == 0) {
+        f_put(f);
+        return 0;
+    }
 
     char *kbuf = kmalloc(count);
-    if (!kbuf) return -ENOMEM;
+    if (!kbuf) {
+        f_put(f);
+        return -ENOMEM;
+    }
 
     uint32_t entries_read = 0;
-    int n = vfs_readdir(f->vnode, (uint32_t)f->offset,
+    int n = vfs_readdir(f->dentry, (uint32_t)f->offset,
                         kbuf, count, &entries_read);
 
     if (n > 0) {
         f->offset += entries_read;
-
-        set_csr_bit(sstatus, SSTATUS_SUM);
-        memcpy(dirp, kbuf, (size_t)n);
-        clear_csr_bit(sstatus, SSTATUS_SUM);
+        copy_to_user(dirp, kbuf, (size_t) n);
     }
 
     kfree(kbuf);
+    f_put(f);
     return n;
 }
 /* ------------------------------------------------------------------ */
@@ -1072,6 +1069,31 @@ int sys_getrusage(int who, struct rusage *usage) {
 }
 
 /* ------------------------------------------------------------------ */
+/* sys_gettimeofday                                                     */
+/* ------------------------------------------------------------------ */
+
+int sys_gettimeofday(struct timeval_k *tv, void *tz) {
+    if (tv) {
+        uint64_t ns = rtc_read_ns();
+        struct timeval_k ktv;
+        ktv.tv_sec  = ns / 1000000000ULL;
+        ktv.tv_usec = (ns % 1000000000ULL) / 1000ULL;
+        set_csr_bit(sstatus, SSTATUS_SUM);
+        *tv = ktv;
+        clear_csr_bit(sstatus, SSTATUS_SUM);
+    }
+    if (tz) {
+        // struct timezone = { int tz_minuteswest; int tz_dsttime; }
+        // Always return UTC (both fields zero).
+        int zeros[2] = {0, 0};
+        set_csr_bit(sstatus, SSTATUS_SUM);
+        __builtin_memcpy(tz, zeros, sizeof(zeros));
+        clear_csr_bit(sstatus, SSTATUS_SUM);
+    }
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
 /* sys_nice                                                             */
 /* ------------------------------------------------------------------ */
 
@@ -1097,7 +1119,11 @@ int sys_nice(int increment) {
     long new_prio = (long)current->priority + (long)increment;
     if (new_prio < 0)  new_prio = 0;
     if (new_prio > 19) new_prio = 19;
+    int old_prio = current->priority;
     current->priority = (int)new_prio;
+    /* Lowered scheduling priority — yield if a better process is waiting. */
+    if ((int)new_prio > old_prio)
+        proc_preempt_if_needed();
     return (int)new_prio;
 }
 
@@ -1163,4 +1189,81 @@ int sys_procinfo(struct proc_info *infos, int max_count) {
     }
     clear_csr_bit(sstatus, SSTATUS_SUM);
     return count;
+}
+
+
+// trap/trapsyscall.c
+
+int sys_stat(const char *upath, struct stat *ustat)
+{
+    if (!current || !upath || !ustat) return -EINVAL;
+
+    // 1. Copy path from user
+    char kpath[MAX_PATH];
+    strncpy_from_user(kpath, upath, MAX_PATH - 1);
+    kpath[MAX_PATH - 1] = '\0';
+
+    // 2. Do kernel-side stat (no user memory access)
+    struct stat kst;
+    int ret = file_stat(kpath, &kst);
+    if (ret != 0) return ret;
+
+    // 3. Copy result back to user
+    copy_to_user(ustat, &kst, sizeof(struct stat));
+
+    return 0;
+}
+
+int sys_fstat(int fd, struct stat *ustat)
+{
+    if (!current || !ustat) return -EINVAL;
+
+    // 1. Kernel-side stat by fd (no user memory needed)
+    struct stat kst;
+    int ret = file_fstat(fd, &kst);
+    if (ret != 0) return ret;
+
+    // 2. Copy result to user
+    copy_to_user(ustat, &kst, sizeof(struct stat));
+    return 0;
+}
+
+int sys_chmod(const char *upath, mode_t mode) {
+    if (!current || !upath) return -EINVAL;
+
+    char kpath[MAX_PATH];
+    strncpy_from_user(kpath, upath, MAX_PATH - 1);
+    kpath[MAX_PATH - 1] = '\0';
+
+    char resolved[MAX_PATH];
+    if (dentry_normalize_path(current->fs->cwd, vfs_get_root(),
+                              kpath, resolved, sizeof(resolved)) < 0)
+        return -ENAMETOOLONG;
+
+    return vfs_chmod(resolved, mode);
+}
+
+int sys_fchmod(int fd, mode_t mode) {
+    if (!current) return -EINVAL;
+
+    file_t *f = fd_get(&current->fds, fd);
+    if (!f) return -EBADF;
+    if (f->type != FILE_VNODE || !f->vnode) return -EBADF;
+
+    return vfs_fchmod(f->vnode, mode);
+}
+
+int sys_rmdir(const char *path) {
+    if (!current || !path) return -EINVAL;
+
+    char kpath[MAX_PATH];
+    strncpy_from_user(kpath, path, MAX_PATH - 1);
+    kpath[MAX_PATH - 1] = '\0';
+
+    char resolved[MAX_PATH];
+    if (dentry_normalize_path(current->fs->cwd, vfs_get_root(),
+                              kpath, resolved, sizeof(resolved)) < 0)
+        return -ENAMETOOLONG;
+
+    return vfs_rmdir(resolved);
 }

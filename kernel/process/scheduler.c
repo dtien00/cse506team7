@@ -55,16 +55,15 @@ void schedule(void) {
     while (1) {
         // Keep scheduler bookkeeping + context handoff atomic w.r.t. timer IRQs.
         interrupts_off();
-        // printk("   I am trying...\n");
+
         struct proc *next = proc_next_ready();
         if (next != NULL) {
-            // printk("  next is not null. Let us go to (%d)!\n", next->pid);
             next->state = PROC_RUNNING;
             current = next;
 
             // Kernel execution for this process (sleep/wait resume, syscall
             // return path, then sret) must use that process's page table.
-            if (next->pagetable){
+            if (next->pagetable) {
                 // Verify the kernel VA at the current PC is reachable through
                 // next's page table before switching SATP — if it isn't, the
                 // CPU will hang silently after the csrw satp instruction.
@@ -73,11 +72,9 @@ void schedule(void) {
                 uintptr_t mapped_pa = vmm_translate(next->pagetable, pc);
                 (void) mapped_pa;
                 vmm_switch(next->pagetable);
-            }else{
-                // printk("  Initializing new pagetable...");
+            } else
                 vmm_switch(vmm_kernel_pagetable());
-            }
-            // printk("    done. \n");
+
             // Do not re-enable interrupts here; new context controls that.
             swtch(&scheduler_context, &next->context);
             // Returns here when this CPU is handed back to the scheduler
@@ -120,10 +117,12 @@ void proc_yield(void) {
 // }
 
 // Insert p into its MLFQ level, sorted by priority (lower value = higher priority).
+// Equal-priority processes are inserted at the HEAD (LIFO within a priority band),
+// so a newly-forked child runs before older siblings at the same priority.
 // Caller must set p->mlfq_level, p->time_slice, and p->next = NULL before calling.
 static void mlfq_insert(struct proc *p) {
     int lvl = p->mlfq_level;
-    if (mlfq[lvl] == NULL || p->priority < mlfq[lvl]->priority) {
+    if (mlfq[lvl] == NULL || p->priority <= mlfq[lvl]->priority) {
         p->next = mlfq[lvl];
         mlfq[lvl] = p;
         return;
@@ -141,6 +140,38 @@ void proc_ready(struct proc *p) {
     p->time_slice = (1 << p->mlfq_level);
     p->next = NULL;
     mlfq_insert(p);
+}
+
+/*
+ * proc_preempt_if_needed — yield if a higher-priority process is waiting.
+ *
+ * Called by sys_nice() after a process lowers its own scheduling priority
+ * (positive nice increment).  If any MLFQ level holds a process whose
+ * priority number is strictly less than current's (i.e. higher scheduling
+ * priority), we voluntarily yield so it can run immediately.
+ *
+ * This mirrors the standard POSIX expectation: a process that nice()s
+ * itself down should give way to better-priority work without waiting for
+ * the next timer tick.
+ *
+ * Interrupts are already disabled here: sys_nice() is reached through
+ * handle_exception → syscall_handler, and RISC-V hardware clears
+ * sstatus.SIE on every trap.
+ */
+void proc_preempt_if_needed(void) {
+    if (!current) return;
+    for (int i = 0; i < MLFQ_LEVELS; i++) {
+        if (mlfq[i] && mlfq[i]->priority < current->priority) {
+            // If the higher-priority process is at a deeper level than current,
+            // bump current's mlfq_level to match.  Without this, current would
+            // re-insert at its shallower level after proc_yield() and be picked
+            // again before the higher-priority process gets the CPU.
+            if (current->mlfq_level < i)
+                current->mlfq_level = i;
+            proc_yield();
+            return;
+        }
+    }
 }
 
 /*
@@ -303,14 +334,9 @@ void proc_sleep(void *chan) {
 }
 
 void proc_wakeup(void *chan) {
-    // printk("  [kernel] proc_wakeup: chan=%p\n", chan);
     for (int i = 0; i < MAX_PROCS; i++) {
         struct proc *p = &proctab[i];
-        if (p->state == PROC_BLOCKED) {
-            // printk("  [kernel] proc_wakeup: checking pid=%d chan=%p vs %p\n", p->pid, p->chan, chan);
-        }
         if (p->state == PROC_BLOCKED && p->chan == chan) {
-            // printk("  [kernel] proc_wakeup: unblocking pid=%d\n", p->pid);
             proc_unblock(p);
         }
     }

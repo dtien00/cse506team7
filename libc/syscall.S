@@ -37,6 +37,8 @@
 .global sched_yield
 .global pause
 .global procinfo
+.global rmdir
+.global gettimeofday
 
 
 mmap:
@@ -164,6 +166,11 @@ mkdir:
     ecall
     ret
 
+rmdir:
+    li a7, 52
+    ecall
+    ret
+
 chmod:
     li a7, 90
     ecall
@@ -231,5 +238,10 @@ sched_yield:
 
 pause:
     li a7, 32
+    ecall
+    ret
+
+gettimeofday:
+    li a7, 34
     ecall
     ret

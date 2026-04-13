@@ -35,8 +35,8 @@ static int vnode_read(vnode_t *vn, void *buf, size_t offset, size_t len) {
 static int check_file(const char *path, size_t min_size, int check_elf) {
     int ok = 1;
 
-    dentry_t *dent = vfs_lookup(path);
-    if (!dent || !dent->d_vnode) {
+    dentry_t *dent = NULL;
+    if (vfs_lookup(path, &dent) != 0 || !dent->d_vnode) {
         printk("  [FAIL] %s: vfs_lookup returned NULL\n", path);
         failed++;
         return 0;
@@ -69,8 +69,10 @@ static int check_file(const char *path, size_t min_size, int check_elf) {
         passed++;
     }
 
-    if (!check_elf || sz == 0)
+    if (!check_elf || sz == 0) {
+        dentry_put(dent);
         return ok;
+    }
 
     /* ELF magic — read first 16 bytes */
     unsigned char hdr[16];
@@ -107,6 +109,7 @@ static int check_file(const char *path, size_t min_size, int check_elf) {
                    path, (int)total, r);
             failed++;
             ok = 0;
+            dentry_put(dent);
             return ok;
         }
         total += (size_t)r;
@@ -121,15 +124,18 @@ static int check_file(const char *path, size_t min_size, int check_elf) {
         passed++;
     }
 
+    dentry_put(dent);
     return ok;
 }
 
 static void check_dir(const char *path) {
-    dentry_t *dent = vfs_lookup(path);
-    if (!dent || !dent->d_vnode) {
+    dentry_t *dent = NULL;
+    if (vfs_lookup(path, &dent) != 0 || !dent->d_vnode) {
         printk("  [FAIL] %s: directory missing\n", path);
         failed++;
-    } else if (dent->d_vnode->type != VNODE_DIR) {
+        return;
+    }
+    if (dent->d_vnode->type != VNODE_DIR) {
         printk("  [FAIL] %s: exists but vnode type=%d (expected VNODE_DIR=%d)\n",
                path, dent->d_vnode->type, VNODE_DIR);
         failed++;
@@ -137,6 +143,7 @@ static void check_dir(const char *path) {
         printk("  [PASS] %s: directory OK\n", path);
         passed++;
     }
+    dentry_put(dent);
 }
 
 /*
@@ -147,8 +154,8 @@ static void check_dir(const char *path) {
 static void check_readdir_vfs(const char *path) {
     printk("  [readdir-vfs] %s\n", path);
 
-    dentry_t *dent = vfs_lookup(path);
-    if (!dent || !dent->d_vnode) {
+    dentry_t *dent = NULL;
+    if (vfs_lookup(path, &dent) != 0 || !dent->d_vnode) {
         printk("  [FAIL] %s: vfs_lookup returned NULL\n", path);
         failed++;
         return;
@@ -158,6 +165,7 @@ static void check_readdir_vfs(const char *path) {
     if (vn->type != VNODE_DIR) {
         printk("  [FAIL] %s: not a directory (type=%d)\n", path, vn->type);
         failed++;
+        dentry_put(dent);
         return;
     }
 
@@ -166,21 +174,24 @@ static void check_readdir_vfs(const char *path) {
         printk("  [FAIL] %s: fs '%s' has no readdir op — ls will see nothing!\n",
                path, vn->fs_type ? vn->fs_type->name : "<null>");
         failed++;
+        dentry_put(dent);
         return;
     }
 
     char buf[2048];
     uint32_t nents = 0;
-    int rc = vfs_readdir(vn, 0, buf, sizeof(buf), &nents);
+    int rc = vfs_readdir(dent, 0, buf, sizeof(buf), &nents);
     if (rc < 0) {
         printk("  [FAIL] %s: vfs_readdir returned %d\n", path, rc);
         failed++;
+        dentry_put(dent);
         return;
     }
 
     if (nents == 0) {
         printk("  [FAIL] %s: vfs_readdir returned 0 entries (directory appears empty to ls)\n", path);
         failed++;
+        dentry_put(dent);
         return;
     }
 
@@ -197,6 +208,7 @@ static void check_readdir_vfs(const char *path) {
         if (de->d_reclen == 0) break;
         off += de->d_reclen;
     }
+    dentry_put(dent);
 }
 
 /*
@@ -215,8 +227,8 @@ static void check_raw_ext2_dir(const char *path) {
         return;
     }
 
-    dentry_t *dent = vfs_lookup(path);
-    if (!dent || !dent->d_vnode) {
+    dentry_t *dent = NULL;
+    if (vfs_lookup(path, &dent) != 0 || !dent->d_vnode) {
         printk("  [FAIL] %s: vfs_lookup returned NULL\n", path);
         failed++;
         return;
@@ -226,6 +238,7 @@ static void check_raw_ext2_dir(const char *path) {
     if (vn->type != VNODE_DIR) {
         printk("  [FAIL] %s: not a directory\n", path);
         failed++;
+        dentry_put(dent);
         return;
     }
 
@@ -299,6 +312,7 @@ static void check_raw_ext2_dir(const char *path) {
                path, found_any);
         passed++;
     }
+    dentry_put(dent);
 }
 
 void ext2_populate_test_run(void) {
@@ -327,10 +341,11 @@ void ext2_populate_test_run(void) {
     printk("\n");
 
     printk("-- /etc/rc (optional) --\n");
-    dentry_t *rc = vfs_lookup("/etc/rc");
-    if (rc && rc->d_vnode) {
+    dentry_t *rc = NULL;
+    if (vfs_lookup("/etc/rc", &rc) == 0 && rc->d_vnode) {
         printk("  [INFO] /etc/rc present, size=%d\n", (int)rc->d_vnode->size);
         passed++;
+        dentry_put(rc);
     } else {
         printk("  [INFO] /etc/rc not present (skipped)\n");
     }

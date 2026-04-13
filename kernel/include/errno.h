@@ -55,4 +55,21 @@ int *__errno_location(void);
 
 #define EWOULDBLOCK EAGAIN
 
+// helper macros
+
+#define TRY(expr)                                                                                                      \
+    do {                                                                                                               \
+        int _err = (expr);                                                                                             \
+        if (_err < 0)                                                                                                  \
+            return _err;                                                                                               \
+    } while (0)
+
+// TRY_GOTO  — assigns to caller's err var, jumps to cleanup label
+#define TRY_OR_GOTO(expr, err_var, label)                                                                                 \
+    do {                                                                                                               \
+        (err_var) = (expr);                                                                                            \
+        if ((err_var) < 0)                                                                                             \
+            goto label;                                                                                                \
+    } while (0)
+
 #endif
