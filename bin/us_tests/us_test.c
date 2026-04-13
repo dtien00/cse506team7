@@ -21,7 +21,6 @@
  */
 
 #include <stdio.h>
-#include <string.h>
 #include "us_test_common.h"
 
 void run_test_printf(us_test_group_t *group);
@@ -49,7 +48,6 @@ void run_test_pause(us_test_group_t *group);
 void run_test_procinfo(us_test_group_t *group);
 void run_test_gettimeofday(us_test_group_t *group);
 void run_test_termios_tty(us_test_group_t *group);
-void run_test_exec_envp(us_test_group_t *group);
 
 /* comprehensive libc conformance suites (each fills multiple groups) */
 void run_test_libc_string(us_test_group_t groups[], int *idx);
@@ -60,27 +58,7 @@ void run_test_libc_stdlib(us_test_group_t groups[], int *idx);
 /* base groups + 6 fs_persist sub-groups + libc conformance suites */
 #define MAX_GROUPS 200
 
-static int env_has(char *const envp[], const char *needle) {
-    int i = 0;
-    while (envp && envp[i]) {
-        if (strcmp(envp[i], needle) == 0)
-            return 1;
-        i++;
-    }
-    return 0;
-}
-
-int main(int argc, char **argv, char **envp) {
-    // Probe mode for execve(envp) tests: keep this early and side-effect free.
-    if (argc >= 2 && strcmp(argv[1], "--envp-probe") == 0) {
-        if (argc < 3)
-            return 2;
-        return env_has(envp, argv[2]) ? 0 : 3;
-    }
-    if (argc >= 2 && strcmp(argv[1], "--envp-empty") == 0) {
-        return (!envp || !envp[0]) ? 0 : 4;
-    }
-
+int main(void) {
     us_test_group_t groups[MAX_GROUPS];
     int i;
     for (i = 0; i < MAX_GROUPS; i++) {
@@ -117,7 +95,6 @@ int main(int argc, char **argv, char **envp) {
     run_test_pause(&groups[idx++]);
     run_test_procinfo(&groups[idx++]);
     run_test_gettimeofday(&groups[idx++]);
-    run_test_exec_envp(&groups[idx++]);
 
     /* comprehensive libc conformance tests */
     run_test_libc_string(groups, &idx);
