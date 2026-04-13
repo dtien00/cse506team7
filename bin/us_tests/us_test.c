@@ -47,6 +47,7 @@ void run_test_yield(us_test_group_t *group);
 void run_test_pause(us_test_group_t *group);
 void run_test_procinfo(us_test_group_t *group);
 void run_test_gettimeofday(us_test_group_t *group);
+void run_test_termios_tty(us_test_group_t *group);
 
 /* comprehensive libc conformance suites (each fills multiple groups) */
 void run_test_libc_string(us_test_group_t groups[], int *idx);
@@ -85,6 +86,7 @@ int main(void) {
     run_test_sched(&groups[idx++]);
     run_test_signal(&groups[idx++]);
     run_test_dirent(&groups[idx++]);
+    run_test_termios_tty(&groups[idx++]);
     run_test_stack_growth(&groups[idx++]);
     run_test_getrusage(&groups[idx++]);
     run_test_nice(&groups[idx++]);

@@ -7,6 +7,24 @@ void* memcpy(void *dest, const void *src, size_t n) {
     return dest;
 }
 
+void* memmove(void *dest, const void *src, size_t n) {
+    uint8_t *d = dest;
+    const uint8_t *s = src;
+
+    if (d == s || n == 0)
+        return dest;
+
+    if (d < s) {
+        while (n--) *d++ = *s++;
+    } else {
+        d += n;
+        s += n;
+        while (n--) *--d = *--s;
+    }
+
+    return dest;
+}
+
 void* memset(void *dest, int c, size_t n) {
     uint8_t *d = dest;
     while (n--) *d++ = (uint8_t)c;

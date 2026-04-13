@@ -13,3 +13,5 @@ build/**
 *.md
 dump/**
 /docs/
+/thirdparty/
+/rootfs/bin/

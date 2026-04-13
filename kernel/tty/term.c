@@ -1,5 +1,6 @@
 #include "tty/term.h"
 #include "arch/riscv.h"
+#include "errno.h"
 #include "kernel/console.h"
 #include "kernel/printk.h"
 #include "process/process.h"
@@ -280,9 +281,16 @@ int term_read(terminal_t *t, char *buf, uint32_t n)
         memcpy(buf, t->lbuf, tocopy);
         clear_csr_bit(sstatus, SSTATUS_SUM);
 
-        // Reset line buffer so the next read starts fresh
-        t->llen       = 0;
-        t->line_ready = 0;
+        // Preserve unread tail for short reads (POSIX canonical semantics).
+        if (tocopy < t->llen) {
+            uint32_t remain = t->llen - tocopy;
+            memmove(t->lbuf, t->lbuf + tocopy, remain);
+            t->llen = remain;
+            t->line_ready = 1;
+        } else {
+            t->llen = 0;
+            t->line_ready = 0;
+        }
         return (int)tocopy;
 
     } else {
@@ -337,7 +345,9 @@ int term_tcgetattr(terminal_t *t, struct termios *out)
 int term_tcsetattr(terminal_t *t, int action, const struct termios *in)
 {
     if (!in)
-        return -1;
+        return -EINVAL;
+    if (action != TCSANOW && action != TCSADRAIN && action != TCSAFLUSH)
+        return -EINVAL;
     if (action == TCSAFLUSH)
         term_flush_input(t);
     t->termios = *in;
