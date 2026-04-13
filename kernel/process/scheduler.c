@@ -329,7 +329,9 @@ void proc_sleep(void *chan) {
     uint32_t unmasked = prev->pending_signals & ~prev->signal_mask;
     if (unmasked & KERNEL_FATAL_SIGS) {
         prev->pending_signals = 0;
-        proc_exit(-1);
+        // Encode the specific signal so WTERMSIG returns the right number.
+        // kernel_ctz is safe here: the if-guard guarantees the argument is non-zero.
+        proc_exit(-kernel_ctz((uint32_t)(unmasked & KERNEL_FATAL_SIGS)));
     }
 }
 

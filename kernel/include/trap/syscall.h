@@ -41,6 +41,7 @@
 #define SYS_pause     32
 #define SYS_dup2          33
 #define SYS_gettimeofday  34
+#define SYS_alarm    35
 #define SYS_getgid   47
 #define SYS_chdir    49
 #define SYS_fs_getdents  61
@@ -100,3 +101,4 @@ int    sys_nice(int increment);
 int    sys_procinfo(struct proc_info *infos, int max_count);
 int    sys_yield(void);
 int    sys_pause(void);
+unsigned int sys_alarm(unsigned int seconds);

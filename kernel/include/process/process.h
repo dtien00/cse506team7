@@ -14,6 +14,7 @@
 #define KERNEL_SIGINT    2
 #define KERNEL_SIGKILL   9
 #define KERNEL_SIGPIPE  13
+#define KERNEL_SIGALRM  14
 #define KERNEL_SIGTERM  15
 #define KERNEL_SIGCONT  18
 #define KERNEL_SIGSTOP  19
@@ -21,11 +22,25 @@
 // Signals whose kernel action is proc_exit()
 // SIGPIPE is here so when pipes deliver it, action is automatic.
 // SIGINT is here so when the terminal driver delivers it, action is automatic.
+// SIGALRM is here because its POSIX default action is "terminate"; when
+// sigaction() is implemented (Section 1 item 2) this will be gated by SIG_DFL.
 #define KERNEL_FATAL_SIGS ((1U << KERNEL_SIGKILL) | (1U << KERNEL_SIGTERM) | \
-                           (1U << KERNEL_SIGINT)  | (1U << KERNEL_SIGPIPE))
+                           (1U << KERNEL_SIGINT)  | (1U << KERNEL_SIGPIPE) | \
+                           (1U << KERNEL_SIGALRM))
 
 // SIGSTOP cannot be masked or ignored (POSIX)
 #define KERNEL_STOP_SIGS  (1U << KERNEL_SIGSTOP)
+
+/* kernel_ctz — count trailing zeros in a non-zero 32-bit signal bitmask.
+ * Returns the bit position of the lowest set bit (= the signal number,
+ * since signal N occupies bit N via 1U << N).
+ * Avoids __builtin_ctz, which requires libgcc (__ctzdi2/__ctzsi2) that is
+ * not present in freestanding kernel builds. */
+static inline int kernel_ctz(uint32_t x) {
+    int n = 0;
+    while (!(x & 1u)) { x >>= 1; n++; }
+    return n;
+}
 
 #define MLFQ_LEVELS 4
 #define MLFQ_BOOST_INTERVAL 50
@@ -98,6 +113,7 @@ struct proc {
     uint64_t utime_ticks;    // total user-mode ticks consumed (never reset)
     uint64_t children_utime; // sum of utime_ticks of all reaped children
     uint64_t wake_tick;      // 0 = not sleeping; >0 = timer_ticks value at which to wake
+    uint64_t alarm_tick;    // Compared with for SIGALRM; alarm()
     uint32_t pending_signals; // bitmask: bit N set means signal N is pending
     uint32_t signal_mask;
     struct proc *next;

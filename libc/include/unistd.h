@@ -70,4 +70,6 @@ ssize_t readlink(const char *pathname, char *buf, size_t bufsiz);
 
 int pause(void);   /* suspend until signal; always returns -1 (EINTR) */
 
+int alarm(unsigned int seconds);
+
 #endif

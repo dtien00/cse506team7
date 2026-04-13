@@ -39,6 +39,7 @@
 .global procinfo
 .global rmdir
 .global gettimeofday
+.global alarm
 
 
 mmap:
@@ -243,5 +244,10 @@ pause:
 
 gettimeofday:
     li a7, 34
+    ecall
+    ret
+
+alarm:
+    li a7, 35
     ecall
     ret

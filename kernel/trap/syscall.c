@@ -58,8 +58,8 @@ void syscall_handler(trap_frame *frame) {
         uint32_t unmasked = current->pending_signals & ~current->signal_mask;
         if (unmasked & KERNEL_FATAL_SIGS) {
             current->pending_signals = 0;
-            sys_exit(-1);
-            return; // unreachable — sys_exit calls proc_exit which never returns
+            sys_exit(-kernel_ctz((uint32_t)(unmasked & KERNEL_FATAL_SIGS)));
+            return; // unreachable
         }
     }
 
@@ -285,6 +285,10 @@ void syscall_handler(trap_frame *frame) {
 
         case SYS_rmdir:
             ret = sys_rmdir((const char *)arg0);
+            break;
+            
+        case SYS_alarm:
+            ret = sys_alarm((unsigned int) arg0);
             break;
 
         default:
@@ -1266,4 +1270,21 @@ int sys_rmdir(const char *path) {
         return -ENAMETOOLONG;
 
     return vfs_rmdir(resolved);
+}
+
+unsigned int sys_alarm(unsigned int seconds) {
+    uint64_t old = current->alarm_tick;
+
+    if (seconds == 0) {
+        // alarm(0) cancels any pending alarm
+        current->alarm_tick = 0;
+    } else {
+        current->alarm_tick = timer_ticks + (uint64_t)seconds * TICKS_PER_SEC;
+    }
+
+    // Return seconds remaining from previous alarm, or 0 if none / already fired
+    if (old == 0 || old <= timer_ticks)
+        return 0;
+    // Ceiling division: round up so partial ticks count as a full second
+    return (unsigned int)((old - timer_ticks + TICKS_PER_SEC - 1) / TICKS_PER_SEC);
 }
