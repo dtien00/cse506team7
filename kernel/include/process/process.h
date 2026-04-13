@@ -162,6 +162,6 @@ void proc_stop(struct proc *p);
 void proc_unstop(struct proc *p);
 
 // Utilities
-int exec(const char *path, char *const argv[]);
+int exec(const char *path, char *const argv[], char *const envp[]);
 
 void fork_ret(void);
