@@ -53,10 +53,7 @@ int sigismember(const sigset_t *set, int signum) {
     return (*set & (1UL << signum)) ? 1 : 0;
 }
 
-int sigpending(sigset_t *set) {
-    if (set) sigemptyset(set);
-    return 0;
-}
+/* sigpending() itself is provided by the ecall stub in syscall.S (SYS_sigpending = 37). */
 
 int sigsuspend(const sigset_t *mask) {
     (void)mask;

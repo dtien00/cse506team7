@@ -41,7 +41,7 @@
 .global gettimeofday
 .global alarm
 .global sigaction
-
+.global sigpending
 
 mmap:
     li a7, 14
@@ -255,5 +255,10 @@ alarm:
 
 sigaction:
     li a7, 36
+    ecall
+    ret
+
+sigpending:
+    li a7, 37
     ecall
     ret

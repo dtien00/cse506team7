@@ -310,6 +310,10 @@ void syscall_handler(trap_frame *frame) {
                                 (struct sigaction *)arg2);
             break;
 
+        case SYS_sigpending:
+            ret = sys_sigpending((uint32_t *)arg0);
+            break;
+
         default:
             printk("Unknown system call: %d\n", syscall_num);
             ret = -1;
@@ -1337,5 +1341,17 @@ int sys_sigaction(int sig, const struct sigaction *act, struct sigaction *oldact
     }
 
     clear_csr_bit(sstatus, SSTATUS_SUM);
+    return 0;
+}
+
+int sys_sigpending(uint32_t *set) {
+    if (!current || !set) return -EINVAL;
+
+    // set is a userspace pointer — enable SUM so the kernel can write to it,
+    // matching the same pattern used by sys_sigprocmask.
+    set_csr_bit(sstatus, SSTATUS_SUM);
+    *set = current->pending_signals & current->signal_mask;
+    clear_csr_bit(sstatus, SSTATUS_SUM);
+
     return 0;
 }
