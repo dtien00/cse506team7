@@ -79,14 +79,10 @@ void syscall_handler(trap_frame *frame) {
     if (syscall_num == SYS_exec) {
         char kpath[KARG_MAX];
         char *kargv[MAX_ARGS + 1];
-        char *kenvp[MAX_ARGS + 1];
         int argc = 0;
-        int envc = 0;
 
         for (int i = 0; i <= MAX_ARGS; i++)
             kargv[i] = NULL;
-        for (int i = 0; i <= MAX_ARGS; i++)
-            kenvp[i] = NULL;
 
         // Copy user args into kernel buffers (SUM window is minimal)
         set_csr_bit(sstatus, SSTATUS_SUM);
@@ -115,37 +111,12 @@ void syscall_handler(trap_frame *frame) {
         }
         kargv[argc] = NULL;
 
-        char **uenvp = (char **)arg2;
-        while (uenvp && envc < MAX_ARGS - 1) {
-            char *uenv = uenvp[envc];
-            if (!uenv) break;
-            if ((uint64_t)uenv >= KERNBASE) break;
-
-            kenvp[envc] = (char *)kmalloc(KARG_MAX);
-            if (!kenvp[envc]) {
-                clear_csr_bit(sstatus, SSTATUS_SUM);
-                for (int i = 0; i < argc; i++)
-                    kfree(kargv[i]);
-                for (int i = 0; i < envc; i++)
-                    kfree(kenvp[i]);
-                frame->a0 = (uint64_t)-1LL;
-                return;
-            }
-
-            strncpy(kenvp[envc], uenv, KARG_MAX - 1);
-            kenvp[envc][KARG_MAX - 1] = '\0';
-            envc++;
-        }
-        kenvp[envc] = NULL;
-
         clear_csr_bit(sstatus, SSTATUS_SUM);  // done with user memory
 
         // exec() only sees kernel pointers — safe to destroy old pagetable
-        int rc = exec(kpath, kargv, kenvp);
+        int rc = exec(kpath, kargv);
         for (int i = 0; i < argc; i++)
             kfree(kargv[i]);
-        for (int i = 0; i < envc; i++)
-            kfree(kenvp[i]);
 
         if (rc < 0)
             frame->a0 = (uint64_t)-1LL;
