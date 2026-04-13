@@ -17,6 +17,23 @@
 static int passed = 0;
 static int failed = 0;
 
+static int read_user_u64(pagetable_t pt, uintptr_t uva, uint64_t *out) {
+    uintptr_t pa = vmm_translate(pt, uva);
+    if (!pa) return -1;
+    *out = *(uint64_t *)pa;
+    return 0;
+}
+
+static int user_cstr_eq(pagetable_t pt, uintptr_t uva, const char *expect) {
+    for (size_t i = 0;; i++) {
+        uintptr_t pa = vmm_translate(pt, uva + i);
+        if (!pa) return 0;
+        char got = *(char *)pa;
+        if (got != expect[i]) return 0;
+        if (got == '\0') return 1;
+    }
+}
+
 // Test
 void proc_test_run(void) {
     printk("\n========================================\n");
@@ -159,13 +176,46 @@ void proc_test_run(void) {
         current = ep;
 
         char *eargv[] = { "echo", "hello", NULL };
-        int r = exec("/bin/echo", eargv);
+        char *eenvp[] = { "SBX_ENVP=1", "PATH=/bin", NULL };
+        int r = exec("/bin/echo", eargv, eenvp);
         TEST("exec: returns 0 for valid binary", r == 0);
         TEST("exec: entry point set (pc != 0)", ep->pc != 0);
         TEST("exec: stack pointer set (sp != 0)", ep->sp != 0);
+        TEST("exec: stack pointer is 16-byte aligned", (ep->sp & 0xFULL) == 0);
         TEST("exec: argc in regs[10]", ep->regs[10] == 2);
         TEST("exec: argv ptr in regs[11]", ep->regs[11] != 0);
+        TEST("exec: envp ptr in regs[12]", ep->regs[12] != 0);
         TEST("exec: pagetable allocated", ep->pagetable != NULL);
+
+        if (r == 0 && ep->pagetable) {
+            uint64_t argc_slot = 0;
+            uint64_t argv0 = 0, argv1 = 0, argv2 = 0;
+            uint64_t env0 = 0, env1 = 0, env2 = 0;
+            uintptr_t sp = ep->sp;
+            uintptr_t user_argv = ep->regs[11];
+            uintptr_t user_envp = ep->regs[12];
+
+            TEST("exec: user_argv is right above argc", user_argv == sp + sizeof(uintptr_t));
+            TEST("exec: user_envp follows argv[] + NULL",
+                 user_envp == user_argv + (ep->regs[10] + 1) * sizeof(uintptr_t));
+
+            TEST("exec: argc slot readable", read_user_u64(ep->pagetable, sp, &argc_slot) == 0);
+            TEST("exec: argc slot value", argc_slot == 2);
+
+            TEST("exec: argv[0] readable", read_user_u64(ep->pagetable, user_argv + 0 * sizeof(uintptr_t), &argv0) == 0);
+            TEST("exec: argv[1] readable", read_user_u64(ep->pagetable, user_argv + 1 * sizeof(uintptr_t), &argv1) == 0);
+            TEST("exec: argv[2] NULL readable", read_user_u64(ep->pagetable, user_argv + 2 * sizeof(uintptr_t), &argv2) == 0);
+            TEST("exec: argv terminator is NULL", argv2 == 0);
+            TEST("exec: argv[0] string correct", user_cstr_eq(ep->pagetable, (uintptr_t)argv0, "echo"));
+            TEST("exec: argv[1] string correct", user_cstr_eq(ep->pagetable, (uintptr_t)argv1, "hello"));
+
+            TEST("exec: envp[0] readable", read_user_u64(ep->pagetable, user_envp + 0 * sizeof(uintptr_t), &env0) == 0);
+            TEST("exec: envp[1] readable", read_user_u64(ep->pagetable, user_envp + 1 * sizeof(uintptr_t), &env1) == 0);
+            TEST("exec: envp[2] NULL readable", read_user_u64(ep->pagetable, user_envp + 2 * sizeof(uintptr_t), &env2) == 0);
+            TEST("exec: envp terminator is NULL", env2 == 0);
+            TEST("exec: envp[0] string correct", user_cstr_eq(ep->pagetable, (uintptr_t)env0, "SBX_ENVP=1"));
+            TEST("exec: envp[1] string correct", user_cstr_eq(ep->pagetable, (uintptr_t)env1, "PATH=/bin"));
+        }
 
         current = saved;
         // exec() called vmm_switch() internally; restore SATP before

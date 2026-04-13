@@ -69,10 +69,10 @@ void proc_init(void) {
     static char *argv[] = { "init", NULL };
     // Set current to init so exec uses the right process
     current = init;
-    if (exec("/bin/init", argv) < 0) {
+    if (exec("/bin/init", argv, NULL) < 0) {
         printk("[init] exec failed for /bin/init, falling back to /bin/sh\n");
         static char *sh_argv[] = { "sh", NULL };
-        if (exec("/bin/sh", sh_argv) < 0)
+        if (exec("/bin/sh", sh_argv, NULL) < 0)
             printk("[init] exec failed fallback to /bin/sh\n");
     }
     proc_ready(init);
@@ -384,17 +384,18 @@ void proc_start_user(struct proc *p, uint64_t entry, uint64_t user_sp) {
     // correct architectural registers before the sret instruction fires.
     register uint64_t a0_r asm("a0") = p->regs[10]; /* argc */
     register uint64_t a1_r asm("a1") = p->regs[11]; /* argv */
+    register uint64_t a2_r asm("a2") = p->regs[12]; /* envp */
     asm volatile(
         "mv sp, %2\n"
         "sret\n"
         :
-        : "r"(a0_r), "r"(a1_r), "r"(user_sp)
+        : "r"(a0_r), "r"(a1_r), "r"(user_sp), "r"(a2_r)
         : "memory"
     );
     __builtin_unreachable();
 }
 
-int exec(const char *path, char *const argv[]) {
+int exec(const char *path, char *const argv[], char *const envp[]) {
     // 1. Open the binary
     int fd = file_open(path);
     if (fd < 0) return -1;
@@ -511,59 +512,96 @@ int exec(const char *path, char *const argv[]) {
         goto fail_vma;
     }
 
-    // 6. Copy argv strings onto the user stack via physical addresses
+    // 6. Copy argv/envp strings onto the user stack via physical addresses
     int argc = 0;
     while (argv && argv[argc]) argc++;
+    int envc = 0;
+    while (envp && envp[envc]) envc++;
 
     uintptr_t *argv_uvas = (uintptr_t *)kmalloc((size_t)(argc + 1) * sizeof(uintptr_t));
     if (!argv_uvas) goto fail_vma;
+    uintptr_t *envp_uvas = (uintptr_t *)kmalloc((size_t)(envc + 1) * sizeof(uintptr_t));
+    if (!envp_uvas) {
+        kfree(argv_uvas);
+        goto fail_vma;
+    }
 
     uintptr_t sp = stack_top;
     for (int i = argc - 1; i >= 0; i--) {
         size_t len = strlen(argv[i]) + 1;
         sp -= len;
         uintptr_t pa = vmm_translate(new_pt, sp);
-        if (!pa) { kfree(argv_uvas); goto fail_vma; }
+        if (!pa) {
+            kfree(envp_uvas);
+            kfree(argv_uvas);
+            goto fail_vma;
+        }
         memcpy((void *)pa, argv[i], len);
         argv_uvas[i] = sp;   // user-space VA of this string
     }
     argv_uvas[argc] = 0;     // NULL terminator
 
-    // Align sp to 16 bytes before the pointer arrays.
+    for (int i = envc - 1; i >= 0; i--) {
+        size_t len = strlen(envp[i]) + 1;
+        sp -= len;
+        uintptr_t pa = vmm_translate(new_pt, sp);
+        if (!pa) {
+            kfree(envp_uvas);
+            kfree(argv_uvas);
+            goto fail_vma;
+        }
+        memcpy((void *)pa, envp[i], len);
+        envp_uvas[i] = sp;   // user-space VA of this env string
+    }
+    envp_uvas[envc] = 0;     // NULL terminator
+
+    // Build initial stack frame as:
+    // [argc][argv pointers...][NULL][envp pointers...][NULL]
+    // then align the final entry SP to 16 bytes (RISC-V psABI).
+    size_t meta_words = (size_t)argc + (size_t)envc + 3; // argc + argv NULL + envp NULL
+    size_t meta_bytes = meta_words * sizeof(uintptr_t);
+    sp -= meta_bytes;
     sp &= ~(uintptr_t)0xF;
 
-    // Push envp[0] = NULL (empty environment).  This must sit between the
-    // argv pointer array and the argv strings so that the standard ABI
-    // envp = argv + (argc+1)*8 lands on a NULL, not on the string data.
-    sp -= sizeof(uintptr_t);
-    {
-        uintptr_t envp_pa = vmm_translate(new_pt, sp);
-        if (!envp_pa) { kfree(argv_uvas); goto fail_vma; }
-        *(uintptr_t *)envp_pa = 0;
-    }
+    uintptr_t user_argv = sp + sizeof(uintptr_t);
+    uintptr_t user_envp = user_argv + (uint64_t)(argc + 1) * sizeof(uintptr_t);
 
-    // Push the argv pointer array (argv[0]...argv[argc-1], NULL).
-    sp -= (uint64_t)(argc + 1) * sizeof(uintptr_t);
-    for (int i = 0; i <= argc; i++) {
-        uintptr_t slot_va = sp + (uint64_t)i * sizeof(uintptr_t);
-        uintptr_t slot_pa = vmm_translate(new_pt, slot_va);
-        if (!slot_pa) { kfree(argv_uvas); goto fail_vma; }
-        *(uintptr_t *)slot_pa = argv_uvas[i];
-    }
-    uintptr_t user_argv = sp;
-
-    // Push argc below the argv array so that sp points to argc on entry.
-    // Required by the standard Linux/POSIX _start ABI:
-    //   *(sp+0)             = argc
-    //   *(sp+8)             = argv[0]          (user_argv)
-    //   *(sp + (argc+1)*8)  = NULL             (argv terminator)
-    //   *(sp + (argc+2)*8)  = NULL             (envp[0], empty env)
-    sp -= sizeof(uintptr_t);
+    // argc at entry sp
     {
         uintptr_t argc_pa = vmm_translate(new_pt, sp);
-        if (!argc_pa) { kfree(argv_uvas); goto fail_vma; }
+        if (!argc_pa) {
+            kfree(envp_uvas);
+            kfree(argv_uvas);
+            goto fail_vma;
+        }
         *(uintptr_t *)argc_pa = (uintptr_t)argc;
     }
+
+    // argv[0..argc] (argv[argc] = NULL)
+    for (int i = 0; i <= argc; i++) {
+        uintptr_t slot_va = user_argv + (uint64_t)i * sizeof(uintptr_t);
+        uintptr_t slot_pa = vmm_translate(new_pt, slot_va);
+        if (!slot_pa) {
+            kfree(envp_uvas);
+            kfree(argv_uvas);
+            goto fail_vma;
+        }
+        *(uintptr_t *)slot_pa = argv_uvas[i];
+    }
+
+    // envp[0..envc] (envp[envc] = NULL)
+    for (int i = 0; i <= envc; i++) {
+        uintptr_t slot_va = user_envp + (uint64_t)i * sizeof(uintptr_t);
+        uintptr_t slot_pa = vmm_translate(new_pt, slot_va);
+        if (!slot_pa) {
+            kfree(envp_uvas);
+            kfree(argv_uvas);
+            goto fail_vma;
+        }
+        *(uintptr_t *)slot_pa = envp_uvas[i];
+    }
+
+    kfree(envp_uvas);
     kfree(argv_uvas);
 
     // 7. Commit: install new address space, then tear down the old one.
@@ -594,12 +632,14 @@ int exec(const char *path, char *const argv[]) {
         current->trapframe->sp      = sp;
         current->trapframe->a0      = (uint64_t)argc;
         current->trapframe->a1      = user_argv;
+        current->trapframe->a2      = user_envp;
     }
     // Fallback proc fields for boot-time exec (no trapframe yet)
     current->pc       = ehdr.e_entry;
     current->sp       = sp;
     current->regs[10] = (uint64_t)argc;
     current->regs[11] = user_argv;
+    current->regs[12] = user_envp;
 
     // current->pagetable is already active after commit above.
 
