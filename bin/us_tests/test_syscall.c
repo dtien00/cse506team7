@@ -3,6 +3,9 @@
 #include <unistd.h>
 #include <signal.h>
 #include <sys/wait.h>
+#include <fcntl.h>
+#include <termios.h>
+#include <errno.h>
 #include "us_test_common.h"
 
 void run_test_syscall(us_test_group_t *group) {
@@ -60,6 +63,46 @@ void run_test_syscall(us_test_group_t *group) {
 
     r = kill(getpid(), 0);
     TEST(group, "kill(getpid(), 0): returns 0",   r == 0);
+
+    /* ── termios ─────────────────────────────────────────────────────── */
+    struct termios oldt;
+    int tr = tcgetattr(STDIN_FILENO, &oldt);
+    TEST(group, "tcgetattr(stdin): returns 0", tr == 0);
+
+    if (tr == 0) {
+        struct termios newt = oldt;
+        newt.c_lflag ^= ECHO;
+
+        int sw = tcsetattr(STDIN_FILENO, TCSANOW, &newt);
+        TEST(group, "tcsetattr(stdin,TCSANOW): returns 0", sw == 0);
+
+        struct termios verify;
+        int gv = tcgetattr(STDIN_FILENO, &verify);
+        TEST(group, "tcgetattr(stdin) after set: returns 0", gv == 0);
+        TEST(group, "tcsetattr updates c_lflag", gv == 0 && verify.c_lflag == newt.c_lflag);
+
+        int restore = tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
+        TEST(group, "tcsetattr restore old termios: returns 0", restore == 0);
+
+        int bad_action = tcsetattr(STDIN_FILENO, 99, &oldt);
+        TEST(group, "tcsetattr invalid action: returns -EINVAL", bad_action == -EINVAL);
+    } else {
+        SKIP(group, "tcsetattr(stdin,TCSANOW): returns 0", "tcgetattr(stdin) failed");
+        SKIP(group, "tcgetattr(stdin) after set: returns 0", "tcgetattr(stdin) failed");
+        SKIP(group, "tcsetattr updates c_lflag", "tcgetattr(stdin) failed");
+        SKIP(group, "tcsetattr restore old termios: returns 0", "tcgetattr(stdin) failed");
+        SKIP(group, "tcsetattr invalid action: returns -EINVAL", "tcgetattr(stdin) failed");
+    }
+
+    int regfd = open("/hello.txt", O_RDONLY);
+    if (regfd < 0) {
+        SKIP(group, "tcgetattr(regular file): returns -ENOTTY", "open(/hello.txt) failed");
+    } else {
+        struct termios t;
+        int notty = tcgetattr(regfd, &t);
+        TEST(group, "tcgetattr(regular file): returns -ENOTTY", notty == -ENOTTY);
+        close(regfd);
+    }
 
     ut_group_end(group);
 }

@@ -39,6 +39,8 @@
 .global procinfo
 .global rmdir
 .global gettimeofday
+.global tcgetattr
+.global tcsetattr
 
 
 mmap:
@@ -245,3 +247,14 @@ gettimeofday:
     li a7, 34
     ecall
     ret
+
+tcgetattr:
+    li a7, 35
+    ecall
+    ret
+
+tcsetattr:
+    li a7, 36
+    ecall
+    ret
+
