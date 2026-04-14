@@ -6,6 +6,7 @@
 #include "fs/file.h"
 #include "process/process.h"
 #include "signal.h"
+#include "tty/term.h"
 
 // System call numbers
 #define SYS_exit     1
@@ -42,10 +43,12 @@
 #define SYS_pause     32
 #define SYS_dup2          33
 #define SYS_gettimeofday  34
-#define SYS_alarm    35
-#define SYS_sigaction 36
-#define SYS_sigpending 37
-#define SYS_sigsuspend 38
+#define SYS_tcgetattr 35
+#define SYS_tcsetattr 36
+#define SYS_alarm    37
+#define SYS_sigaction 38
+#define SYS_sigpending 39
+#define SYS_sigsuspend 40
 #define SYS_getgid   47
 #define SYS_chdir    49
 #define SYS_fs_getdents  61
@@ -88,6 +91,8 @@ int sys_sync(void);
 int sys_pipe(int pipefd[2]);
 int sys_dup(int oldfd);
 int sys_dup2(int oldfd, int newfd);
+int sys_tcgetattr(int fd, struct termios *termios_p);
+int sys_tcsetattr(int fd, int action, const struct termios *termios_p);
 int sys_kill(pid_t pid, int sig);
 pid_t sys_waitpid(pid_t pid, int *status, int options);
 int sys_sigprocmask(int how, const uint32_t *set, uint32_t *oldset);

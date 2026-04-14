@@ -43,6 +43,9 @@
 .global sigaction
 .global sigpending
 .global sigsuspend
+.global tcgetattr
+.global tcsetattr
+
 
 mmap:
     li a7, 14
@@ -250,21 +253,31 @@ gettimeofday:
     ret
 
 alarm:
+    li a7, 37
+    ecall
+    ret
+
+tcgetattr:
     li a7, 35
     ecall
     ret
 
 sigaction:
+    li a7, 38
+    ecall
+    ret
+
+tcsetattr:
     li a7, 36
     ecall
     ret
 
 sigpending:
-    li a7, 37
+    li a7, 39
     ecall
     ret
 
 sigsuspend:
-    li a7, 38
+    li a7, 40
     ecall
     ret
