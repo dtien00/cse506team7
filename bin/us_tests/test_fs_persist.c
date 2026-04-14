@@ -159,6 +159,13 @@ static void test_lseek(us_test_group_t *group) {
 static void test_directories(us_test_group_t *group) {
     ut_group_begin(group, "fs_persist.directories");
 
+    /* Teardown from any previous run so the test is idempotent.
+     * Silently ignore errors — the paths simply may not exist yet. */
+    unlink("/mnt/subdir/inner/deep.txt");
+    rmdir("/mnt/subdir/inner");
+    unlink("/mnt/subdir/nested.txt");
+    rmdir("/mnt/subdir");
+
     /* mkdir */
     int r = mkdir("/mnt/subdir", 0755);
     TEST(group, "mkdir returns 0", r == 0);
