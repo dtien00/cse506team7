@@ -1,19 +1,24 @@
 #include "time.h"
 #include "stddef.h"
+#include "unistd.h"
 
 time_t time(time_t *tloc) {
-    if (tloc) {
-        *tloc = 0;
+    struct timeval tv;
+    if (gettimeofday(&tv, NULL) != 0) {
+        if (tloc) *tloc = (time_t)-1;
+        return (time_t)-1;
     }
-    return 0;
+    if (tloc) *tloc = (time_t)tv.tv_sec;
+    return (time_t)tv.tv_sec;
 }
 
 int clock_gettime(int clk_id, struct timespec *tp) {
-    (void)clk_id;
-    if (tp) {
-        tp->tv_sec = 0;
-        tp->tv_nsec = 0;
-    }
+    (void)clk_id;   /* treat MONOTONIC same as REALTIME — kernel has one clock */
+    if (!tp) return -1;
+    struct timeval tv;
+    if (gettimeofday(&tv, NULL) != 0) return -1;
+    tp->tv_sec  = tv.tv_sec;
+    tp->tv_nsec = tv.tv_usec * 1000L;
     return 0;
 }
 
@@ -64,10 +69,9 @@ size_t strftime(char *s, size_t max, const char *format, const struct tm *tm) {
 }
 
 int nanosleep(const struct timespec *req, struct timespec *rem) {
-    (void)req;
-    if (rem) {
-        rem->tv_sec = 0;
-        rem->tv_nsec = 0;
-    }
+    if (!req) return -1;
+    if (req->tv_sec > 0) sleep((unsigned int)req->tv_sec);
+    /* sub-second nsec not supported; treat as satisfied */
+    if (rem) { rem->tv_sec = 0; rem->tv_nsec = 0; }
     return 0;
 }

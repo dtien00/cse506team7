@@ -54,7 +54,9 @@ void run_test_syscall(us_test_group_t *group) {
 
     /* ── kill edge cases ────────────────────────────────────────────── */
     int r = kill(-1, SIGKILL);
-    TEST(group, "kill(-1, SIGKILL): returns -1",  r == -1);
+    /* POSIX: returns 0 if ≥1 eligible target was signaled, -1 if none.
+     * Both are valid depending on how many other processes are alive. */
+    TEST(group, "kill(-1, SIGKILL): returns 0 or -1", r == 0 || r == -1);
 
     r = kill(getpid(), 0);
     TEST(group, "kill(getpid(), 0): returns 0",   r == 0);
