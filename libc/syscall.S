@@ -42,6 +42,7 @@
 .global alarm
 .global sigaction
 .global sigpending
+.global sigsuspend
 
 mmap:
     li a7, 14
@@ -260,5 +261,10 @@ sigaction:
 
 sigpending:
     li a7, 37
+    ecall
+    ret
+
+sigsuspend:
+    li a7, 38
     ecall
     ret

@@ -45,6 +45,7 @@
 #define SYS_alarm    35
 #define SYS_sigaction 36
 #define SYS_sigpending 37
+#define SYS_sigsuspend 38
 #define SYS_getgid   47
 #define SYS_chdir    49
 #define SYS_fs_getdents  61
@@ -107,4 +108,4 @@ int    sys_pause(void);
 unsigned int sys_alarm(unsigned int seconds);
 int sys_sigaction(int sig, const struct sigaction *act, struct sigaction *oldact);
 int sys_sigpending(uint32_t *set);
-
+int sys_sigsuspend(const uint32_t *mask);

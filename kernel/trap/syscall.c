@@ -314,6 +314,10 @@ void syscall_handler(trap_frame *frame) {
             ret = sys_sigpending((uint32_t *)arg0);
             break;
 
+        case SYS_sigsuspend:
+            ret = sys_sigsuspend((uint32_t *)arg0);
+            break;
+
         default:
             printk("Unknown system call: %d\n", syscall_num);
             ret = -1;
@@ -651,7 +655,8 @@ int sys_kill(pid_t pid, int sig) {
                     p->pending_signals |= KERNEL_STOP_SIGS;
             } else {
                 p->pending_signals |= (1U << sig);
-                if (p->state == PROC_BLOCKED)
+                if (p->state == PROC_BLOCKED &&
+                    (sig == KERNEL_SIGKILL || !(p->signal_mask & (1U << sig))))
                     proc_unblock(p);
             }
         }
@@ -692,7 +697,18 @@ int sys_kill(pid_t pid, int sig) {
     // Use proc_unblock() directly rather than proc_wakeup() because
     // proc_wakeup() only matches processes sleeping on a specific channel
     // (e.g. it would miss a process blocked on terminal I/O with chan != target).
-    if (target->state == PROC_BLOCKED)
+    //
+    // Only wake if the signal is not currently masked.  Waking for a masked
+    // signal causes a spurious return from proc_sleep: the post-wakeup fatal-
+    // signal check correctly skips the masked signal, proc_sleep returns
+    // normally, and control reaches sigsuspend's mask-restore line.  With the
+    // old (empty) mask now active the still-pending signal is no longer blocked
+    // and kills the process at the next trap return — wrong behaviour when the
+    // caller expected sigsuspend to stay asleep for that signal.
+    // SIGKILL is included in the wake condition as a safety net even though
+    // sys_sigprocmask already prevents it from being set in signal_mask.
+    if (target->state == PROC_BLOCKED &&
+        (sig == KERNEL_SIGKILL || !(target->signal_mask & (1U << sig))))
         proc_unblock(target);
 
     return 0;
@@ -1354,4 +1370,88 @@ int sys_sigpending(uint32_t *set) {
     clear_csr_bit(sstatus, SSTATUS_SUM);
 
     return 0;
+}
+
+/*
+ * sys_sigsuspend() — atomically replace signal mask and suspend until a
+ * signal is delivered.
+ *
+ * POSIX: atomically installs *mask as the process signal mask, then blocks
+ * until any signal whose action would terminate the process or invoke a
+ * signal-catching function is delivered.  The original mask is always
+ * restored before returning, and the call always returns -1 (EINTR).
+ *
+ * Implementation notes:
+ *   - The SUM bit is only needed to read *mask (a userspace pointer).
+ *     Writing current->signal_mask is a kernel-struct write; no SUM needed.
+ *   - After installing the new mask a signal that was previously blocked
+ *     may now be pending.  If we called proc_sleep() unconditionally nobody
+ *     would ever call proc_wakeup() for that already-set bit, causing the
+ *     process to sleep forever.  We therefore run the same signal-delivery
+ *     checks that proc_sleep() performs on wakeup *before* sleeping, so that
+ *     pre-pending signals are handled identically to signals that arrive
+ *     while we are blocked.
+ */
+int sys_sigsuspend(const uint32_t *mask) {
+    if (!current || !mask) return -EINVAL;
+
+    /* Read new mask from userspace (SUM needed for U-bit page access). */
+    set_csr_bit(sstatus, SSTATUS_SUM);
+    uint32_t new_mask = *mask;
+    clear_csr_bit(sstatus, SSTATUS_SUM);
+
+    /* Atomically install new mask; save old mask for restoration on return. */
+    uint32_t old_mask = current->signal_mask;
+    current->signal_mask = new_mask;
+
+    /*
+     * Pre-sleep signal sweep — mirrors proc_sleep()'s post-wakeup checks.
+     * This handles signals that were pending-but-blocked under old_mask and
+     * are now unmasked by new_mask, which proc_wakeup() would never fire for.
+     */
+
+    /* Step 1: SIGSTOP — cannot be masked; highest priority. */
+    uint32_t pending_stop = current->pending_signals & KERNEL_STOP_SIGS;
+    if (pending_stop) {
+        current->pending_signals &= ~pending_stop;
+        proc_stop(current);
+        /* Resumes here after SIGCONT is delivered. */
+    }
+
+    /* Step 2: Clear SIG_IGN-disposed pending signals (except SIGKILL/SIGSTOP). */
+    {
+        uint32_t tmp = current->pending_signals & ~current->signal_mask;
+        while (tmp) {
+            int s = kernel_ctz((uint32_t)tmp);
+            tmp &= tmp - 1;
+            if (s != KERNEL_SIGKILL && s != KERNEL_SIGSTOP &&
+                current->handlers[s] == (void *)SIG_IGN)
+                current->pending_signals &= ~(1u << s);
+        }
+    }
+
+    /* Step 3: Fatal signals already pending under the new mask — terminate. */
+    uint32_t unmasked = current->pending_signals & ~current->signal_mask;
+    if (unmasked & KERNEL_FATAL_SIGS) {
+        current->pending_signals = 0;
+        proc_exit(-kernel_ctz((uint32_t)(unmasked & KERNEL_FATAL_SIGS)));
+        /* unreachable */
+    }
+
+    /* Step 4: Non-fatal pending signals → return EINTR immediately.
+     * Mirrors sys_pause()'s early-return pattern.  The signal bits remain in
+     * pending_signals and are visible to the caller via sigpending().
+     * The original mask is restored first so the signals are correctly masked
+     * or unmasked for subsequent operations. */
+    uint32_t nonfatal = current->pending_signals & ~current->signal_mask
+                        & ~KERNEL_FATAL_SIGS & ~KERNEL_STOP_SIGS;
+    if (!nonfatal) {
+        /* No immediately actionable signals: block until one is delivered. */
+        proc_sleep(&current->pending_signals);
+        /* proc_sleep() handles SIGSTOP, SIG_IGN, and fatal signals on wakeup. */
+    }
+
+    /* Restore original mask — POSIX requires this before sigsuspend returns. */
+    current->signal_mask = old_mask;
+    return -1; /* POSIX: always returns -1 (errno = EINTR) */
 }

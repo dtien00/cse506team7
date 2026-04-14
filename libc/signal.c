@@ -55,7 +55,4 @@ int sigismember(const sigset_t *set, int signum) {
 
 /* sigpending() itself is provided by the ecall stub in syscall.S (SYS_sigpending = 37). */
 
-int sigsuspend(const sigset_t *mask) {
-    (void)mask;
-    return -1;
-}
+/* sigsuspend() itself is provided by the ecall stub in syscall.S (SYS_sigsuspend = 38). */
