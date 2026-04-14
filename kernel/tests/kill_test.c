@@ -119,6 +119,7 @@ void kill_test_run(void) {
     // Test: SIGSTOP on a READY process → PROC_STOPPED
     {
         struct proc *p = proc_alloc();
+        p->pid   = 205;
         p->state = PROC_READY;
         p->signal_mask = 0;
         // Must add to ready_queue for proc_stop to remove it
@@ -131,6 +132,7 @@ void kill_test_run(void) {
     // Test: SIGCONT on a STOPPED process → PROC_READY
     {
         struct proc *p = proc_alloc();
+        p->pid   = 206;
         p->state = PROC_READY;
         p->signal_mask = 0;
         proc_ready(p);
@@ -144,6 +146,7 @@ void kill_test_run(void) {
     // NOTE: POSIX says masked signals REMAIN PENDING — this test verifies the bit IS set.
     {
         struct proc *p = proc_alloc();
+        p->pid   = 207;
         p->state = PROC_READY;
         p->signal_mask = (1U << KERNEL_SIGTERM);
         proc_ready(p);
@@ -159,6 +162,7 @@ void kill_test_run(void) {
     // Test: SIGKILL is never filtered by signal_mask
     {
         struct proc *p = proc_alloc();
+        p->pid   = 208;
         p->state = PROC_READY;
         p->signal_mask = 0xFFFFFFFF; // try to mask everything
         // sys_sigprocmask enforces this; set directly to test delivery path
@@ -174,6 +178,7 @@ void kill_test_run(void) {
     // Test: SIGINT goes through as fatal signal
     {
         struct proc *p = proc_alloc();
+        p->pid   = 209;
         p->state = PROC_READY;
         p->signal_mask = 0;
         proc_ready(p);

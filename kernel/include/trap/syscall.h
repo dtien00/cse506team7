@@ -51,6 +51,11 @@
 #define SYS_sigsuspend 40
 #define SYS_getgid   47
 #define SYS_chdir    49
+#define SYS_getpgrp  50
+#define SYS_setpgid  51
+#define SYS_setsid   52
+#define SYS_getpgid  53
+#define SYS_rmdir    54    /* was 52; moved to avoid conflict with SYS_setsid */
 #define SYS_fs_getdents  61
 #define SYS_stat     79
 #define SYS_fstat    80
@@ -59,7 +64,6 @@
 #define SYS_readlink 89
 #define SYS_chmod    90
 #define SYS_fchmod   91
-#define SYS_rmdir    52
 
 // Initialize syscall subsystem
 void syscall_init(void);
@@ -114,3 +118,7 @@ unsigned int sys_alarm(unsigned int seconds);
 int sys_sigaction(int sig, const struct sigaction *act, struct sigaction *oldact);
 int sys_sigpending(uint32_t *set);
 int sys_sigsuspend(const uint32_t *mask);
+pid_t sys_getpgrp(void);
+int   sys_setpgid(pid_t pid, pid_t pgid);
+pid_t sys_setsid(void);
+pid_t sys_getpgid(pid_t pid);

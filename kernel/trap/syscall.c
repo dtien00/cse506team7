@@ -326,6 +326,22 @@ void syscall_handler(trap_frame *frame) {
             ret = sys_sigsuspend((uint32_t *)arg0);
             break;
 
+        case SYS_getpgrp:
+            ret = sys_getpgrp();
+            break;
+
+        case SYS_setpgid:
+            ret = sys_setpgid((pid_t)arg0, (pid_t)arg1);
+            break;
+
+        case SYS_setsid:
+            ret = sys_setsid();
+            break;
+
+        case SYS_getpgid:
+            ret = sys_getpgid((pid_t)arg0);
+            break;
+
         default:
             printk("Unknown system call: %d\n", syscall_num);
             ret = -1;
@@ -372,6 +388,9 @@ pid_t sys_fork(void) {
     // POSIX: child inherits parent's signal disposition table across fork
     memcpy(child->handlers, current->handlers, sizeof(current->handlers));
     child->priority    = current->priority;    /* POSIX: nice value is inherited across fork */
+    // Child also inherits parent's process group and session IDs
+    child->pgid = current->pgid;
+    child->sid = current->sid;
     /* Child starts one level below the parent so a timer-preempted parent
      * re-enters at the same level as the child; LIFO insertion then keeps
      * the parent at the head of that level so it finishes forking remaining
@@ -712,6 +731,50 @@ int sys_kill(pid_t pid, int sig) {
             }
         }
         return (sent > 0) ? 0 : -1;
+    }
+
+    /* POSIX: kill(0, sig) — send to every process in the caller's process group.
+     * POSIX: kill(-pgid, sig) — send to every process in process group pgid. */
+    if (pid == 0 || pid < -1) {
+        /* kill(0, sig) requires a current process to determine the group. */
+        if (pid == 0 && current == NULL) return -ESRCH;
+        pid_t target_pgid = (pid == 0) ? current->pgid : (pid_t)(-pid);
+        if (sig == 0) {
+            /* Validity check: succeed if any live process in the group exists */
+            for (int i = 0; i < MAX_PROCS; i++) {
+                if (proctab[i].state != PROC_UNUSED &&
+                    proctab[i].state != PROC_ZOMBIE &&
+                    proctab[i].pgid == target_pgid)
+                    return 0;
+            }
+            return -ESRCH;
+        }
+        int sent = 0;
+        for (int i = 0; i < MAX_PROCS; i++) {
+            struct proc *p = &proctab[i];
+            if (p->state == PROC_UNUSED ||
+                p->state == PROC_ZOMBIE  ||
+                p->state == PROC_CREATED) continue;
+            if (p->pgid != target_pgid) continue;
+            sent++;
+            if (sig == KERNEL_SIGCONT) {
+                p->pending_signals &= ~KERNEL_STOP_SIGS;
+                if (p->state == PROC_STOPPED)
+                    proc_unstop(p);
+            } else if (sig == KERNEL_SIGSTOP) {
+                p->pending_signals &= ~(1U << KERNEL_SIGCONT);
+                if (p->state == PROC_READY || p->state == PROC_BLOCKED)
+                    proc_stop(p);
+                else
+                    p->pending_signals |= KERNEL_STOP_SIGS;
+            } else {
+                p->pending_signals |= (1U << sig);
+                if (p->state == PROC_BLOCKED &&
+                    (sig == KERNEL_SIGKILL || !(p->signal_mask & (1U << sig))))
+                    proc_unblock(p);
+            }
+        }
+        return (sent > 0) ? 0 : -ESRCH;
     }
 
     struct proc *target = proc_find(pid);
@@ -1505,4 +1568,90 @@ int sys_sigsuspend(const uint32_t *mask) {
     /* Restore original mask — POSIX requires this before sigsuspend returns. */
     current->signal_mask = old_mask;
     return -1; /* POSIX: always returns -1 (errno = EINTR) */
+}
+
+pid_t sys_getpgrp(void) {
+    if (!current) return -1;
+    return current->pgid;
+}
+
+/*
+ * sys_setpgid — move process pid into process group pgid.
+ *
+ * POSIX constraints enforced:
+ *   - Caller may only act on itself (pid == 0 or pid == current->pid) or a
+ *     direct child that has not yet called exec (we can't track the exec bit
+ *     cheaply, so we allow it on direct children unconditionally).
+ *   - A session leader cannot change its process group.
+ *   - The target pgid must already exist within the same session, OR pgid == 0
+ *     (which means "create a new group with target->pid as the pgid").
+ */
+int sys_setpgid(pid_t pid, pid_t pgid) {
+    if (!current) return -1;
+
+    struct proc *target;
+    if (pid == 0 || pid == current->pid) {
+        target = current;
+    } else {
+        target = proc_find(pid);
+        if (!target || target->state == PROC_UNUSED || target->state == PROC_ZOMBIE)
+            return -ESRCH;
+        /* Caller must be the direct parent */
+        if (target->parent != current)
+            return -ESRCH;
+    }
+
+    /* POSIX: cannot change the process group of a session leader */
+    if (target->sid == target->pid)
+        return -EPERM;
+
+    /* pgid == 0 means "join a new group with the target's own pid" */
+    pid_t new_pgid = (pgid == 0) ? target->pid : pgid;
+
+    /* If joining an existing group, it must exist within the same session */
+    if (new_pgid != target->pid) {
+        int found = 0;
+        for (int i = 0; i < MAX_PROCS; i++) {
+            struct proc *p = &proctab[i];
+            if (p->state != PROC_UNUSED && p->state != PROC_ZOMBIE &&
+                p->pgid == new_pgid && p->sid == target->sid) {
+                found = 1;
+                break;
+            }
+        }
+        if (!found) return -EPERM;
+    }
+
+    target->pgid = new_pgid;
+    return 0;
+}
+
+/*
+ * sys_setsid — create a new session.
+ *
+ * The calling process must not already be a process group leader.
+ * Returns the new session id (== current->pid) on success, or -EPERM.
+ */
+pid_t sys_setsid(void) {
+    if (!current) return -1;
+    /* POSIX: process group leader cannot call setsid */
+    if (current->pgid == current->pid)
+        return -EPERM;
+    current->sid  = current->pid;
+    current->pgid = current->pid;
+    return current->sid;
+}
+
+/*
+ * sys_getpgid — return the process group id of process pid.
+ * pid == 0 means the calling process.
+ */
+pid_t sys_getpgid(pid_t pid) {
+    if (!current) return -1;
+    if (pid == 0 || pid == current->pid)
+        return current->pgid;
+    struct proc *p = proc_find(pid);
+    if (!p || p->state == PROC_UNUSED || p->state == PROC_ZOMBIE)
+        return -ESRCH;
+    return p->pgid;
 }

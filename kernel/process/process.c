@@ -99,6 +99,10 @@ struct proc* proc_create(const char *name) {
     memset(p, 0, sizeof(*p));
 
     p->pid = next_pid++;
+    /* Each new process starts as its own group and session leader.
+     * sys_fork() overwrites these with the parent's pgid/sid. */
+    p->pgid = p->pid;
+    p->sid  = p->pid;
     strncpy(p->name, name, MAX_NAME - 1);
     p->state = PROC_CREATED;
     p->context.sp = (uint64_t)&kstacks[idx][KSTACK_SIZE];

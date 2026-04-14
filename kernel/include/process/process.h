@@ -141,6 +141,10 @@ struct proc {
 
     // Signal handlers
     void *handlers[32];
+
+    // Process group and session management
+    pid_t pgid;
+    pid_t sid; 
 };
 
 extern struct proc proctab[];

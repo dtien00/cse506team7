@@ -46,22 +46,10 @@ int access(const char *pathname, int mode) {
     return -1;
 }
 
-pid_t getpgid(pid_t pid) {
-    (void)pid;
-    return -1;
-}
-
-int setpgid(pid_t pid, pid_t pgid) {
-    (void)pid; (void)pgid;
-    return -1;
-}
-
-pid_t getpgrp(void) {
-    return -1;
-}
-
+/* getpgid / setpgid / getpgrp / setsid are real syscall wrappers in syscall.S.
+ * setpgrp() is a BSD convenience equivalent to setpgid(0, 0). */
 int setpgrp(void) {
-    return -1;
+    return setpgid(0, 0);
 }
 
 int lstat(const char *pathname, struct stat *statbuf) {

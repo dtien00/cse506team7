@@ -27,6 +27,7 @@ void sched_nice_test_run(void);
 void libc_syscall_test_run(void);
 void timer_test_run(void);
 void kill_test_run(void);
+void pgrp_test_run(void);
 void sigaction_test_run(void);
 void sigpending_test_run(void);
 void cow_test_run(void);

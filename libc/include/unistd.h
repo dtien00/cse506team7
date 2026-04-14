@@ -62,7 +62,7 @@ void sync(void);
 pid_t getpgid(pid_t pid);
 int   setpgid(pid_t pid, pid_t pgid);
 pid_t getpgrp(void);
-int   setpgrp(void);
+int   setsid(void);
 
 int link(const char *oldpath, const char *newpath);
 int symlink(const char *target, const char *linkpath);
