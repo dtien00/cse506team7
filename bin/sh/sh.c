@@ -106,6 +106,7 @@ static int execute(char **argv) {
     }
 
     if (pid == 0) {
+        setpgid(0, 0);  /* child becomes its own process group leader */
         exec_command(argv);
     }
 
@@ -162,6 +163,10 @@ static int execute_pipeline(char *line) {
         }
 
         if (pids[i] == 0) {
+            /* All pipeline members share the first child's pgid */
+            pid_t pipeline_pgid = (i == 0) ? 0 : pids[0];
+            setpgid(0, pipeline_pgid);
+
             if (prev_read >= 0) {
                 dup2(prev_read, STDIN_FILENO);
             }
