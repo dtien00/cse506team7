@@ -56,12 +56,34 @@ void run_test_syscall(us_test_group_t *group) {
     }
 
     /* ── kill edge cases ────────────────────────────────────────────── */
-    int r = kill(-1, SIGKILL);
-    /* POSIX: returns 0 if ≥1 eligible target was signaled, -1 if none.
-     * Both are valid depending on how many other processes are alive. */
-    TEST(group, "kill(-1, SIGKILL): returns 0 or -1", r == 0 || r == -1);
+    /* kill(-1, SIGKILL) would broadcast to all processes except init and
+     * caller.  When run from a shell, this kills the shell and other
+     * bystanders — which is destructive and causes cascading failures.
+     * Test the broadcast API with sig=0 (validity check) which probes
+     * reachability without actually sending any signal. */
+    {
+        pid_t iso = fork();
+        if (iso < 0) {
+            SKIP(group, "kill(-1, 0) from lone child returns -1", "fork failed");
+        } else if (iso == 0) {
+            /* Become a new session + group so the parent is the only
+             * "other" eligible process.  Wait for parent to be ready
+             * (in waitpid) before probing — this ensures at least one
+             * eligible target exists and kill(-1, 0) returns 0. */
+            setsid();
+            /* sig=0: merely checks for eligible targets, sends nothing */
+            int r2 = kill(-1, 0);
+            /* With at least our parent alive, r2 should be 0. */
+            _exit(r2 == 0 ? 0 : 1);
+        } else {
+            int kst = 0;
+            waitpid(iso, &kst, 0);
+            TEST(group, "kill(-1, 0) from child: eligible targets found (parent exists)",
+                 WIFEXITED(kst) && WEXITSTATUS(kst) == 0);
+        }
+    }
 
-    r = kill(getpid(), 0);
+    int r = kill(getpid(), 0);
     TEST(group, "kill(getpid(), 0): returns 0",   r == 0);
 
     /* ── termios ─────────────────────────────────────────────────────── */

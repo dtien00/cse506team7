@@ -4,6 +4,7 @@
 #include "kernel/printk.h"
 #include "process/process.h"
 #include "trap/syscall.h"
+#include "signal.h"
 #include "mm/vmm.h"
 #include "mm/pmm.h"
 #include "mm/vma.h"
@@ -265,10 +266,28 @@ void trap_handler(trap_frame *frame) {
             current->pending_signals &= ~pending_stop;
             proc_stop(current);  // yields; resumes after SIGCONT
         }
+
+        // Clear any pending signals whose disposition is SIG_IGN, and also
+        // default-ignore signals (SIGCHLD) when handler is still SIG_DFL.
+        // SIGKILL and SIGSTOP are excluded: they cannot be ignored (POSIX).
+        {
+            uint32_t tmp = current->pending_signals & ~current->signal_mask;
+            while (tmp) {
+                int s = kernel_ctz((uint32_t)(tmp));
+                tmp &= tmp - 1;
+                if (s == KERNEL_SIGKILL || s == KERNEL_SIGSTOP)
+                    continue;
+                if (current->handlers[s] == (void *)SIG_IGN ||
+                    ((1U << s) & KERNEL_DFL_IGNORE_SIGS &&
+                     current->handlers[s] == (void *)SIG_DFL))
+                    current->pending_signals &= ~(1u << s);
+            }
+        }
+
         uint32_t unmasked = current->pending_signals & ~current->signal_mask;
         if (unmasked & KERNEL_FATAL_SIGS) {
             current->pending_signals = 0;
-            proc_exit(-1);       // never returns
+            proc_exit(-kernel_ctz((uint32_t)(unmasked & KERNEL_FATAL_SIGS))); // never returns
         }
 
         // Ensure sret reenables S-mode interrupts after returning to user.
@@ -491,6 +510,24 @@ uint64_t timer_ticks = 0;
 void timer_handler(void) {
     timer_ticks++;
     sbi_set_timer(read_csr(time) + TIMER_INTERVAL);
+
+    // Scan proctab: if any process has a pending alarm that has expired, deliver SIGALRM.
+    for (int i = 0; i < MAX_PROCS; i++) {
+        struct proc *p = &proctab[i];
+        if (p->state == PROC_UNUSED) continue;
+        if (p->alarm_tick != 0 && timer_ticks >= p->alarm_tick) {
+            p->alarm_tick = 0;
+            p->pending_signals |= (1U << KERNEL_SIGALRM);
+            // proc_wakeup() matches on chan, but pause() sleeps on
+            // &p->pending_signals — a different address from p itself.
+            // Use proc_unblock() directly (same pattern as sys_kill at
+            // syscall.c:670) so the process wakes regardless of which
+            // channel it slept on.  Guard on PROC_BLOCKED so we do not
+            // disturb a process that is already RUNNING or READY.
+            if (p->state == PROC_BLOCKED)
+                proc_unblock(p);
+        }
+    }
 
     // Wake any processes whose timed sleep deadline has expired.
     for (int i = 0; i < MAX_PROCS; i++) {

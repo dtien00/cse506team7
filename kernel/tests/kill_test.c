@@ -119,6 +119,7 @@ void kill_test_run(void) {
     // Test: SIGSTOP on a READY process → PROC_STOPPED
     {
         struct proc *p = proc_alloc();
+        p->pid   = 205;
         p->state = PROC_READY;
         p->signal_mask = 0;
         // Must add to ready_queue for proc_stop to remove it
@@ -131,6 +132,7 @@ void kill_test_run(void) {
     // Test: SIGCONT on a STOPPED process → PROC_READY
     {
         struct proc *p = proc_alloc();
+        p->pid   = 206;
         p->state = PROC_READY;
         p->signal_mask = 0;
         proc_ready(p);
@@ -144,6 +146,7 @@ void kill_test_run(void) {
     // NOTE: POSIX says masked signals REMAIN PENDING — this test verifies the bit IS set.
     {
         struct proc *p = proc_alloc();
+        p->pid   = 207;
         p->state = PROC_READY;
         p->signal_mask = (1U << KERNEL_SIGTERM);
         proc_ready(p);
@@ -159,6 +162,7 @@ void kill_test_run(void) {
     // Test: SIGKILL is never filtered by signal_mask
     {
         struct proc *p = proc_alloc();
+        p->pid   = 208;
         p->state = PROC_READY;
         p->signal_mask = 0xFFFFFFFF; // try to mask everything
         // sys_sigprocmask enforces this; set directly to test delivery path
@@ -174,6 +178,7 @@ void kill_test_run(void) {
     // Test: SIGINT goes through as fatal signal
     {
         struct proc *p = proc_alloc();
+        p->pid   = 209;
         p->state = PROC_READY;
         p->signal_mask = 0;
         proc_ready(p);
@@ -181,6 +186,52 @@ void kill_test_run(void) {
         TEST("SIGINT: pending bit set", p->pending_signals & (1U << KERNEL_SIGINT));
         TEST("SIGINT: classified as fatal", (p->pending_signals & ~p->signal_mask) & KERNEL_FATAL_SIGS);
         proc_free(p);
+    }
+
+    // Test: SIGCHLD delivered to parent on SIGSTOP
+    {
+        printk("=== SIGCHLD delivery on child stop ===\n");
+        struct proc *parent = proc_alloc();
+        struct proc *child  = proc_alloc();
+        parent->pid = 210; parent->state = PROC_READY;
+        parent->pending_signals = 0;
+        child->pid  = 211; child->state = PROC_READY;
+        child->parent = parent;
+        child->signal_mask = 0;
+        proc_ready(child);
+
+        sys_kill(child->pid, SIGSTOP);
+        TEST("SIGCHLD on stop: child is PROC_STOPPED", child->state == PROC_STOPPED);
+        TEST("SIGCHLD on stop: parent has SIGCHLD pending",
+             parent->pending_signals & (1U << SIGCHLD));
+
+        // Clear for next sub-test
+        parent->pending_signals = 0;
+        proc_free(child);
+        proc_free(parent);
+    }
+
+    // Test: SIGCHLD delivered to parent on SIGCONT
+    {
+        printk("=== SIGCHLD delivery on child continue ===\n");
+        struct proc *parent = proc_alloc();
+        struct proc *child  = proc_alloc();
+        parent->pid = 212; parent->state = PROC_READY;
+        parent->pending_signals = 0;
+        child->pid  = 213; child->state = PROC_READY;
+        child->parent = parent;
+        child->signal_mask = 0;
+        proc_ready(child);
+
+        sys_kill(child->pid, SIGSTOP);   // stop
+        parent->pending_signals = 0;     // clear SIGCHLD from stop
+        sys_kill(child->pid, SIGCONT);   // continue
+        TEST("SIGCHLD on cont: child is PROC_READY", child->state == PROC_READY);
+        TEST("SIGCHLD on cont: parent has SIGCHLD pending",
+             parent->pending_signals & (1U << SIGCHLD));
+
+        proc_free(child);
+        proc_free(parent);
     }
 
     printk("\n========================================\n");

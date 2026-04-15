@@ -39,8 +39,16 @@
 .global procinfo
 .global rmdir
 .global gettimeofday
+.global alarm
+.global sigaction
+.global sigpending
+.global sigsuspend
 .global tcgetattr
 .global tcsetattr
+.global getpgrp
+.global setpgid
+.global setsid
+.global getpgid
 
 
 mmap:
@@ -169,7 +177,7 @@ mkdir:
     ret
 
 rmdir:
-    li a7, 52
+    li a7, 54    /* SYS_rmdir — was 52, moved to avoid conflict with SYS_setsid */
     ecall
     ret
 
@@ -248,8 +256,18 @@ gettimeofday:
     ecall
     ret
 
+alarm:
+    li a7, 37
+    ecall
+    ret
+
 tcgetattr:
     li a7, 35
+    ecall
+    ret
+
+sigaction:
+    li a7, 38
     ecall
     ret
 
@@ -258,3 +276,33 @@ tcsetattr:
     ecall
     ret
 
+sigpending:
+    li a7, 39
+    ecall
+    ret
+
+sigsuspend:
+    li a7, 40
+    ecall
+    ret
+
+getpgrp:
+    li a7, 50
+    ecall
+    ret
+
+
+setpgid:
+    li a7, 51
+    ecall
+    ret
+
+setsid:
+    li a7, 52
+    ecall
+    ret
+
+getpgid:
+    li a7, 53
+    ecall
+    ret

@@ -56,6 +56,9 @@ void run_all_tests(void) {
     libc_syscall_test_run();
     timer_test_run();
     kill_test_run();
+    pgrp_test_run();
+    sigaction_test_run();
+    sigpending_test_run();
     cow_test_run();
     stack_growth_test_run();
     accounting_test_run();

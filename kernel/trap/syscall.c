@@ -51,6 +51,23 @@ void syscall_handler(trap_frame *frame) {
             // Re-evaluate signals — new ones may have arrived while stopped.
         }
 
+        // Clear any pending signals whose disposition is SIG_IGN, and also
+        // default-ignore signals (SIGCHLD) when handler is still SIG_DFL.
+        // SIGKILL (bit 9) can never be ignored even if handlers[9] == SIG_IGN.
+        {
+            uint32_t tmp = current->pending_signals & ~current->signal_mask;
+            while (tmp) {
+                int s = kernel_ctz((uint32_t)(tmp));
+                tmp &= tmp - 1;
+                if (s == KERNEL_SIGKILL || s == KERNEL_SIGSTOP)
+                    continue;
+                if (current->handlers[s] == (void *)SIG_IGN ||
+                    ((1U << s) & KERNEL_DFL_IGNORE_SIGS &&
+                     current->handlers[s] == (void *)SIG_DFL))
+                    current->pending_signals &= ~(1u << s);
+            }
+        }
+
         // Check if this process has a fatal pending signal before handling anything.
         // This catches processes that were signaled while running (not sleeping).
         // Fatal signals: filtered by signal_mask (except SIGKILL which can't be masked,
@@ -58,8 +75,8 @@ void syscall_handler(trap_frame *frame) {
         uint32_t unmasked = current->pending_signals & ~current->signal_mask;
         if (unmasked & KERNEL_FATAL_SIGS) {
             current->pending_signals = 0;
-            sys_exit(-1);
-            return; // unreachable — sys_exit calls proc_exit which never returns
+            sys_exit(-kernel_ctz((uint32_t)(unmasked & KERNEL_FATAL_SIGS)));
+            return; // unreachable
         }
     }
 
@@ -294,6 +311,40 @@ void syscall_handler(trap_frame *frame) {
         case SYS_rmdir:
             ret = sys_rmdir((const char *)arg0);
             break;
+            
+        case SYS_alarm:
+            ret = sys_alarm((unsigned int) arg0);
+            break;
+
+        case SYS_sigaction:
+            ret = sys_sigaction((int)arg0,
+                                (const struct sigaction *)arg1,
+                                (struct sigaction *)arg2);
+            break;
+
+        case SYS_sigpending:
+            ret = sys_sigpending((uint32_t *)arg0);
+            break;
+
+        case SYS_sigsuspend:
+            ret = sys_sigsuspend((uint32_t *)arg0);
+            break;
+
+        case SYS_getpgrp:
+            ret = sys_getpgrp();
+            break;
+
+        case SYS_setpgid:
+            ret = sys_setpgid((pid_t)arg0, (pid_t)arg1);
+            break;
+
+        case SYS_setsid:
+            ret = sys_setsid();
+            break;
+
+        case SYS_getpgid:
+            ret = sys_getpgid((pid_t)arg0);
+            break;
 
         default:
             printk("Unknown system call: %d\n", syscall_num);
@@ -338,7 +389,12 @@ pid_t sys_fork(void) {
     }
 
     child->signal_mask = current->signal_mask; // Fork child inherits parent's signal mask
+    // POSIX: child inherits parent's signal disposition table across fork
+    memcpy(child->handlers, current->handlers, sizeof(current->handlers));
     child->priority    = current->priority;    /* POSIX: nice value is inherited across fork */
+    // Child also inherits parent's process group and session IDs
+    child->pgid = current->pgid;
+    child->sid = current->sid;
     /* Child starts one level below the parent so a timer-preempted parent
      * re-enters at the same level as the child; LIFO insertion then keeps
      * the parent at the head of that level so it finishes forking remaining
@@ -673,11 +729,56 @@ int sys_kill(pid_t pid, int sig) {
                     p->pending_signals |= KERNEL_STOP_SIGS;
             } else {
                 p->pending_signals |= (1U << sig);
-                if (p->state == PROC_BLOCKED)
+                if (p->state == PROC_BLOCKED &&
+                    (sig == KERNEL_SIGKILL || !(p->signal_mask & (1U << sig))))
                     proc_unblock(p);
             }
         }
         return (sent > 0) ? 0 : -1;
+    }
+
+    /* POSIX: kill(0, sig) — send to every process in the caller's process group.
+     * POSIX: kill(-pgid, sig) — send to every process in process group pgid. */
+    if (pid == 0 || pid < -1) {
+        /* kill(0, sig) requires a current process to determine the group. */
+        if (pid == 0 && current == NULL) return -ESRCH;
+        pid_t target_pgid = (pid == 0) ? current->pgid : (pid_t)(-pid);
+        if (sig == 0) {
+            /* Validity check: succeed if any live process in the group exists */
+            for (int i = 0; i < MAX_PROCS; i++) {
+                if (proctab[i].state != PROC_UNUSED &&
+                    proctab[i].state != PROC_ZOMBIE &&
+                    proctab[i].pgid == target_pgid)
+                    return 0;
+            }
+            return -ESRCH;
+        }
+        int sent = 0;
+        for (int i = 0; i < MAX_PROCS; i++) {
+            struct proc *p = &proctab[i];
+            if (p->state == PROC_UNUSED ||
+                p->state == PROC_ZOMBIE  ||
+                p->state == PROC_CREATED) continue;
+            if (p->pgid != target_pgid) continue;
+            sent++;
+            if (sig == KERNEL_SIGCONT) {
+                p->pending_signals &= ~KERNEL_STOP_SIGS;
+                if (p->state == PROC_STOPPED)
+                    proc_unstop(p);
+            } else if (sig == KERNEL_SIGSTOP) {
+                p->pending_signals &= ~(1U << KERNEL_SIGCONT);
+                if (p->state == PROC_READY || p->state == PROC_BLOCKED)
+                    proc_stop(p);
+                else
+                    p->pending_signals |= KERNEL_STOP_SIGS;
+            } else {
+                p->pending_signals |= (1U << sig);
+                if (p->state == PROC_BLOCKED &&
+                    (sig == KERNEL_SIGKILL || !(p->signal_mask & (1U << sig))))
+                    proc_unblock(p);
+            }
+        }
+        return (sent > 0) ? 0 : -ESRCH;
     }
 
     struct proc *target = proc_find(pid);
@@ -714,7 +815,18 @@ int sys_kill(pid_t pid, int sig) {
     // Use proc_unblock() directly rather than proc_wakeup() because
     // proc_wakeup() only matches processes sleeping on a specific channel
     // (e.g. it would miss a process blocked on terminal I/O with chan != target).
-    if (target->state == PROC_BLOCKED)
+    //
+    // Only wake if the signal is not currently masked.  Waking for a masked
+    // signal causes a spurious return from proc_sleep: the post-wakeup fatal-
+    // signal check correctly skips the masked signal, proc_sleep returns
+    // normally, and control reaches sigsuspend's mask-restore line.  With the
+    // old (empty) mask now active the still-pending signal is no longer blocked
+    // and kills the process at the next trap return — wrong behaviour when the
+    // caller expected sigsuspend to stay asleep for that signal.
+    // SIGKILL is included in the wake condition as a safety net even though
+    // sys_sigprocmask already prevents it from being set in signal_mask.
+    if (target->state == PROC_BLOCKED &&
+        (sig == KERNEL_SIGKILL || !(target->signal_mask & (1U << sig))))
         proc_unblock(target);
 
     return 0;
@@ -1317,4 +1429,236 @@ int sys_rmdir(const char *path) {
         return -ENAMETOOLONG;
 
     return vfs_rmdir(resolved);
+}
+
+unsigned int sys_alarm(unsigned int seconds) {
+    uint64_t old = current->alarm_tick;
+
+    if (seconds == 0) {
+        // alarm(0) cancels any pending alarm
+        current->alarm_tick = 0;
+    } else {
+        current->alarm_tick = timer_ticks + (uint64_t)seconds * TICKS_PER_SEC;
+    }
+
+    // Return seconds remaining from previous alarm, or 0 if none / already fired
+    if (old == 0 || old <= timer_ticks)
+        return 0;
+    // Ceiling division: round up so partial ticks count as a full second
+    return (unsigned int)((old - timer_ticks + TICKS_PER_SEC - 1) / TICKS_PER_SEC);
+}
+
+int sys_sigaction(int sig, const struct sigaction *act, struct sigaction *oldact) {
+    if (!current) return -1;
+    if (sig < 1 || sig >= 32) return -EINVAL;
+    // SIGKILL and SIGSTOP cannot be caught or ignored — POSIX
+    if (sig == SIGKILL || sig == SIGSTOP) return -EINVAL;
+
+    set_csr_bit(sstatus, SSTATUS_SUM);
+
+    // Return previous disposition in oldact if the caller wants it
+    if (oldact != NULL) {
+        oldact->sa_handler = (sighandler_t)current->handlers[sig];
+        oldact->sa_mask    = 0;
+        oldact->sa_flags   = 0;
+    }
+
+    // Install new disposition — only SIG_DFL (0) and SIG_IGN (1) accepted;
+    // custom function pointers require a signal-return trampoline (BLOCKED-8).
+    if (act != NULL) {
+        sighandler_t h = act->sa_handler;
+        if (h != SIG_DFL && h != SIG_IGN) {
+            clear_csr_bit(sstatus, SSTATUS_SUM);
+            return -EINVAL;
+        }
+        current->handlers[sig] = (void *)h;
+    }
+
+    clear_csr_bit(sstatus, SSTATUS_SUM);
+    return 0;
+}
+
+int sys_sigpending(uint32_t *set) {
+    if (!current || !set) return -EINVAL;
+
+    // set is a userspace pointer — enable SUM so the kernel can write to it,
+    // matching the same pattern used by sys_sigprocmask.
+    set_csr_bit(sstatus, SSTATUS_SUM);
+    *set = current->pending_signals & current->signal_mask;
+    clear_csr_bit(sstatus, SSTATUS_SUM);
+
+    return 0;
+}
+
+/*
+ * sys_sigsuspend() — atomically replace signal mask and suspend until a
+ * signal is delivered.
+ *
+ * POSIX: atomically installs *mask as the process signal mask, then blocks
+ * until any signal whose action would terminate the process or invoke a
+ * signal-catching function is delivered.  The original mask is always
+ * restored before returning, and the call always returns -1 (EINTR).
+ *
+ * Implementation notes:
+ *   - The SUM bit is only needed to read *mask (a userspace pointer).
+ *     Writing current->signal_mask is a kernel-struct write; no SUM needed.
+ *   - After installing the new mask a signal that was previously blocked
+ *     may now be pending.  If we called proc_sleep() unconditionally nobody
+ *     would ever call proc_wakeup() for that already-set bit, causing the
+ *     process to sleep forever.  We therefore run the same signal-delivery
+ *     checks that proc_sleep() performs on wakeup *before* sleeping, so that
+ *     pre-pending signals are handled identically to signals that arrive
+ *     while we are blocked.
+ */
+int sys_sigsuspend(const uint32_t *mask) {
+    if (!current || !mask) return -EINVAL;
+
+    /* Read new mask from userspace (SUM needed for U-bit page access). */
+    set_csr_bit(sstatus, SSTATUS_SUM);
+    uint32_t new_mask = *mask;
+    clear_csr_bit(sstatus, SSTATUS_SUM);
+
+    /* Atomically install new mask; save old mask for restoration on return. */
+    uint32_t old_mask = current->signal_mask;
+    current->signal_mask = new_mask;
+
+    /*
+     * Pre-sleep signal sweep — mirrors proc_sleep()'s post-wakeup checks.
+     * This handles signals that were pending-but-blocked under old_mask and
+     * are now unmasked by new_mask, which proc_wakeup() would never fire for.
+     */
+
+    /* Step 1: SIGSTOP — cannot be masked; highest priority. */
+    uint32_t pending_stop = current->pending_signals & KERNEL_STOP_SIGS;
+    if (pending_stop) {
+        current->pending_signals &= ~pending_stop;
+        proc_stop(current);
+        /* Resumes here after SIGCONT is delivered. */
+    }
+
+    /* Step 2: Clear SIG_IGN-disposed and default-ignore pending signals. */
+    {
+        uint32_t tmp = current->pending_signals & ~current->signal_mask;
+        while (tmp) {
+            int s = kernel_ctz((uint32_t)tmp);
+            tmp &= tmp - 1;
+            if (s == KERNEL_SIGKILL || s == KERNEL_SIGSTOP)
+                continue;
+            if (current->handlers[s] == (void *)SIG_IGN ||
+                ((1U << s) & KERNEL_DFL_IGNORE_SIGS &&
+                 current->handlers[s] == (void *)SIG_DFL))
+                current->pending_signals &= ~(1u << s);
+        }
+    }
+
+    /* Step 3: Fatal signals already pending under the new mask — terminate. */
+    uint32_t unmasked = current->pending_signals & ~current->signal_mask;
+    if (unmasked & KERNEL_FATAL_SIGS) {
+        current->pending_signals = 0;
+        proc_exit(-kernel_ctz((uint32_t)(unmasked & KERNEL_FATAL_SIGS)));
+        /* unreachable */
+    }
+
+    /* Step 4: Non-fatal pending signals → return EINTR immediately.
+     * Mirrors sys_pause()'s early-return pattern.  The signal bits remain in
+     * pending_signals and are visible to the caller via sigpending().
+     * The original mask is restored first so the signals are correctly masked
+     * or unmasked for subsequent operations. */
+    uint32_t nonfatal = current->pending_signals & ~current->signal_mask
+                        & ~KERNEL_FATAL_SIGS & ~KERNEL_STOP_SIGS;
+    if (!nonfatal) {
+        /* No immediately actionable signals: block until one is delivered. */
+        proc_sleep(&current->pending_signals);
+        /* proc_sleep() handles SIGSTOP, SIG_IGN, and fatal signals on wakeup. */
+    }
+
+    /* Restore original mask — POSIX requires this before sigsuspend returns. */
+    current->signal_mask = old_mask;
+    return -1; /* POSIX: always returns -1 (errno = EINTR) */
+}
+
+pid_t sys_getpgrp(void) {
+    if (!current) return -1;
+    return current->pgid;
+}
+
+/*
+ * sys_setpgid — move process pid into process group pgid.
+ *
+ * POSIX constraints enforced:
+ *   - Caller may only act on itself (pid == 0 or pid == current->pid) or a
+ *     direct child that has not yet called exec (we can't track the exec bit
+ *     cheaply, so we allow it on direct children unconditionally).
+ *   - A session leader cannot change its process group.
+ *   - The target pgid must already exist within the same session, OR pgid == 0
+ *     (which means "create a new group with target->pid as the pgid").
+ */
+int sys_setpgid(pid_t pid, pid_t pgid) {
+    if (!current) return -1;
+
+    struct proc *target;
+    if (pid == 0 || pid == current->pid) {
+        target = current;
+    } else {
+        target = proc_find(pid);
+        if (!target || target->state == PROC_UNUSED || target->state == PROC_ZOMBIE)
+            return -ESRCH;
+        /* Caller must be the direct parent */
+        if (target->parent != current)
+            return -ESRCH;
+    }
+
+    /* POSIX: cannot change the process group of a session leader */
+    if (target->sid == target->pid)
+        return -EPERM;
+
+    /* pgid == 0 means "join a new group with the target's own pid" */
+    pid_t new_pgid = (pgid == 0) ? target->pid : pgid;
+
+    /* If joining an existing group, it must exist within the same session */
+    if (new_pgid != target->pid) {
+        int found = 0;
+        for (int i = 0; i < MAX_PROCS; i++) {
+            struct proc *p = &proctab[i];
+            if (p->state != PROC_UNUSED && p->state != PROC_ZOMBIE &&
+                p->pgid == new_pgid && p->sid == target->sid) {
+                found = 1;
+                break;
+            }
+        }
+        if (!found) return -EPERM;
+    }
+
+    target->pgid = new_pgid;
+    return 0;
+}
+
+/*
+ * sys_setsid — create a new session.
+ *
+ * The calling process must not already be a process group leader.
+ * Returns the new session id (== current->pid) on success, or -EPERM.
+ */
+pid_t sys_setsid(void) {
+    if (!current) return -1;
+    /* POSIX: process group leader cannot call setsid */
+    if (current->pgid == current->pid)
+        return -EPERM;
+    current->sid  = current->pid;
+    current->pgid = current->pid;
+    return current->sid;
+}
+
+/*
+ * sys_getpgid — return the process group id of process pid.
+ * pid == 0 means the calling process.
+ */
+pid_t sys_getpgid(pid_t pid) {
+    if (!current) return -1;
+    if (pid == 0 || pid == current->pid)
+        return current->pgid;
+    struct proc *p = proc_find(pid);
+    if (!p || p->state == PROC_UNUSED || p->state == PROC_ZOMBIE)
+        return -1;
+    return p->pgid;
 }

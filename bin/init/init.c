@@ -20,6 +20,7 @@ static pid_t spawn_exec(const char *path,
     }
 
     if (pid == 0) {
+        setpgid(0, 0);  /* child becomes its own process group leader */
         execve(path, argv, NULL);
         write_fd(STDERR_FILENO, exec_err);
         _exit(1);

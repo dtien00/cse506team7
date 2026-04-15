@@ -1,13 +1,15 @@
 #include "stdlib.h"
 #include "ctype.h"
 #include "string.h"
+#include "signal.h"
 
 void _Exit(int status) {
     exit(status);
 }
 
 void abort(void) {
-    _Exit(1);
+    raise(SIGABRT);
+    _Exit(134);
 }
 
 int atoi(const char* nptr) {

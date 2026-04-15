@@ -309,6 +309,7 @@ static int execute_single(shell_command_t *cmd) {
     }
 
     if (pid == 0) {
+        setpgid(0, 0);  /* child becomes its own process group leader */
         if (apply_redirections(cmd) < 0) {
             _exit(1);
         }
@@ -363,6 +364,10 @@ static int execute_pipeline(char *line) {
         }
 
         if (pids[i] == 0) {
+            /* All pipeline members share the first child's pgid */
+            pid_t pipeline_pgid = (i == 0) ? 0 : pids[0];
+            setpgid(0, pipeline_pgid);
+
             if (prev_read >= 0 && redirect_fd(prev_read, STDIN_FILENO) < 0) {
                 _exit(1);
             }

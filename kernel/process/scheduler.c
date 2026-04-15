@@ -5,6 +5,7 @@
 #include "process/process.h"
 #include "process/swtch.h"
 #include "trap/trap.h"
+#include "signal.h"
 
 struct proc proctab[MAX_PROCS];
 // struct proc *ready_queue = NULL;
@@ -325,11 +326,30 @@ void proc_sleep(void *chan) {
         // Resumes here after SIGCONT.
     }
 
+    // Clear any SIG_IGN'd and default-ignore pending signals before the fatal-
+    // signal check so that a sleeping process is not killed or spuriously woken.
+    // SIGKILL and SIGSTOP can never be ignored (POSIX).
+    {
+        uint32_t tmp = prev->pending_signals & ~prev->signal_mask;
+        while (tmp) {
+            int s = kernel_ctz((uint32_t)(tmp));
+            tmp &= tmp - 1;
+            if (s == KERNEL_SIGKILL || s == KERNEL_SIGSTOP)
+                continue;
+            if (prev->handlers[s] == (void *)SIG_IGN ||
+                ((1U << s) & KERNEL_DFL_IGNORE_SIGS &&
+                 prev->handlers[s] == (void *)SIG_DFL))
+                prev->pending_signals &= ~(1u << s);
+        }
+    }
+
     // Fatal signals - respect signal mask
     uint32_t unmasked = prev->pending_signals & ~prev->signal_mask;
     if (unmasked & KERNEL_FATAL_SIGS) {
         prev->pending_signals = 0;
-        proc_exit(-1);
+        // Encode the specific signal so WTERMSIG returns the right number.
+        // kernel_ctz is safe here: the if-guard guarantees the argument is non-zero.
+        proc_exit(-kernel_ctz((uint32_t)(unmasked & KERNEL_FATAL_SIGS)));
     }
 }
 
@@ -375,6 +395,14 @@ void proc_stop(struct proc *p) {
 
     p->state = PROC_STOPPED;
 
+    // SIGCHLD to parent: notify that child stopped (POSIX WUNTRACED).
+    // Must use p->parent (the stopped child's parent), not current->parent.
+    if (p->parent) {
+        p->parent->pending_signals |= (1u << SIGCHLD);
+        if (p->parent->handlers[SIGCHLD] != (void *)0 /* SIG_DFL */)
+            proc_wakeup(&p->parent->pending_signals);
+    }
+
     if (p == current) {
         struct proc *prev = current;
         current = NULL;
@@ -387,4 +415,11 @@ void proc_stop(struct proc *p) {
 void proc_unstop(struct proc *p) {
     if (p->state != PROC_STOPPED) return;
     proc_ready(p);  // sets PROC_READY and re-enqueues into MLFQ
+
+    // SIGCHLD to parent: notify that child continued (POSIX WCONTINUED).
+    if (p->parent) {
+        p->parent->pending_signals |= (1u << SIGCHLD);
+        if (p->parent->handlers[SIGCHLD] != (void *)0 /* SIG_DFL */)
+            proc_wakeup(&p->parent->pending_signals);
+    }
 }

@@ -1,5 +1,6 @@
 #include "process/process.h"
 #include "kernel/printk.h"
+#include "signal.h"
 #include "trap/trap.h"
 #include "arch/riscv.h"
 #include "fs/vfs.h"
@@ -98,6 +99,10 @@ struct proc* proc_create(const char *name) {
     memset(p, 0, sizeof(*p));
 
     p->pid = next_pid++;
+    /* Each new process starts as its own group and session leader.
+     * sys_fork() overwrites these with the parent's pgid/sid. */
+    p->pgid = p->pid;
+    p->sid  = p->pid;
     strncpy(p->name, name, MAX_NAME - 1);
     p->state = PROC_CREATED;
     p->context.sp = (uint64_t)&kstacks[idx][KSTACK_SIZE];
@@ -106,6 +111,9 @@ struct proc* proc_create(const char *name) {
     p->mlfq_level = 0;
     p->trapframe = NULL;
     p->trapframe_owned = 0;
+    for (int i = 0; i < MAX_HANDLERS; i++) { // Initialize all entries to SIG_DFL (0)
+        p->handlers[i] = 0;
+    }
 
     // Initialize VMA list
     vma_init(&p->vma_list);
@@ -181,6 +189,17 @@ void proc_exit(int code) {
         child = next_sib;
     }
     current->first_child = NULL;
+
+    if (current->parent) {
+        current->parent->pending_signals |= (1u << SIGCHLD);
+        // Only wake the parent's pending_signals channel if the parent has
+        // installed a non-default handler for SIGCHLD.  When the disposition
+        // is SIG_DFL, SIGCHLD's default action is "ignore" (POSIX) and the
+        // signal will be silently cleared at the next dispatch point.
+        // This prevents spurious wakeups of pause()/sigsuspend().
+        if (current->parent->handlers[SIGCHLD] != (void *)0 /* SIG_DFL */)
+            proc_wakeup(&current->parent->pending_signals);
+    }
 
     // Switch back via the normal yield path so the current process context
     // is saved in its own slot; schedule() must run on scheduler_context.
@@ -571,6 +590,11 @@ int exec(const char *path, char *const argv[]) {
     // NOTE: current->priority (nice value) and current->signal_mask are
     // intentionally NOT reset here — POSIX requires both to be preserved
     // across exec().  Do not clear these fields in future refactors.
+    // Signal dispositions: SIG_IGN survives exec(); all others reset to SIG_DFL.
+    for (int i = 0; i < 32; i++) {
+        if (current->handlers[i] != (void *)SIG_IGN)
+            current->handlers[i] = (void *)SIG_DFL;
+    }
     pagetable_t old_pt = current->pagetable;
     struct vm_area *old_vma_list = current->vma_list;
 
