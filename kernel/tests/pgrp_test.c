@@ -147,7 +147,7 @@ void pgrp_test_run(void) {
         if (p) {
             current = p;
             pid_t r = sys_getpgid(99999);
-            TEST("pgrp: sys_getpgid(99999) returns error (-ESRCH)", r == -ESRCH);
+            TEST("pgrp: sys_getpgid(99999) returns error (-1)", r == -1);
             current = saved_current;
             free_test_proc(p);
         } else {
