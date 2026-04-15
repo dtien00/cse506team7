@@ -25,8 +25,22 @@ static int is_special(char ch) {
 
 static char *next_token(char **cursor) {
     static char special_token[2];
-    char *p = *cursor;
+    static char pending_special[2];
+    static int has_pending_special = 0;
+    char *p;
     char *start;
+
+    if (cursor == NULL) {
+        has_pending_special = 0;
+        return NULL;
+    }
+
+    p = *cursor;
+
+    if (has_pending_special) {
+        has_pending_special = 0;
+        return pending_special;
+    }
 
     while (*p && is_space(*p)) {
         p++;
@@ -47,7 +61,12 @@ static char *next_token(char **cursor) {
     while (*p && !is_space(*p) && !is_special(*p)) {
         p++;
     }
-    if (*p) {
+    if (is_space(*p)) {
+        *p++ = '\0';
+    } else if (is_special(*p)) {
+        pending_special[0] = *p;
+        pending_special[1] = '\0';
+        has_pending_special = 1;
         *p++ = '\0';
     }
     *cursor = p;
@@ -64,6 +83,7 @@ static int parse_line(char *line, shell_command_t *cmdv) {
     int cmdc = 0;
     int argc = 0;
 
+    next_token(NULL);
     memset(cmdv, 0, sizeof(shell_command_t) * MAX_CMDS);
 
     while ((token = next_token(&cursor)) != NULL) {
@@ -82,6 +102,7 @@ static int parse_line(char *line, shell_command_t *cmdv) {
         }
 
         if (is_token(token, '<') || is_token(token, '>')) {
+            char redirect_op = token[0];
             char *path = next_token(&cursor);
             if (path == NULL || is_token(path, '|') || is_token(path, '<') || is_token(path, '>')) {
                 return -1;
@@ -95,7 +116,7 @@ static int parse_line(char *line, shell_command_t *cmdv) {
                 return -1;
             }
 
-            if (token[0] == '<') {
+            if (redirect_op == '<') {
                 if (cmdv[cmdc].input_path != NULL) {
                     return -1;
                 }
