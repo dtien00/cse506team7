@@ -1652,6 +1652,6 @@ pid_t sys_getpgid(pid_t pid) {
         return current->pgid;
     struct proc *p = proc_find(pid);
     if (!p || p->state == PROC_UNUSED || p->state == PROC_ZOMBIE)
-        return -ESRCH;
+        return -1;
     return p->pgid;
 }

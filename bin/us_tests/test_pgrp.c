@@ -30,8 +30,6 @@ void run_test_pgrp(us_test_group_t *group) {
      * After proc_create(), pgid == pid.  getpgrp() must return getpid().
      */
     {
-        printf("%d\n", (int) getpgrp());
-        printf("%d\n", (int) getpid());
         TEST(group, "init: getpgrp() == getpid()",
              getpgrp() == getpid());
     }
@@ -148,44 +146,40 @@ void run_test_pgrp(us_test_group_t *group) {
     }
 
     /* ── 8. kill(0, sig): kills all members of the caller's process group ────
-     * Parent and two children are in the same process group.
-     * Parent calls kill(0, SIGKILL) — all three (including the caller itself)
-     * receive SIGKILL.  We verify both children are reaped as signaled, then
-     * confirm kill(0) delivered at least to them.
-     *
-     * The parent re-forks after the kill(0) to confirm it survived past the
-     * point where the children died (parent may die from its own SIGKILL after
-     * waitpid returns, but at least the children should be gone).
+     * kill(0, SIGKILL) includes the caller, so we run the whole scenario inside
+     * a forked wrapper that creates its own process group.  The wrapper forks
+     * two children, verifies they share its pgid, then calls kill(0, SIGKILL).
+     * All three die; the test runner (in a different group) survives and
+     * confirms the wrapper was terminated by SIGKILL.
      */
     {
-        /* Ensure both children are in parent's group */
-        pid_t c1 = fork();
-        if (c1 == 0) {
-            /* Stay in parent's group and spin */
-            for (;;) sleep(1);
+        pid_t wrapper = fork();
+        TEST(group, "kill(0): fork for wrapper succeeded", wrapper >= 0);
+
+        if (wrapper == 0) {
+            /* New process group so kill(0) only hits this subtree */
+            setpgid(0, 0);
+
+            pid_t c1 = fork();
+            if (c1 == 0) { for (;;) sleep(1); }
+            pid_t c2 = fork();
+            if (c2 == 0) { for (;;) sleep(1); }
+
+            if (c1 > 0 && c2 > 0) {
+                sleep(1);
+                /* Verify children inherited our group before we die */
+                if (getpgid(c1) != getpgrp() || getpgid(c2) != getpgrp())
+                    _exit(1); /* pgid mismatch */
+                kill(0, SIGKILL); /* kills wrapper + c1 + c2 */
+            }
+            _exit(99); /* should not reach here */
         }
-        pid_t c2 = fork();
-        if (c2 == 0) {
-            for (;;) sleep(1);
-        }
 
-        if (c1 > 0 && c2 > 0) {
-            sleep(1); /* let children spin */
-
-            /* Both children must be in our group (inherited pgid) */
-            TEST(group, "kill(0): children inherited pgid",
-                 getpgid(c1) == getpgrp() && getpgid(c2) == getpgrp());
-
-            kill(0, SIGKILL);  /* kills self + children */
-            /* We may or may not survive past here depending on scheduler order.
-             * Use WNOHANG to collect any children that are already gone. */
-            int s1 = 0, s2 = 0;
-            waitpid(c1, &s1, 0);
-            waitpid(c2, &s2, 0);
-            TEST(group, "kill(0): child1 killed by signal",
-                 WIFSIGNALED(s1));
-            TEST(group, "kill(0): child2 killed by signal",
-                 WIFSIGNALED(s2));
+        if (wrapper > 0) {
+            int ws = 0;
+            waitpid(wrapper, &ws, 0);
+            TEST(group, "kill(0): wrapper killed by SIGKILL (group kill worked)",
+                 WIFSIGNALED(ws) && WTERMSIG(ws) == SIGKILL);
         }
     }
 

@@ -9,7 +9,7 @@ void _Exit(int status) {
 
 void abort(void) {
     raise(SIGABRT);
-    _exit(134);
+    _Exit(134);
 }
 
 int atoi(const char* nptr) {
