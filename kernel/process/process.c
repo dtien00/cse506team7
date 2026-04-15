@@ -190,6 +190,11 @@ void proc_exit(int code) {
     }
     current->first_child = NULL;
 
+    if (current->parent) {
+        current->parent->pending_signals |= (1u << SIGCHLD);
+        proc_wakeup(&current->parent->pending_signals);
+    }
+
     // Switch back via the normal yield path so the current process context
     // is saved in its own slot; schedule() must run on scheduler_context.
     proc_yield();

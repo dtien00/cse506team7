@@ -188,6 +188,52 @@ void kill_test_run(void) {
         proc_free(p);
     }
 
+    // Test: SIGCHLD delivered to parent on SIGSTOP
+    {
+        printk("=== SIGCHLD delivery on child stop ===\n");
+        struct proc *parent = proc_alloc();
+        struct proc *child  = proc_alloc();
+        parent->pid = 210; parent->state = PROC_READY;
+        parent->pending_signals = 0;
+        child->pid  = 211; child->state = PROC_READY;
+        child->parent = parent;
+        child->signal_mask = 0;
+        proc_ready(child);
+
+        sys_kill(child->pid, SIGSTOP);
+        TEST("SIGCHLD on stop: child is PROC_STOPPED", child->state == PROC_STOPPED);
+        TEST("SIGCHLD on stop: parent has SIGCHLD pending",
+             parent->pending_signals & (1U << SIGCHLD));
+
+        // Clear for next sub-test
+        parent->pending_signals = 0;
+        proc_free(child);
+        proc_free(parent);
+    }
+
+    // Test: SIGCHLD delivered to parent on SIGCONT
+    {
+        printk("=== SIGCHLD delivery on child continue ===\n");
+        struct proc *parent = proc_alloc();
+        struct proc *child  = proc_alloc();
+        parent->pid = 212; parent->state = PROC_READY;
+        parent->pending_signals = 0;
+        child->pid  = 213; child->state = PROC_READY;
+        child->parent = parent;
+        child->signal_mask = 0;
+        proc_ready(child);
+
+        sys_kill(child->pid, SIGSTOP);   // stop
+        parent->pending_signals = 0;     // clear SIGCHLD from stop
+        sys_kill(child->pid, SIGCONT);   // continue
+        TEST("SIGCHLD on cont: child is PROC_READY", child->state == PROC_READY);
+        TEST("SIGCHLD on cont: parent has SIGCHLD pending",
+             parent->pending_signals & (1U << SIGCHLD));
+
+        proc_free(child);
+        proc_free(parent);
+    }
+
     printk("\n========================================\n");
     printk("  Results: %d passed, %d failed\n", passed, failed);
     printk("========================================\n\n");

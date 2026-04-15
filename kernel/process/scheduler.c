@@ -392,6 +392,13 @@ void proc_stop(struct proc *p) {
 
     p->state = PROC_STOPPED;
 
+    // SIGCHLD to parent: notify that child stopped (POSIX WUNTRACED).
+    // Must use p->parent (the stopped child's parent), not current->parent.
+    if (p->parent) {
+        p->parent->pending_signals |= (1u << SIGCHLD);
+        proc_wakeup(&p->parent->pending_signals);
+    }
+
     if (p == current) {
         struct proc *prev = current;
         current = NULL;
@@ -404,4 +411,10 @@ void proc_stop(struct proc *p) {
 void proc_unstop(struct proc *p) {
     if (p->state != PROC_STOPPED) return;
     proc_ready(p);  // sets PROC_READY and re-enqueues into MLFQ
+
+    // SIGCHLD to parent: notify that child continued (POSIX WCONTINUED).
+    if (p->parent) {
+        p->parent->pending_signals |= (1u << SIGCHLD);
+        proc_wakeup(&p->parent->pending_signals);
+    }
 }
