@@ -9,46 +9,139 @@
 #define MAX_ARGS 64
 #define MAX_CMDS 16
 
-static void parse_args(char *line, char **argv) {
-    int argc = 0;
-    char *p = line;
+typedef struct shell_command {
+    char *argv[MAX_ARGS];
+    char *input_path;
+    char *output_path;
+} shell_command_t;
 
-    while (*p && argc < MAX_ARGS - 1) {
-        while (*p == ' ' || *p == '\t' || *p == '\n') p++;
-        if (*p == '\0') break;
-
-        argv[argc++] = p;
-
-        while (*p && *p != ' ' && *p != '\t' && *p != '\n') p++;
-        if (*p) *p++ = '\0';
-    }
-    argv[argc] = NULL;
+static int is_space(char ch) {
+    return ch == ' ' || ch == '\t' || ch == '\n';
 }
 
-static int parse_pipeline(char *line, char **cmdv) {
+static int is_special(char ch) {
+    return ch == '|' || ch == '<' || ch == '>';
+}
+
+static char *next_token(char **cursor) {
+    static char special_token[2];
+    static char pending_special[2];
+    static int has_pending_special = 0;
+    char *p;
+    char *start;
+
+    if (cursor == NULL) {
+        has_pending_special = 0;
+        return NULL;
+    }
+
+    p = *cursor;
+
+    if (has_pending_special) {
+        has_pending_special = 0;
+        return pending_special;
+    }
+
+    while (*p && is_space(*p)) {
+        p++;
+    }
+    if (*p == '\0') {
+        *cursor = p;
+        return NULL;
+    }
+
+    if (is_special(*p)) {
+        special_token[0] = *p++;
+        special_token[1] = '\0';
+        *cursor = p;
+        return special_token;
+    }
+
+    start = p;
+    while (*p && !is_space(*p) && !is_special(*p)) {
+        p++;
+    }
+    if (is_space(*p)) {
+        *p++ = '\0';
+    } else if (is_special(*p)) {
+        pending_special[0] = *p;
+        pending_special[1] = '\0';
+        has_pending_special = 1;
+        *p++ = '\0';
+    }
+    *cursor = p;
+    return start;
+}
+
+static int is_token(const char *token, char expected) {
+    return token != NULL && token[0] == expected && token[1] == '\0';
+}
+
+static int parse_line(char *line, shell_command_t *cmdv) {
+    char *cursor = line;
+    char *token;
+    int cmdc = 0;
     int argc = 0;
-    char *p = line;
-    int expect_command = 1;
 
-    while (*p && argc < MAX_CMDS) {
-        while (*p == ' ' || *p == '\t' || *p == '\n') p++;
-        if (*p == '\0') break;
+    next_token(NULL);
+    memset(cmdv, 0, sizeof(shell_command_t) * MAX_CMDS);
 
-        expect_command = 0;
-        cmdv[argc++] = p;
-
-        while (*p && *p != '|') p++;
-        if (*p == '|') {
-            *p++ = '\0';
-            expect_command = 1;
+    while ((token = next_token(&cursor)) != NULL) {
+        if (cmdc >= MAX_CMDS) {
+            return -1;
         }
+
+        if (is_token(token, '|')) {
+            if (argc == 0) {
+                return -1;
+            }
+            cmdv[cmdc].argv[argc] = NULL;
+            cmdc++;
+            argc = 0;
+            continue;
+        }
+
+        if (is_token(token, '<') || is_token(token, '>')) {
+            char redirect_op = token[0];
+            char *path = next_token(&cursor);
+            if (path == NULL || is_token(path, '|') || is_token(path, '<') || is_token(path, '>')) {
+                return -1;
+            }
+
+            if (cmdc >= MAX_CMDS) {
+                return -1;
+            }
+
+            if (argc == 0 && cmdv[cmdc].argv[0] == NULL) {
+                return -1;
+            }
+
+            if (redirect_op == '<') {
+                if (cmdv[cmdc].input_path != NULL) {
+                    return -1;
+                }
+                cmdv[cmdc].input_path = path;
+            } else {
+                if (cmdv[cmdc].output_path != NULL) {
+                    return -1;
+                }
+                cmdv[cmdc].output_path = path;
+            }
+            continue;
+        }
+
+        if (argc >= MAX_ARGS - 1) {
+            return -1;
+        }
+        cmdv[cmdc].argv[argc++] = token;
     }
 
-    if (expect_command && argc > 0) {
-        return -1;
+    if (argc == 0) {
+        return cmdc == 0 ? 0 : -1;
     }
 
-    return argc;
+    cmdv[cmdc].argv[argc] = NULL;
+    return cmdc + 1;
 }
 
 static void build_exec_path(const char *command, char *path, size_t path_size) {
@@ -58,6 +151,52 @@ static void build_exec_path(const char *command, char *path, size_t path_size) {
         strncpy(path, command, path_size - 1);
         path[path_size - 1] = '\0';
     }
+}
+
+static int redirect_fd(int from_fd, int to_fd) {
+    if (from_fd < 0) {
+        return -1;
+    }
+    if (from_fd == to_fd) {
+        return 0;
+    }
+    if (dup2(from_fd, to_fd) < 0) {
+        return -1;
+    }
+    close(from_fd);
+    return 0;
+}
+
+static int apply_redirections(const shell_command_t *cmd) {
+    int fd;
+
+    if (cmd->input_path) {
+        fd = open(cmd->input_path, O_RDONLY, 0);
+        if (fd < 0) {
+            dprintf(STDERR_FILENO, "sh: cannot open '%s'\n", cmd->input_path);
+            return -1;
+        }
+        if (redirect_fd(fd, STDIN_FILENO) < 0) {
+            dprintf(STDERR_FILENO, "sh: dup2 failed for '%s'\n", cmd->input_path);
+            close(fd);
+            return -1;
+        }
+    }
+
+    if (cmd->output_path) {
+        fd = open(cmd->output_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd < 0) {
+            dprintf(STDERR_FILENO, "sh: cannot open '%s'\n", cmd->output_path);
+            return -1;
+        }
+        if (redirect_fd(fd, STDOUT_FILENO) < 0) {
+            dprintf(STDERR_FILENO, "sh: dup2 failed for '%s'\n", cmd->output_path);
+            close(fd);
+            return -1;
+        }
+    }
+
+    return 0;
 }
 
 static void exec_command(char **argv) {
@@ -89,62 +228,124 @@ static int builtin_exit(char **argv) {
     return 0;
 }
 
-static int execute(char **argv) {
-    if (!argv[0]) return 0;
+static int is_builtin(char **argv) {
+    if (!argv[0]) {
+        return 0;
+    }
+    return strcmp(argv[0], "cd") == 0 || strcmp(argv[0], "exit") == 0;
+}
 
+static int run_builtin(char **argv) {
     if (strcmp(argv[0], "cd") == 0) {
         return builtin_cd(argv);
     }
     if (strcmp(argv[0], "exit") == 0) {
         return builtin_exit(argv);
     }
+    return -1;
+}
 
-    pid_t pid = fork();
+static int execute_single(shell_command_t *cmd) {
+    int builtin_status;
+    int saved_stdin = -1;
+    int saved_stdout = -1;
+    pid_t pid;
+    int status;
+
+    if (!cmd->argv[0]) {
+        return 0;
+    }
+
+    if (is_builtin(cmd->argv) && !cmd->input_path && !cmd->output_path) {
+        return run_builtin(cmd->argv);
+    }
+
+    if (is_builtin(cmd->argv)) {
+        if (cmd->input_path) {
+            saved_stdin = dup(STDIN_FILENO);
+            if (saved_stdin < 0) {
+                dprintf(STDERR_FILENO, "sh: dup failed\n");
+                return 1;
+            }
+        }
+        if (cmd->output_path) {
+            saved_stdout = dup(STDOUT_FILENO);
+            if (saved_stdout < 0) {
+                dprintf(STDERR_FILENO, "sh: dup failed\n");
+                if (saved_stdin >= 0) close(saved_stdin);
+                return 1;
+            }
+        }
+
+        if (apply_redirections(cmd) < 0) {
+            if (saved_stdin >= 0) {
+                dup2(saved_stdin, STDIN_FILENO);
+                close(saved_stdin);
+            }
+            if (saved_stdout >= 0) {
+                dup2(saved_stdout, STDOUT_FILENO);
+                close(saved_stdout);
+            }
+            return 1;
+        }
+
+        builtin_status = run_builtin(cmd->argv);
+
+        if (saved_stdin >= 0) {
+            dup2(saved_stdin, STDIN_FILENO);
+            close(saved_stdin);
+        }
+        if (saved_stdout >= 0) {
+            dup2(saved_stdout, STDOUT_FILENO);
+            close(saved_stdout);
+        }
+        return builtin_status;
+    }
+
+    pid = fork();
     if (pid < 0) {
         write(STDERR_FILENO, "fork failed\n", 12);
         return 1;
     }
 
     if (pid == 0) {
-        exec_command(argv);
+        if (apply_redirections(cmd) < 0) {
+            _exit(1);
+        }
+        exec_command(cmd->argv);
     }
 
-    int status;
     waitpid(pid, &status, 0);
-    return WEXITSTATUS(status);
+    return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
 }
 
 static int execute_pipeline(char *line) {
-    char *cmdv[MAX_CMDS];
-    char *argvv[MAX_CMDS][MAX_ARGS];
+    shell_command_t cmdv[MAX_CMDS];
     pid_t pids[MAX_CMDS];
     int cmdc;
     int prev_read = -1;
     int status = 0;
     int last_status = 0;
 
-    cmdc = parse_pipeline(line, cmdv);
+    cmdc = parse_line(line, cmdv);
     if (cmdc == 0) return 0;
     if (cmdc < 0) {
-        dprintf(STDERR_FILENO, "sh: invalid null command\n");
+        dprintf(STDERR_FILENO, "sh: invalid syntax\n");
         return 1;
     }
 
-    for (int i = 0; i < cmdc; i++) {
-        parse_args(cmdv[i], argvv[i]);
-        if (!argvv[i][0]) {
-            dprintf(STDERR_FILENO, "sh: invalid null command\n");
-            if (prev_read >= 0) close(prev_read);
-            return 1;
-        }
-    }
-
     if (cmdc == 1) {
-        return execute(argvv[0]);
+        return execute_single(&cmdv[0]);
     }
 
     for (int i = 0; i < cmdc; i++) {
         int pipefd[2] = {-1, -1};
+
+        if (!cmdv[i].argv[0]) {
+            dprintf(STDERR_FILENO, "sh: invalid syntax\n");
+            if (prev_read >= 0) close(prev_read);
+            return 1;
+        }
 
         if (i < cmdc - 1 && pipe(pipefd) < 0) {
             write(STDERR_FILENO, "pipe failed\n", 12);
@@ -162,18 +363,19 @@ static int execute_pipeline(char *line) {
         }
 
         if (pids[i] == 0) {
-            if (prev_read >= 0) {
-                dup2(prev_read, STDIN_FILENO);
+            if (prev_read >= 0 && redirect_fd(prev_read, STDIN_FILENO) < 0) {
+                _exit(1);
             }
-            if (pipefd[1] >= 0) {
-                dup2(pipefd[1], STDOUT_FILENO);
+            if (pipefd[1] >= 0 && redirect_fd(pipefd[1], STDOUT_FILENO) < 0) {
+                _exit(1);
             }
 
-            if (prev_read >= 0) close(prev_read);
             if (pipefd[0] >= 0) close(pipefd[0]);
-            if (pipefd[1] >= 0) close(pipefd[1]);
+            if (apply_redirections(&cmdv[i]) < 0) {
+                _exit(1);
+            }
 
-            exec_command(argvv[i]);
+            exec_command(cmdv[i].argv);
         }
 
         if (prev_read >= 0) close(prev_read);
@@ -185,11 +387,7 @@ static int execute_pipeline(char *line) {
 
     for (int i = 0; i < cmdc; i++) {
         waitpid(pids[i], &status, 0);
-        if (WIFEXITED(status)) {
-            last_status = WEXITSTATUS(status);
-        } else {
-            last_status = 1;
-        }
+        last_status = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
     }
 
     return last_status;
