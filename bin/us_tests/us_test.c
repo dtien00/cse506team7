@@ -32,6 +32,7 @@ void run_test_file_io(us_test_group_t *group);
 void run_test_process(us_test_group_t *group);
 void run_test_mv_cp(us_test_group_t *group);
 void run_test_write(us_test_group_t *group);
+void run_test_exec_bin(us_test_group_t *group);
 /* fs_persist fills multiple groups (one per sub-test) */
 void run_test_fs_persist(us_test_group_t groups[], int *count);
 void run_test_syscall(us_test_group_t *group);
@@ -50,6 +51,7 @@ void run_test_gettimeofday(us_test_group_t *group);
 void run_test_alarm(us_test_group_t *group);
 void run_test_sigaction(us_test_group_t *group);
 void run_test_sigsuspend(us_test_group_t *group);
+void run_test_time(us_test_group_t *group);
 void run_test_termios_tty(us_test_group_t *group);
 void run_test_pgrp(us_test_group_t *group);
 
@@ -84,6 +86,7 @@ int main(void) {
     run_test_process(&groups[idx++]);
     run_test_mv_cp(&groups[idx++]);
     run_test_write(&groups[idx++]);
+    run_test_exec_bin(&groups[idx++]);
     run_test_fs_persist(groups, &idx);
     run_test_syscall(&groups[idx++]);
     run_test_cow(&groups[idx++]);
@@ -103,6 +106,7 @@ int main(void) {
     run_test_sigaction(&groups[idx++]);
     run_test_sigsuspend(&groups[idx++]);
     run_test_pgrp(&groups[idx++]);
+    run_test_time(&groups[idx++]);
 
     /* comprehensive libc conformance tests */
     run_test_libc_string(groups, &idx);
