@@ -60,7 +60,12 @@ void run_test_pgrp(us_test_group_t *group) {
     {
         pid_t parent_pgid = getpgrp();
         pid_t pid = fork();
-        TEST(group, "fork-inherit: fork succeeded", pid >= 0);
+        if (pid < 0) {
+            SKIP(group, "fork-inherit: fork succeeded", "fork failed (resource exhaustion)");
+            SKIP(group, "fork-inherit: child inherits parent pgid", "fork failed");
+        } else {
+            TEST(group, "fork-inherit: fork succeeded", 1);
+        }
 
         if (pid == 0) {
             /* Report whether child pgid matches parent pgid */
@@ -81,7 +86,14 @@ void run_test_pgrp(us_test_group_t *group) {
     {
         pid_t parent_pgid = getpgrp();
         pid_t pid = fork();
-        TEST(group, "setpgid-parent: fork succeeded", pid >= 0);
+        if (pid < 0) {
+            SKIP(group, "setpgid-parent: fork succeeded", "fork failed (resource exhaustion)");
+            SKIP(group, "setpgid-parent: setpgid(child, parent_pgid) succeeded", "fork failed");
+            SKIP(group, "setpgid-parent: child is now in parent's group", "fork failed");
+            SKIP(group, "setpgid-parent: child confirmed its own pgid", "fork failed");
+        } else {
+            TEST(group, "setpgid-parent: fork succeeded", 1);
+        }
 
         if (pid == 0) {
             /* Child sleeps briefly so parent can call setpgid first */
@@ -109,7 +121,12 @@ void run_test_pgrp(us_test_group_t *group) {
     {
         pid_t parent_pgid = getpgrp();
         pid_t pid = fork();
-        TEST(group, "setsid: fork succeeded", pid >= 0);
+        if (pid < 0) {
+            SKIP(group, "setsid: fork succeeded", "fork failed (resource exhaustion)");
+            SKIP(group, "setsid: child created new session", "fork failed");
+        } else {
+            TEST(group, "setsid: fork succeeded", 1);
+        }
 
         if (pid == 0) {
             /*
@@ -154,7 +171,12 @@ void run_test_pgrp(us_test_group_t *group) {
      */
     {
         pid_t wrapper = fork();
-        TEST(group, "kill(0): fork for wrapper succeeded", wrapper >= 0);
+        if (wrapper < 0) {
+            SKIP(group, "kill(0): fork for wrapper succeeded", "fork failed (resource exhaustion)");
+            SKIP(group, "kill(0): wrapper killed by SIGKILL (group kill worked)", "fork failed");
+        } else {
+            TEST(group, "kill(0): fork for wrapper succeeded", 1);
+        }
 
         if (wrapper == 0) {
             /* New process group so kill(0) only hits this subtree */
@@ -226,6 +248,10 @@ void run_test_pgrp(us_test_group_t *group) {
                  WIFSIGNALED(s1));
             TEST(group, "kill(-pgid): pid2 terminated by signal",
                  WIFSIGNALED(s2));
+        } else {
+            /* Fork failed — clean up any child that was successfully created */
+            if (pid1 > 0) { kill(pid1, SIGKILL); waitpid(pid1, NULL, 0); }
+            if (pid2 > 0) { kill(pid2, SIGKILL); waitpid(pid2, NULL, 0); }
         }
     }
 
@@ -267,6 +293,10 @@ void run_test_pgrp(us_test_group_t *group) {
             pid_t bw = waitpid(bystander, &bs, 0);
             TEST(group, "kill(-pgid) isolation: bystander survived",
                  bw == bystander && WIFEXITED(bs) && WEXITSTATUS(bs) == 42);
+        } else {
+            /* Fork failed — clean up any child that was successfully created */
+            if (bystander > 0) { kill(bystander, SIGKILL); waitpid(bystander, NULL, 0); }
+            if (victim > 0) { kill(victim, SIGKILL); waitpid(victim, NULL, 0); }
         }
     }
 

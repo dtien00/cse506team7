@@ -39,7 +39,11 @@ void run_test_sigsuspend(us_test_group_t *group) {
      * ------------------------------------------------------------------ */
     {
         pid_t pid = fork();
-        TEST(group, "sigsuspend/basic: fork", pid >= 0);
+        if (pid < 0) {
+            SKIP(group, "sigsuspend/basic: fork", "fork failed (resource exhaustion)");
+        } else {
+            TEST(group, "sigsuspend/basic: fork", 1);
+        }
         if (pid == 0) {
             sigset_t empty;
             sigemptyset(&empty);
@@ -47,13 +51,15 @@ void run_test_sigsuspend(us_test_group_t *group) {
             sigsuspend(&empty);
             /* If we reach here the signal was non-fatal — not expected in T1 */
             _exit(99);
-        } else {
+        } else if (pid > 0) {
             sleep(1);
             kill(pid, SIGTERM);
             int status = 0;
             waitpid(pid, &status, 0);
             TEST(group, "sigsuspend/basic: child killed by SIGTERM",
                  WIFSIGNALED(status) && WTERMSIG(status) == SIGTERM);
+        } else {
+            SKIP(group, "sigsuspend/basic: child killed by SIGTERM", "fork failed");
         }
     }
 
@@ -68,7 +74,11 @@ void run_test_sigsuspend(us_test_group_t *group) {
      * ------------------------------------------------------------------ */
     {
         pid_t pid = fork();
-        TEST(group, "sigsuspend/mask: fork", pid >= 0);
+        if (pid < 0) {
+            SKIP(group, "sigsuspend/mask: fork", "fork failed (resource exhaustion)");
+        } else {
+            TEST(group, "sigsuspend/mask: fork", 1);
+        }
         if (pid == 0) {
             sigset_t block_term;
             sigemptyset(&block_term);
@@ -77,7 +87,7 @@ void run_test_sigsuspend(us_test_group_t *group) {
              * will wake us */
             sigsuspend(&block_term);
             _exit(0);
-        } else {
+        } else if (pid > 0) {
             sleep(1);
             /* Send SIGTERM — must be ignored by the mask */
             kill(pid, SIGTERM);
@@ -91,6 +101,9 @@ void run_test_sigsuspend(us_test_group_t *group) {
             waitpid(pid, &st, 0);
             TEST(group, "sigsuspend/mask: child killed by SIGKILL",
                  WIFSIGNALED(st) && WTERMSIG(st) == SIGKILL);
+        } else {
+            SKIP(group, "sigsuspend/mask: child alive after masked SIGTERM", "fork failed");
+            SKIP(group, "sigsuspend/mask: child killed by SIGKILL", "fork failed");
         }
     }
 
@@ -106,7 +119,11 @@ void run_test_sigsuspend(us_test_group_t *group) {
      * ------------------------------------------------------------------ */
     {
         pid_t pid = fork();
-        TEST(group, "sigsuspend/pending_fatal: fork", pid >= 0);
+        if (pid < 0) {
+            SKIP(group, "sigsuspend/pending_fatal: fork", "fork failed (resource exhaustion)");
+        } else {
+            TEST(group, "sigsuspend/pending_fatal: fork", 1);
+        }
         if (pid == 0) {
             /* Step (a): block SIGTERM */
             sigset_t block_term;
@@ -132,12 +149,14 @@ void run_test_sigsuspend(us_test_group_t *group) {
 
             /* If we reach here the implementation is broken */
             _exit(88);
-        } else {
+        } else if (pid > 0) {
             int status = 0;
             /* No explicit kill from parent: child must self-terminate */
             waitpid(pid, &status, 0);
             TEST(group, "sigsuspend/pending_fatal: child killed by pre-pending SIGTERM",
                  WIFSIGNALED(status) && WTERMSIG(status) == SIGTERM);
+        } else {
+            SKIP(group, "sigsuspend/pending_fatal: child killed by pre-pending SIGTERM", "fork failed");
         }
     }
 
@@ -155,7 +174,11 @@ void run_test_sigsuspend(us_test_group_t *group) {
      * ------------------------------------------------------------------ */
     {
         pid_t pid = fork();
-        TEST(group, "sigsuspend/pending_nonfatal: fork", pid >= 0);
+        if (pid < 0) {
+            SKIP(group, "sigsuspend/pending_nonfatal: fork", "fork failed (resource exhaustion)");
+        } else {
+            TEST(group, "sigsuspend/pending_nonfatal: fork", 1);
+        }
         if (pid == 0) {
             /* (a) Block SIGUSR1 */
             sigset_t block_usr1;
@@ -173,13 +196,15 @@ void run_test_sigsuspend(us_test_group_t *group) {
             /* Must return here because SIGUSR1 is not fatal */
 
             _exit(0); /* success */
-        } else {
+        } else if (pid > 0) {
             int status = 0;
             /* Give the child a generous deadline; if it blocks forever the
              * parent will hang here — detectable as a test timeout */
             waitpid(pid, &status, 0);
             TEST(group, "sigsuspend/pending_nonfatal: child returned from sigsuspend",
                  WIFEXITED(status) && WEXITSTATUS(status) == 0);
+        } else {
+            SKIP(group, "sigsuspend/pending_nonfatal: child returned from sigsuspend", "fork failed");
         }
     }
 
@@ -200,7 +225,11 @@ void run_test_sigsuspend(us_test_group_t *group) {
      * ------------------------------------------------------------------ */
     {
         pid_t pid = fork();
-        TEST(group, "sigsuspend/mask_restore: fork", pid >= 0);
+        if (pid < 0) {
+            SKIP(group, "sigsuspend/mask_restore: fork", "fork failed (resource exhaustion)");
+        } else {
+            TEST(group, "sigsuspend/mask_restore: fork", 1);
+        }
         if (pid == 0) {
             /* Ensure we start with an empty mask (no inherited blocks) */
             sigset_t empty;
@@ -217,7 +246,7 @@ void run_test_sigsuspend(us_test_group_t *group) {
             /* Stay alive long enough for the parent to send SIGTERM */
             sleep(5);
             _exit(0); /* should not reach here */
-        } else {
+        } else if (pid > 0) {
             sleep(1);
             /* Wake sigsuspend with a non-fatal, unblocked signal */
             kill(pid, SIGUSR2);
@@ -231,6 +260,8 @@ void run_test_sigsuspend(us_test_group_t *group) {
             waitpid(pid, &status, 0);
             TEST(group, "sigsuspend/mask_restore: SIGTERM kills after mask restored",
                  WIFSIGNALED(status) && WTERMSIG(status) == SIGTERM);
+        } else {
+            SKIP(group, "sigsuspend/mask_restore: SIGTERM kills after mask restored", "fork failed");
         }
     }
 

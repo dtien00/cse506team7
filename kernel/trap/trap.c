@@ -267,15 +267,19 @@ void trap_handler(trap_frame *frame) {
             proc_stop(current);  // yields; resumes after SIGCONT
         }
 
-        // Clear any pending signals whose disposition is SIG_IGN.
+        // Clear any pending signals whose disposition is SIG_IGN, and also
+        // default-ignore signals (SIGCHLD) when handler is still SIG_DFL.
         // SIGKILL and SIGSTOP are excluded: they cannot be ignored (POSIX).
         {
             uint32_t tmp = current->pending_signals & ~current->signal_mask;
             while (tmp) {
                 int s = kernel_ctz((uint32_t)(tmp));
                 tmp &= tmp - 1;
-                if (s != KERNEL_SIGKILL && s != KERNEL_SIGSTOP &&
-                    current->handlers[s] == (void *)SIG_IGN)
+                if (s == KERNEL_SIGKILL || s == KERNEL_SIGSTOP)
+                    continue;
+                if (current->handlers[s] == (void *)SIG_IGN ||
+                    ((1U << s) & KERNEL_DFL_IGNORE_SIGS &&
+                     current->handlers[s] == (void *)SIG_DFL))
                     current->pending_signals &= ~(1u << s);
             }
         }

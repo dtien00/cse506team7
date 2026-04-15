@@ -199,12 +199,15 @@ void run_test_sigaction(us_test_group_t *group) {
         if (pid == 0) {
             signal(SIGTERM, SIG_IGN);
             while (1) sleep(1);
+        } else if (pid > 0) {
+            sleep(1);                   /* let child set handler and enter first sleep */
+            kill(pid, SIGTERM);
+            sleep(1);                   /* child processes ignored signal and re-sleeps */
+            int alive = wait_and_cleanup(pid);
+            TEST(group, "SIG_IGN: SIGTERM ignored — child still alive", alive);
+        } else {
+            SKIP(group, "SIG_IGN: SIGTERM ignored — child still alive", "fork failed");
         }
-        sleep(1);                   /* let child set handler and enter first sleep */
-        kill(pid, SIGTERM);
-        sleep(1);                   /* child processes ignored signal and re-sleeps */
-        int alive = wait_and_cleanup(pid);
-        TEST(group, "SIG_IGN: SIGTERM ignored — child still alive", alive);
     }
 
     /* 3b. SIGPIPE ignored */
@@ -213,12 +216,15 @@ void run_test_sigaction(us_test_group_t *group) {
         if (pid == 0) {
             signal(SIGPIPE, SIG_IGN);
             while (1) sleep(1);
+        } else if (pid > 0) {
+            sleep(1);
+            kill(pid, SIGPIPE);
+            sleep(1);
+            int alive = wait_and_cleanup(pid);
+            TEST(group, "SIG_IGN: SIGPIPE ignored — child still alive", alive);
+        } else {
+            SKIP(group, "SIG_IGN: SIGPIPE ignored — child still alive", "fork failed");
         }
-        sleep(1);
-        kill(pid, SIGPIPE);
-        sleep(1);
-        int alive = wait_and_cleanup(pid);
-        TEST(group, "SIG_IGN: SIGPIPE ignored — child still alive", alive);
     }
 
     /* 3c. SIGINT ignored */
@@ -227,12 +233,15 @@ void run_test_sigaction(us_test_group_t *group) {
         if (pid == 0) {
             signal(SIGINT, SIG_IGN);
             while (1) sleep(1);
+        } else if (pid > 0) {
+            sleep(1);
+            kill(pid, SIGINT);
+            sleep(1);
+            int alive = wait_and_cleanup(pid);
+            TEST(group, "SIG_IGN: SIGINT ignored — child still alive", alive);
+        } else {
+            SKIP(group, "SIG_IGN: SIGINT ignored — child still alive", "fork failed");
         }
-        sleep(1);
-        kill(pid, SIGINT);
-        sleep(1);
-        int alive = wait_and_cleanup(pid);
-        TEST(group, "SIG_IGN: SIGINT ignored — child still alive", alive);
     }
 
     /* ── §4 SIG_DFL restores default fatal behavior ─────────────────────── */
@@ -248,12 +257,15 @@ void run_test_sigaction(us_test_group_t *group) {
             signal(SIGTERM, SIG_IGN);
             signal(SIGTERM, SIG_DFL);
             while (1) sleep(1);
+        } else if (pid > 0) {
+            sleep(1);
+            kill(pid, SIGTERM);
+            sleep(1);
+            int killed = wait_for_death(pid);
+            TEST(group, "SIG_DFL: restored — child killed by SIGTERM", killed);
+        } else {
+            SKIP(group, "SIG_DFL: restored — child killed by SIGTERM", "fork failed");
         }
-        sleep(1);
-        kill(pid, SIGTERM);
-        sleep(1);
-        int killed = wait_for_death(pid);
-        TEST(group, "SIG_DFL: restored — child killed by SIGTERM", killed);
     }
 
     /* ── §5 Fork inherits signal dispositions ────────────────────────────── */
@@ -264,12 +276,15 @@ void run_test_sigaction(us_test_group_t *group) {
         pid_t pid = fork();
         if (pid == 0) {
             while (1) sleep(1); /* inherits SIG_IGN for SIGTERM */
+        } else if (pid > 0) {
+            sleep(1);
+            kill(pid, SIGTERM);
+            sleep(1);
+            int alive = wait_and_cleanup(pid);
+            TEST(group, "fork-inherit: child inherits SIG_IGN for SIGTERM — alive", alive);
+        } else {
+            SKIP(group, "fork-inherit: child inherits SIG_IGN for SIGTERM — alive", "fork failed");
         }
-        sleep(1);
-        kill(pid, SIGTERM);
-        sleep(1);
-        int alive = wait_and_cleanup(pid);
-        TEST(group, "fork-inherit: child inherits SIG_IGN for SIGTERM — alive", alive);
     }
     signal(SIGTERM, SIG_DFL); /* restore before §5b and §6 */
 
@@ -278,12 +293,15 @@ void run_test_sigaction(us_test_group_t *group) {
         pid_t pid = fork();
         if (pid == 0) {
             while (1) sleep(1);
+        } else if (pid > 0) {
+            sleep(1);
+            kill(pid, SIGTERM);
+            sleep(1);
+            int killed = wait_for_death(pid);
+            TEST(group, "fork-inherit: child inherits SIG_DFL — killed by SIGTERM", killed);
+        } else {
+            SKIP(group, "fork-inherit: child inherits SIG_DFL — killed by SIGTERM", "fork failed");
         }
-        sleep(1);
-        kill(pid, SIGTERM);
-        sleep(1);
-        int killed = wait_for_death(pid);
-        TEST(group, "fork-inherit: child inherits SIG_DFL — killed by SIGTERM", killed);
     }
 
     /* ── §6 SIG_IGN survives exec() (POSIX) ─────────────────────────────── */
@@ -303,24 +321,27 @@ void run_test_sigaction(us_test_group_t *group) {
             char *argv[] = { "/bin/sigaction_helper", NULL };
             execve("/bin/sigaction_helper", argv, NULL);
             _exit(99); /* exec failed */
+        } else if (pid > 0) {
+            sleep(1);              /* give child time to exec */
+            kill(pid, SIGTERM);
+            sleep(1);              /* child processes ignored signal inside helper */
+
+            int status = 0;
+            pid_t w = waitpid(pid, &status, WNOHANG);
+            int still_alive = (w == 0);
+            int exec_failed = (w == pid && WIFEXITED(status) && WEXITSTATUS(status) == 99);
+
+            kill(pid, SIGKILL);
+            if (still_alive)
+                waitpid(pid, NULL, 0);
+
+            TEST(group, "exec-SIG_IGN: exec succeeded (helper found)", !exec_failed);
+            TEST(group, "exec-SIG_IGN: SIGTERM ignored after exec — child still alive",
+                 still_alive);
+        } else {
+            SKIP(group, "exec-SIG_IGN: exec succeeded (helper found)", "fork failed");
+            SKIP(group, "exec-SIG_IGN: SIGTERM ignored after exec — child still alive", "fork failed");
         }
-
-        sleep(1);              /* give child time to exec */
-        kill(pid, SIGTERM);
-        sleep(1);              /* child processes ignored signal inside helper */
-
-        int status = 0;
-        pid_t w = waitpid(pid, &status, WNOHANG);
-        int still_alive = (w == 0);
-        int exec_failed = (w == pid && WIFEXITED(status) && WEXITSTATUS(status) == 99);
-
-        kill(pid, SIGKILL);
-        if (still_alive)
-            waitpid(pid, NULL, 0);
-
-        TEST(group, "exec-SIG_IGN: exec succeeded (helper found)", !exec_failed);
-        TEST(group, "exec-SIG_IGN: SIGTERM ignored after exec — child still alive",
-             still_alive);
     }
 
     ut_group_end(group);

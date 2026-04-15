@@ -326,16 +326,19 @@ void proc_sleep(void *chan) {
         // Resumes here after SIGCONT.
     }
 
-    // Clear any SIG_IGN'd pending signals before the fatal-signal check so that
-    // a sleeping process with SIG_IGN set on a normally-fatal signal is not killed.
+    // Clear any SIG_IGN'd and default-ignore pending signals before the fatal-
+    // signal check so that a sleeping process is not killed or spuriously woken.
     // SIGKILL and SIGSTOP can never be ignored (POSIX).
     {
         uint32_t tmp = prev->pending_signals & ~prev->signal_mask;
         while (tmp) {
             int s = kernel_ctz((uint32_t)(tmp));
             tmp &= tmp - 1;
-            if (s != KERNEL_SIGKILL && s != KERNEL_SIGSTOP &&
-                prev->handlers[s] == (void *)SIG_IGN)
+            if (s == KERNEL_SIGKILL || s == KERNEL_SIGSTOP)
+                continue;
+            if (prev->handlers[s] == (void *)SIG_IGN ||
+                ((1U << s) & KERNEL_DFL_IGNORE_SIGS &&
+                 prev->handlers[s] == (void *)SIG_DFL))
                 prev->pending_signals &= ~(1u << s);
         }
     }
@@ -396,7 +399,8 @@ void proc_stop(struct proc *p) {
     // Must use p->parent (the stopped child's parent), not current->parent.
     if (p->parent) {
         p->parent->pending_signals |= (1u << SIGCHLD);
-        proc_wakeup(&p->parent->pending_signals);
+        if (p->parent->handlers[SIGCHLD] != (void *)0 /* SIG_DFL */)
+            proc_wakeup(&p->parent->pending_signals);
     }
 
     if (p == current) {
@@ -415,6 +419,7 @@ void proc_unstop(struct proc *p) {
     // SIGCHLD to parent: notify that child continued (POSIX WCONTINUED).
     if (p->parent) {
         p->parent->pending_signals |= (1u << SIGCHLD);
-        proc_wakeup(&p->parent->pending_signals);
+        if (p->parent->handlers[SIGCHLD] != (void *)0 /* SIG_DFL */)
+            proc_wakeup(&p->parent->pending_signals);
     }
 }

@@ -192,7 +192,13 @@ void proc_exit(int code) {
 
     if (current->parent) {
         current->parent->pending_signals |= (1u << SIGCHLD);
-        proc_wakeup(&current->parent->pending_signals);
+        // Only wake the parent's pending_signals channel if the parent has
+        // installed a non-default handler for SIGCHLD.  When the disposition
+        // is SIG_DFL, SIGCHLD's default action is "ignore" (POSIX) and the
+        // signal will be silently cleared at the next dispatch point.
+        // This prevents spurious wakeups of pause()/sigsuspend().
+        if (current->parent->handlers[SIGCHLD] != (void *)0 /* SIG_DFL */)
+            proc_wakeup(&current->parent->pending_signals);
     }
 
     // Switch back via the normal yield path so the current process context

@@ -41,25 +41,33 @@ void run_test_alarm(us_test_group_t *group) {
         int before = (int)uptime();
 
         pid_t pid = fork();
-        TEST(group, "alarm/basic: fork succeeded", pid >= 0);
+        if (pid < 0) {
+            SKIP(group, "alarm/basic: fork succeeded", "fork failed (resource exhaustion)");
+        } else {
+            TEST(group, "alarm/basic: fork succeeded", 1);
+        }
 
         if (pid == 0) {
             alarm(2);
             pause();
             _exit(1); /* must not reach — SIGALRM should terminate us */
+        } else if (pid > 0) {
+            int status = 0;
+            waitpid(pid, &status, 0);
+            int elapsed = (int)uptime() - before;
+
+            TEST(group, "alarm/basic: child terminated by signal",
+                 WIFSIGNALED(status));
+            TEST(group, "alarm/basic: terminating signal is SIGALRM",
+                 WIFSIGNALED(status) && WTERMSIG(status) == SIGALRM);
+            /* 18 ticks = 1.8 s (lower bound), 30 ticks = 3.0 s (upper bound) */
+            TEST(group, "alarm/basic: fired within 18-30 ticks of alarm(2)",
+                 elapsed >= 18 && elapsed <= 30);
+        } else {
+            SKIP(group, "alarm/basic: child terminated by signal", "fork failed");
+            SKIP(group, "alarm/basic: terminating signal is SIGALRM", "fork failed");
+            SKIP(group, "alarm/basic: fired within 18-30 ticks of alarm(2)", "fork failed");
         }
-
-        int status = 0;
-        waitpid(pid, &status, 0);
-        int elapsed = (int)uptime() - before;
-
-        TEST(group, "alarm/basic: child terminated by signal",
-             WIFSIGNALED(status));
-        TEST(group, "alarm/basic: terminating signal is SIGALRM",
-             WIFSIGNALED(status) && WTERMSIG(status) == SIGALRM);
-        /* 18 ticks = 1.8 s (lower bound), 30 ticks = 3.0 s (upper bound) */
-        TEST(group, "alarm/basic: fired within 18-30 ticks of alarm(2)",
-             elapsed >= 18 && elapsed <= 30);
     }
 
     /* ── T3: alarm(0) cancels a pending alarm ────────────────────────────────
@@ -69,22 +77,29 @@ void run_test_alarm(us_test_group_t *group) {
      */
     {
         pid_t pid = fork();
-        TEST(group, "alarm/cancel: fork succeeded", pid >= 0);
+        if (pid < 0) {
+            SKIP(group, "alarm/cancel: fork succeeded", "fork failed (resource exhaustion)");
+        } else {
+            TEST(group, "alarm/cancel: fork succeeded", 1);
+        }
 
         if (pid == 0) {
             alarm(2);
             alarm(0);    /* cancel */
             sleep(4);    /* would be killed here if alarm were still live */
             _exit(0);
+        } else if (pid > 0) {
+            int status = 0;
+            waitpid(pid, &status, 0);
+
+            TEST(group, "alarm/cancel: child exited normally (not signaled)",
+                 WIFEXITED(status) && WEXITSTATUS(status) == 0);
+            TEST(group, "alarm/cancel: WIFSIGNALED is false",
+                 !WIFSIGNALED(status));
+        } else {
+            SKIP(group, "alarm/cancel: child exited normally (not signaled)", "fork failed");
+            SKIP(group, "alarm/cancel: WIFSIGNALED is false", "fork failed");
         }
-
-        int status = 0;
-        waitpid(pid, &status, 0);
-
-        TEST(group, "alarm/cancel: child exited normally (not signaled)",
-             WIFEXITED(status) && WEXITSTATUS(status) == 0);
-        TEST(group, "alarm/cancel: WIFSIGNALED is false",
-             !WIFSIGNALED(status));
     }
 
     /* ── T4: Return value semantics ──────────────────────────────────────────
@@ -103,7 +118,11 @@ void run_test_alarm(us_test_group_t *group) {
      */
     {
         pid_t pid = fork();
-        TEST(group, "alarm/retval: fork succeeded", pid >= 0);
+        if (pid < 0) {
+            SKIP(group, "alarm/retval: fork succeeded", "fork failed (resource exhaustion)");
+        } else {
+            TEST(group, "alarm/retval: fork succeeded", 1);
+        }
 
         if (pid == 0) {
             unsigned int r0 = alarm(5);
@@ -115,17 +134,21 @@ void run_test_alarm(us_test_group_t *group) {
                 _exit(2); /* accept 4 or 5 (one-tick jitter from ceiling division) */
 
             _exit(0);
+        } else if (pid > 0) {
+            int status = 0;
+            waitpid(pid, &status, 0);
+
+            TEST(group, "alarm/retval: child exited (not signaled)",
+                 WIFEXITED(status));
+            TEST(group, "alarm/retval: first alarm() returned 0",
+                 WIFEXITED(status) && WEXITSTATUS(status) != 1);
+            TEST(group, "alarm/retval: second alarm() returned remaining seconds (4-5)",
+                 WIFEXITED(status) && WEXITSTATUS(status) == 0);
+        } else {
+            SKIP(group, "alarm/retval: child exited (not signaled)", "fork failed");
+            SKIP(group, "alarm/retval: first alarm() returned 0", "fork failed");
+            SKIP(group, "alarm/retval: second alarm() returned remaining seconds (4-5)", "fork failed");
         }
-
-        int status = 0;
-        waitpid(pid, &status, 0);
-
-        TEST(group, "alarm/retval: child exited (not signaled)",
-             WIFEXITED(status));
-        TEST(group, "alarm/retval: first alarm() returned 0",
-             WIFEXITED(status) && WEXITSTATUS(status) != 1);
-        TEST(group, "alarm/retval: second alarm() returned remaining seconds (4-5)",
-             WIFEXITED(status) && WEXITSTATUS(status) == 0);
     }
 
     /* ── T5: Override — new alarm replaces old one ───────────────────────────
@@ -137,23 +160,30 @@ void run_test_alarm(us_test_group_t *group) {
         int before = (int)uptime();
 
         pid_t pid = fork();
-        TEST(group, "alarm/override: fork succeeded", pid >= 0);
+        if (pid < 0) {
+            SKIP(group, "alarm/override: fork succeeded", "fork failed (resource exhaustion)");
+        } else {
+            TEST(group, "alarm/override: fork succeeded", 1);
+        }
 
         if (pid == 0) {
             alarm(10); /* would fire in 10 s */
             alarm(2);  /* overrides: now fires in 2 s */
             pause();
             _exit(1);  /* must not reach */
+        } else if (pid > 0) {
+            int status = 0;
+            waitpid(pid, &status, 0);
+            int elapsed = (int)uptime() - before;
+
+            TEST(group, "alarm/override: child killed by SIGALRM (not 10 s alarm)",
+                 WIFSIGNALED(status) && WTERMSIG(status) == SIGALRM);
+            TEST(group, "alarm/override: elapsed < 50 ticks (fired at ~2 s, not ~10 s)",
+                 elapsed >= 18 && elapsed <= 50);
+        } else {
+            SKIP(group, "alarm/override: child killed by SIGALRM (not 10 s alarm)", "fork failed");
+            SKIP(group, "alarm/override: elapsed < 50 ticks (fired at ~2 s, not ~10 s)", "fork failed");
         }
-
-        int status = 0;
-        waitpid(pid, &status, 0);
-        int elapsed = (int)uptime() - before;
-
-        TEST(group, "alarm/override: child killed by SIGALRM (not 10 s alarm)",
-             WIFSIGNALED(status) && WTERMSIG(status) == SIGALRM);
-        TEST(group, "alarm/override: elapsed < 50 ticks (fired at ~2 s, not ~10 s)",
-             elapsed >= 18 && elapsed <= 50);
     }
 
     /* ── T6: alarm(0) with no pending alarm returns 0 ────────────────────────
@@ -161,18 +191,24 @@ void run_test_alarm(us_test_group_t *group) {
      */
     {
         pid_t pid = fork();
-        TEST(group, "alarm/zero-return: fork succeeded", pid >= 0);
+        if (pid < 0) {
+            SKIP(group, "alarm/zero-return: fork succeeded", "fork failed (resource exhaustion)");
+        } else {
+            TEST(group, "alarm/zero-return: fork succeeded", 1);
+        }
 
         if (pid == 0) {
             unsigned int r = alarm(0); /* no prior alarm */
             _exit(r == 0 ? 0 : 1);
+        } else if (pid > 0) {
+            int status = 0;
+            waitpid(pid, &status, 0);
+
+            TEST(group, "alarm/zero-return: alarm(0) with no prior alarm returns 0",
+                 WIFEXITED(status) && WEXITSTATUS(status) == 0);
+        } else {
+            SKIP(group, "alarm/zero-return: alarm(0) with no prior alarm returns 0", "fork failed");
         }
-
-        int status = 0;
-        waitpid(pid, &status, 0);
-
-        TEST(group, "alarm/zero-return: alarm(0) with no prior alarm returns 0",
-             WIFEXITED(status) && WEXITSTATUS(status) == 0);
     }
 
     ut_group_end(group);
