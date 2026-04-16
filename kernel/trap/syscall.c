@@ -94,49 +94,68 @@ void syscall_handler(trap_frame *frame) {
     // exec rewrites the entire trapframe on success; handle before the
     // generic ret path so frame->a0 is not overwritten afterwards.
     if (syscall_num == SYS_exec) {
-        char kpath[KARG_MAX];
+        char  kpath[KARG_MAX];
         char *kargv[MAX_ARGS + 1];
-        int argc = 0;
+        char *kenvp[MAX_ARGS + 1];
+        int   argc = 0, envc = 0;
 
-        for (int i = 0; i <= MAX_ARGS; i++)
-            kargv[i] = NULL;
+        for (int i = 0; i <= MAX_ARGS; i++) { kargv[i] = NULL; kenvp[i] = NULL; }
 
-        // Copy user args into kernel buffers (SUM window is minimal)
         set_csr_bit(sstatus, SSTATUS_SUM);
 
+        /* Copy path */
         strncpy(kpath, (const char *)arg0, sizeof(kpath) - 1);
         kpath[sizeof(kpath) - 1] = '\0';
 
+        /* Copy argv strings from userspace */
         char **uargv = (char **)arg1;
         while (uargv && argc < MAX_ARGS - 1) {
             char *uarg = uargv[argc];
             if (!uarg) break;
             if ((uint64_t)uarg >= KERNBASE) break;
-
             kargv[argc] = (char *)kmalloc(KARG_MAX);
             if (!kargv[argc]) {
                 clear_csr_bit(sstatus, SSTATUS_SUM);
-                for (int i = 0; i < argc; i++)
-                    kfree(kargv[i]);
+                for (int i = 0; i < argc; i++) kfree(kargv[i]);
                 frame->a0 = (uint64_t)-1LL;
                 return;
             }
-
             strncpy(kargv[argc], uarg, KARG_MAX - 1);
             kargv[argc][KARG_MAX - 1] = '\0';
             argc++;
         }
         kargv[argc] = NULL;
 
-        clear_csr_bit(sstatus, SSTATUS_SUM);  // done with user memory
+        /* Copy envp strings from userspace (arg2 = frame->a2) */
+        char **uenvp = (char **)arg2;
+        while (uenvp && envc < MAX_ARGS - 1) {
+            char *uenv = uenvp[envc];
+            if (!uenv) break;
+            if ((uint64_t)uenv >= KERNBASE) break;
+            kenvp[envc] = (char *)kmalloc(KARG_MAX);
+            if (!kenvp[envc]) {
+                clear_csr_bit(sstatus, SSTATUS_SUM);
+                for (int i = 0; i < argc; i++) kfree(kargv[i]);
+                for (int i = 0; i < envc; i++) kfree(kenvp[i]);
+                frame->a0 = (uint64_t)-1LL;
+                return;
+            }
+            strncpy(kenvp[envc], uenv, KARG_MAX - 1);
+            kenvp[envc][KARG_MAX - 1] = '\0';
+            envc++;
+        }
+        kenvp[envc] = NULL;
 
-        // exec() only sees kernel pointers — safe to destroy old pagetable
-        int rc = exec(kpath, kargv);
-        for (int i = 0; i < argc; i++)
-            kfree(kargv[i]);
+        clear_csr_bit(sstatus, SSTATUS_SUM);
 
-        if (rc < 0)
+        int rc = exec(kpath, kargv, kenvp);
+        for (int i = 0; i < argc; i++) kfree(kargv[i]);
+        for (int i = 0; i < envc; i++) kfree(kenvp[i]);
+
+        if (rc < 0) {
+            printk("[exec] exec(%s) failed rc=%d argc=%d\n", kpath, rc, argc);
             frame->a0 = (uint64_t)-1LL;
+        }
         return;
     }
 

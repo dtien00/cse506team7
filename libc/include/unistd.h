@@ -3,6 +3,9 @@
 
 #include "sys/types.h"
 
+/* POSIX: the process environment, initialised from envp by crt.S */
+extern char **environ;
+
 #define STDIN_FILENO  0
 #define STDOUT_FILENO 1
 #define STDERR_FILENO 2
