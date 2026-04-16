@@ -139,8 +139,16 @@ void syscall_handler(trap_frame *frame) {
         for (int i = 0; i < argc; i++)
             kfree(kargv[i]);
 
-        if (rc < 0)
+        if (rc < 0) {
             frame->a0 = (uint64_t)-1LL;
+        } else {
+            // Update process name to the basename of the executed binary
+            const char *base = kpath;
+            for (const char *p = kpath; *p; p++)
+                if (*p == '/') base = p + 1;
+            strncpy(current->name, base, MAX_NAME - 1);
+            current->name[MAX_NAME - 1] = '\0';
+        }
         return;
     }
 
