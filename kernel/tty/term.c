@@ -185,6 +185,9 @@ void term_handle_input(terminal_t *t, char c)
                     if (p->pgid != fg) continue;
 
                     if (sig == TERM_SIG_SUSP) {
+                        // POSIX: SIGTSTP with SIG_IGN disposition is discarded
+                        if (p->handlers[KERNEL_SIGTSTP] == (void *)1 /* SIG_IGN */)
+                            continue;
                         // Stop signals: clear any pending SIGCONT, then stop
                         p->pending_signals &= ~(1U << KERNEL_SIGCONT);
                         if (p->state == PROC_READY || p->state == PROC_BLOCKED) {

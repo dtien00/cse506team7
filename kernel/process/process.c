@@ -12,7 +12,7 @@
 #include "lib/string.h"
 #include "elf/elf.h"
 #include "fs/file.h"
-#include "sys/wait.h"
+#include "process/wait.h"
 
 #ifndef SEEK_SET
 #define SEEK_SET 0

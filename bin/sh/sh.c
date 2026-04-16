@@ -704,10 +704,12 @@ static int builtin_fg(char **argv) {
     // Give the job the terminal
     tcsetpgrp(STDIN_FILENO, jobs[idx].pgid);
 
-    // If stopped, send SIGCONT to resume
-    if (jobs[idx].state == JOB_STOPPED) {
-        kill(-jobs[idx].pgid, SIGCONT);
-    }
+    // POSIX: always send SIGCONT when bringing to foreground, even if the
+    // shell thinks the job is already running.  The kernel-side state may
+    // disagree with the shell's cached state (e.g. stale cont_unreported
+    // caused job_reap_done to flip JOB_RUNNING while process is stopped).
+    kill(-jobs[idx].pgid, SIGCONT);
+    jobs[idx].state = JOB_RUNNING;
 
     // Wait for it in the foreground
     int status = 0;

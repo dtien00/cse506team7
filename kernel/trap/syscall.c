@@ -740,6 +740,9 @@ int sys_kill(pid_t pid, int sig) {
                 if (p->state == PROC_STOPPED)
                     proc_unstop(p);
             } else if ((1U << sig) & KERNEL_STOP_SIGS) {
+                // POSIX: SIG_IGN discards catchable stop signals entirely
+                if (sig != KERNEL_SIGSTOP && p->handlers[sig] == (void *)1 /* SIG_IGN */)
+                    continue;
                 if (sig != KERNEL_SIGSTOP && (p->signal_mask & (1U << sig))) {
                     p->pending_signals |= (1U << sig);
                 } else {
@@ -789,6 +792,9 @@ int sys_kill(pid_t pid, int sig) {
                 if (p->state == PROC_STOPPED)
                     proc_unstop(p);
             } else if ((1U << sig) & KERNEL_STOP_SIGS) {
+                // POSIX: SIG_IGN discards catchable stop signals entirely
+                if (sig != KERNEL_SIGSTOP && p->handlers[sig] == (void *)1 /* SIG_IGN */)
+                    continue;
                 if (sig != KERNEL_SIGSTOP && (p->signal_mask & (1U << sig))) {
                     p->pending_signals |= (1U << sig);
                 } else {
@@ -826,7 +832,10 @@ int sys_kill(pid_t pid, int sig) {
 
     // Stop signals: act immediately when possible.
     // SIGSTOP is unmaskable (POSIX); SIGTSTP/SIGTTIN/SIGTTOU respect signal_mask.
+    // POSIX: SIG_IGN discards catchable stop signals entirely.
     if ((1U << sig) & KERNEL_STOP_SIGS) {
+        if (sig != KERNEL_SIGSTOP && target->handlers[sig] == (void *)1 /* SIG_IGN */)
+            return 0;
         if (sig != KERNEL_SIGSTOP && (target->signal_mask & (1U << sig))) {
             // Catchable stop signal is masked — just pend it
             target->pending_signals |= (1U << sig);
