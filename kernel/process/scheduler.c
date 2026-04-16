@@ -399,6 +399,11 @@ void proc_stop(struct proc *p) {
 
     p->state = PROC_STOPPED;
 
+    // A stop supersedes any unreported continue (POSIX: if a continued child
+    // is subsequently stopped before the continue is consumed via WCONTINUED,
+    // only the stop should be reported).
+    p->cont_unreported = 0;
+
     // Indicate the signal must be stopped.
     p->stop_unreported = 1;
 
