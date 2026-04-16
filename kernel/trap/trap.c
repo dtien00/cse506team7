@@ -261,9 +261,13 @@ void trap_handler(trap_frame *frame) {
     if (current && !(frame->sstatus & SSTATUS_SPP)) {
         // Deliver pending signals before every return to user mode.
         // Catches processes signaled while running in tight loops (no syscalls).
+        // Stop signals: SIGSTOP is unmaskable; SIGTSTP/SIGTTIN/SIGTTOU respect signal_mask.
         uint32_t pending_stop = current->pending_signals & KERNEL_STOP_SIGS;
+        uint32_t catchable_stops = pending_stop & ~(1U << KERNEL_SIGSTOP);
+        pending_stop &= ~(catchable_stops & current->signal_mask);
         if (pending_stop) {
             current->pending_signals &= ~pending_stop;
+            current->stop_signal = (uint8_t)kernel_ctz(pending_stop);
             proc_stop(current);  // yields; resumes after SIGCONT
         }
 

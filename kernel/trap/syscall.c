@@ -42,10 +42,14 @@ void syscall_handler(trap_frame *frame) {
     }
 
     if (current) {
-        // SIGSTOP: cannot be masked, handle before any other signal (POSIX)
+        // Stop signals: SIGSTOP is unmaskable; SIGTSTP/SIGTTIN/SIGTTOU respect signal_mask.
         uint32_t pending_stop = current->pending_signals & KERNEL_STOP_SIGS;
+        // Keep masked catchable stop signals pending (only SIGSTOP is unmaskable)
+        uint32_t catchable_stops = pending_stop & ~(1U << KERNEL_SIGSTOP);
+        pending_stop &= ~(catchable_stops & current->signal_mask);
         if (pending_stop) {
             current->pending_signals &= ~pending_stop;
+            current->stop_signal = (uint8_t)kernel_ctz(pending_stop);
             proc_stop(current);
             // Execution resumes here after SIGCONT.
             // Re-evaluate signals — new ones may have arrived while stopped.
@@ -135,8 +139,16 @@ void syscall_handler(trap_frame *frame) {
         for (int i = 0; i < argc; i++)
             kfree(kargv[i]);
 
-        if (rc < 0)
+        if (rc < 0) {
             frame->a0 = (uint64_t)-1LL;
+        } else {
+            // Update process name to the basename of the executed binary
+            const char *base = kpath;
+            for (const char *p = kpath; *p; p++)
+                if (*p == '/') base = p + 1;
+            strncpy(current->name, base, MAX_NAME - 1);
+            current->name[MAX_NAME - 1] = '\0';
+        }
         return;
     }
 
@@ -344,6 +356,14 @@ void syscall_handler(trap_frame *frame) {
 
         case SYS_getpgid:
             ret = sys_getpgid((pid_t)arg0);
+            break;
+
+        case SYS_tcsetpgrp:
+            ret = sys_tcsetpgrp((pid_t)arg1);
+            break;
+
+        case SYS_tcgetpgrp:
+            ret = sys_tcgetpgrp();
             break;
 
         default:
@@ -682,16 +702,14 @@ pid_t sys_getppid(void) {
 int sys_sleep(int seconds) {
     if (seconds <= 0) return 0;
     uint64_t wake_at = timer_ticks + (uint64_t)seconds * TICKS_PER_SEC;
-    current->wake_tick = wake_at;
-    proc_sleep(current);   // sleep on self; timer_handler calls proc_wakeup(p)
-    // Clear wake_tick: if we were woken early by a signal, a stale non-zero
-    // wake_tick would cause the timer to attempt proc_wakeup() on a running process.
-    current->wake_tick = 0;
-    // POSIX: return the number of seconds left to sleep if interrupted early.
-    if (timer_ticks < wake_at) {
-        uint64_t ticks_left = wake_at - timer_ticks;
-        return (int)(ticks_left / TICKS_PER_SEC);
-    }
+    // Loop: if woken early by stop/continue (SIGTSTP+SIGCONT), go back to
+    // sleep for the remaining time.  Fatal signals (SIGINT, SIGKILL, …) are
+    // handled inside proc_sleep (calls proc_exit), so we never loop on those.
+    do {
+        current->wake_tick = wake_at;
+        proc_sleep(current);   // sleep on self; timer_handler calls proc_wakeup(p)
+        current->wake_tick = 0;
+    } while (timer_ticks < wake_at);
     return 0;
 }
 
@@ -721,12 +739,17 @@ int sys_kill(pid_t pid, int sig) {
                 p->pending_signals &= ~KERNEL_STOP_SIGS;
                 if (p->state == PROC_STOPPED)
                     proc_unstop(p);
-            } else if (sig == KERNEL_SIGSTOP) {
-                p->pending_signals &= ~(1U << KERNEL_SIGCONT);
-                if (p->state == PROC_READY || p->state == PROC_BLOCKED)
-                    proc_stop(p);
-                else
-                    p->pending_signals |= KERNEL_STOP_SIGS;
+            } else if ((1U << sig) & KERNEL_STOP_SIGS) {
+                if (sig != KERNEL_SIGSTOP && (p->signal_mask & (1U << sig))) {
+                    p->pending_signals |= (1U << sig);
+                } else {
+                    p->pending_signals &= ~(1U << KERNEL_SIGCONT);
+                    if (p->state == PROC_READY || p->state == PROC_BLOCKED) {
+                        p->stop_signal = (uint8_t)sig;
+                        proc_stop(p);
+                    } else
+                        p->pending_signals |= (1U << sig);
+                }
             } else {
                 p->pending_signals |= (1U << sig);
                 if (p->state == PROC_BLOCKED &&
@@ -765,12 +788,17 @@ int sys_kill(pid_t pid, int sig) {
                 p->pending_signals &= ~KERNEL_STOP_SIGS;
                 if (p->state == PROC_STOPPED)
                     proc_unstop(p);
-            } else if (sig == KERNEL_SIGSTOP) {
-                p->pending_signals &= ~(1U << KERNEL_SIGCONT);
-                if (p->state == PROC_READY || p->state == PROC_BLOCKED)
-                    proc_stop(p);
-                else
-                    p->pending_signals |= KERNEL_STOP_SIGS;
+            } else if ((1U << sig) & KERNEL_STOP_SIGS) {
+                if (sig != KERNEL_SIGSTOP && (p->signal_mask & (1U << sig))) {
+                    p->pending_signals |= (1U << sig);
+                } else {
+                    p->pending_signals &= ~(1U << KERNEL_SIGCONT);
+                    if (p->state == PROC_READY || p->state == PROC_BLOCKED) {
+                        p->stop_signal = (uint8_t)sig;
+                        proc_stop(p);
+                    } else
+                        p->pending_signals |= (1U << sig);
+                }
             } else {
                 p->pending_signals |= (1U << sig);
                 if (p->state == PROC_BLOCKED &&
@@ -796,14 +824,21 @@ int sys_kill(pid_t pid, int sig) {
         return 0;
     }
 
-    // SIGSTOP cannot be masked (POSIX). Act immediately when possible.
-    if (sig == SIGSTOP) {
+    // Stop signals: act immediately when possible.
+    // SIGSTOP is unmaskable (POSIX); SIGTSTP/SIGTTIN/SIGTTOU respect signal_mask.
+    if ((1U << sig) & KERNEL_STOP_SIGS) {
+        if (sig != KERNEL_SIGSTOP && (target->signal_mask & (1U << sig))) {
+            // Catchable stop signal is masked — just pend it
+            target->pending_signals |= (1U << sig);
+            return 0;
+        }
         target->pending_signals &= ~(1U << KERNEL_SIGCONT); // discard pending CONT
-        if (target->state == PROC_READY || target->state == PROC_BLOCKED)
+        if (target->state == PROC_READY || target->state == PROC_BLOCKED) {
+            target->stop_signal = (uint8_t)sig;
             proc_stop(target);
-        else
+        } else
             // Target is RUNNING (unreachable single-core) — defer via pending bit
-            target->pending_signals |= KERNEL_STOP_SIGS;
+            target->pending_signals |= (1U << sig);
         return 0;
     }
 
@@ -1528,10 +1563,15 @@ int sys_sigsuspend(const uint32_t *mask) {
      * are now unmasked by new_mask, which proc_wakeup() would never fire for.
      */
 
-    /* Step 1: SIGSTOP — cannot be masked; highest priority. */
+    /* Step 1: Stop signals — SIGSTOP unmaskable; others respect signal_mask. */
     uint32_t pending_stop = current->pending_signals & KERNEL_STOP_SIGS;
+    {
+        uint32_t catchable_stops = pending_stop & ~(1U << KERNEL_SIGSTOP);
+        pending_stop &= ~(catchable_stops & current->signal_mask);
+    }
     if (pending_stop) {
         current->pending_signals &= ~pending_stop;
+        current->stop_signal = (uint8_t)kernel_ctz(pending_stop);
         proc_stop(current);
         /* Resumes here after SIGCONT is delivered. */
     }
@@ -1661,4 +1701,24 @@ pid_t sys_getpgid(pid_t pid) {
     if (!p || p->state == PROC_UNUSED || p->state == PROC_ZOMBIE)
         return -1;
     return p->pgid;
+}
+
+/*
+ * sys_tcsetpgrp — set the foreground process group of the terminal.
+ *
+ * Simplified version: no fd parameter, always operates on console_term.
+ * The shell calls this before running each foreground job so the terminal
+ * knows which process group to signal on Ctrl-Z / Ctrl-C.
+ */
+int sys_tcsetpgrp(pid_t pgid) {
+    if (!current) return -1;
+    console_term.foreground_pgid = pgid;
+    return 0;
+}
+
+/*
+ * sys_tcgetpgrp — return the foreground process group of the terminal.
+ */
+pid_t sys_tcgetpgrp(void) {
+    return console_term.foreground_pgid;
 }

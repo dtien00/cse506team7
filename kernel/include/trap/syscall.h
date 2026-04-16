@@ -49,6 +49,8 @@
 #define SYS_sigaction 38
 #define SYS_sigpending 39
 #define SYS_sigsuspend 40
+#define SYS_tcsetpgrp  41
+#define SYS_tcgetpgrp  42
 #define SYS_getgid   47
 #define SYS_chdir    49
 #define SYS_getpgrp  50
@@ -122,3 +124,5 @@ pid_t sys_getpgrp(void);
 int   sys_setpgid(pid_t pid, pid_t pgid);
 pid_t sys_setsid(void);
 pid_t sys_getpgid(pid_t pid);
+int   sys_tcsetpgrp(pid_t pgid);
+pid_t sys_tcgetpgrp(void);

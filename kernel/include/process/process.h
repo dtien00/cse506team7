@@ -19,6 +19,9 @@
 #define KERNEL_SIGTERM  15
 #define KERNEL_SIGCONT  18
 #define KERNEL_SIGSTOP  19
+#define KERNEL_SIGTSTP   20
+#define KERNEL_SIGTTIN   21
+#define KERNEL_SIGTTOU   22
 // Bitmask of signals that unconditionally terminate the process
 // Signals whose kernel action is proc_exit()
 // SIGPIPE is here so when pipes deliver it, action is automatic.
@@ -29,8 +32,9 @@
                            (1U << KERNEL_SIGINT)  | (1U << KERNEL_SIGPIPE) | \
                            (1U << KERNEL_SIGALRM))
 
-// SIGSTOP cannot be masked or ignored (POSIX)
-#define KERNEL_STOP_SIGS  (1U << KERNEL_SIGSTOP)
+// SIGSTOP, SIGSTP, SIGTTIN, SIGTTOU cannot be masked or ignored (POSIX)
+#define KERNEL_STOP_SIGS ((1U << KERNEL_SIGSTOP) | (1U << KERNEL_SIGTSTP) | \
+                          (1U << KERNEL_SIGTTIN) | (1U << KERNEL_SIGTTOU))
 
 // Signals whose POSIX default action is "ignore" (not "terminate").
 // When handler == SIG_DFL, these are silently discarded — identical to SIG_IGN.
@@ -151,6 +155,11 @@ struct proc {
     // Process group and session management
     pid_t pgid;
     pid_t sid; 
+
+    // Background/Foreground process
+    uint8_t stop_unreported;
+    uint8_t cont_unreported;
+    uint8_t stop_signal;        // which signal caused the stop (for WSTOPSIG)
 };
 
 extern struct proc proctab[];

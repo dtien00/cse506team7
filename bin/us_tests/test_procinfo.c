@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <sys/wait.h>
-#include "process/process.h"
+#include <sys/procinfo.h>
 #include "us_test_common.h"
 
 // Declared in libc/syscall.S -> kernel SYS_procinfo (26)
