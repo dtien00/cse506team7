@@ -49,7 +49,8 @@
 .global setpgid
 .global setsid
 .global getpgid
-
+.global tcsetpgrp
+.global tcgetpgrp
 
 mmap:
     li a7, 14
@@ -304,5 +305,15 @@ setsid:
 
 getpgid:
     li a7, 53
+    ecall
+    ret
+
+tcsetpgrp:
+    li a7, 41
+    ecall
+    ret
+
+tcgetpgrp:
+    li a7, 42
     ecall
     ret

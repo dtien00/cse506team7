@@ -319,9 +319,13 @@ void proc_sleep(void *chan) {
 
     // SIGSTOP: process was woken (e.g., by SIGKILL delivery) but also has a
     // pending stop. Stop takes priority — re-block as STOPPED before checking fatal.
+    // Stop signals: SIGSTOP is unmaskable; SIGTSTP/SIGTTIN/SIGTTOU respect signal_mask.
     uint32_t pending_stop = prev->pending_signals & KERNEL_STOP_SIGS;
+    uint32_t catchable_stops = pending_stop & ~(1U << KERNEL_SIGSTOP);
+    pending_stop &= ~(catchable_stops & prev->signal_mask);
     if (pending_stop) {
         prev->pending_signals &= ~pending_stop;
+        prev->stop_signal = (uint8_t)kernel_ctz(pending_stop);
         proc_stop(prev);
         // Resumes here after SIGCONT.
     }
@@ -395,10 +399,16 @@ void proc_stop(struct proc *p) {
 
     p->state = PROC_STOPPED;
 
+    // Indicate the signal must be stopped.
+    p->stop_unreported = 1;
+
     // SIGCHLD to parent: notify that child stopped (POSIX WUNTRACED).
     // Must use p->parent (the stopped child's parent), not current->parent.
     if (p->parent) {
         p->parent->pending_signals |= (1u << SIGCHLD);
+        // Wake parent from waitpid (sleeps on its own proc pointer)
+        proc_wakeup(p->parent);
+        // Also wake sigsuspend/pause channel if SIGCHLD handler is non-default
         if (p->parent->handlers[SIGCHLD] != (void *)0 /* SIG_DFL */)
             proc_wakeup(&p->parent->pending_signals);
     }
@@ -414,11 +424,18 @@ void proc_stop(struct proc *p) {
 
 void proc_unstop(struct proc *p) {
     if (p->state != PROC_STOPPED) return;
+
+    // Indicate uncaught continue signal
+    p->cont_unreported = 1;
+
     proc_ready(p);  // sets PROC_READY and re-enqueues into MLFQ
 
     // SIGCHLD to parent: notify that child continued (POSIX WCONTINUED).
     if (p->parent) {
         p->parent->pending_signals |= (1u << SIGCHLD);
+        // Wake parent from waitpid (sleeps on its own proc pointer)
+        proc_wakeup(p->parent);
+        // Also wake sigsuspend/pause channel if SIGCHLD handler is non-default
         if (p->parent->handlers[SIGCHLD] != (void *)0 /* SIG_DFL */)
             proc_wakeup(&p->parent->pending_signals);
     }
