@@ -356,12 +356,16 @@ int file_write(int fd, const void *buf, size_t len) {
                 return -EBADF;
 
             while (nwritten < len) {
-                if (p->readers <= 0)
+                if (p->readers <= 0) {
+                    current->pending_signals |= (1U << KERNEL_SIGPIPE);
                     return nwritten > 0 ? (int) nwritten : -EPIPE;
+                }
 
                 while (p->count == PIPE_CAPACITY) {
-                    if (p->readers <= 0)
+                    if (p->readers <= 0) {
+                        current->pending_signals |= (1U << KERNEL_SIGPIPE);
                         return nwritten > 0 ? (int) nwritten : -EPIPE;
+                    }
                     proc_sleep(p);
                 }
                 p->buffer[p->write_pos] = src[nwritten];

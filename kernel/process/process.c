@@ -639,6 +639,11 @@ int exec(const char *path, char *const argv[]) {
     current->vma_list = new_vma_list;
     current->sz        = highest_seg_end;
     current->satp      = MAKE_SATP((uintptr_t)new_pt);
+    
+    // Reset MLFQ scheduling state so the new image starts fresh.
+    current->mlfq_level = 0;
+    current->time_slice = 1;   // 1 << 0
+    current->total_time = 0;
 
     // Switch to the new page table before freeing old page-table pages.
     vmm_switch(current->pagetable);

@@ -9,25 +9,5 @@ int settimeofday(const struct timeval* tv, const struct timezone* tz) {
     return -1;
 }
 
-int getitimer(int which, struct itimerval* curr_value) {
-    (void)which;
-    if (curr_value) {
-        curr_value->it_interval.tv_sec = 0;
-        curr_value->it_interval.tv_usec = 0;
-        curr_value->it_value.tv_sec = 0;
-        curr_value->it_value.tv_usec = 0;
-    }
-    return 0;
-}
-
-int setitimer(int which, const struct itimerval* new_value, struct itimerval* old_value) {
-    (void)which;
-    (void)new_value;
-    if (old_value) {
-        old_value->it_interval.tv_sec = 0;
-        old_value->it_interval.tv_usec = 0;
-        old_value->it_value.tv_sec = 0;
-        old_value->it_value.tv_usec = 0;
-    }
-    return -1;
-}
+// getitimer() and setitimer() are implemented as syscall wrappers in syscall.S
+// (SYS_getitimer = 94, SYS_setitimer = 95)

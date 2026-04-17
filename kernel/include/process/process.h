@@ -125,6 +125,8 @@ struct proc {
     uint64_t children_utime; // sum of utime_ticks of all reaped children
     uint64_t wake_tick;      // 0 = not sleeping; >0 = timer_ticks value at which to wake
     uint64_t alarm_tick;    // Compared with for SIGALRM; alarm()
+    uint64_t itimer_value;    // ITIMER_REAL: tick at which to fire (0 = disarmed)
+    uint64_t itimer_interval; // ITIMER_REAL: reload interval in ticks (0 = one-shot)
     uint32_t pending_signals; // bitmask: bit N set means signal N is pending
     uint32_t signal_mask;
     struct proc *next;

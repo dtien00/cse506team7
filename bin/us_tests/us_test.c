@@ -56,12 +56,15 @@ void run_test_termios_tty(us_test_group_t *group);
 void run_test_pgrp(us_test_group_t *group);
 void run_test_jobctl(us_test_group_t *group);
 void run_test_links(us_test_group_t groups[], int *idx);
+void run_test_pipe_sigpipe(us_test_group_t *group);
+void run_test_nanosleep(us_test_group_t *group);
 
 /* comprehensive libc conformance suites (each fills multiple groups) */
 void run_test_libc_string(us_test_group_t groups[], int *idx);
 void run_test_libc_ctype(us_test_group_t groups[], int *idx);
 void run_test_libc_stdio(us_test_group_t groups[], int *idx);
 void run_test_libc_stdlib(us_test_group_t groups[], int *idx);
+void run_test_libc_time(us_test_group_t groups[], int *idx);
 
 /* base groups + 6 fs_persist sub-groups + libc conformance suites */
 #define MAX_GROUPS 200
@@ -109,14 +112,17 @@ int main(void) {
     run_test_sigsuspend(&groups[idx++]);
     run_test_pgrp(&groups[idx++]);
     run_test_jobctl(&groups[idx++]);
+    run_test_pipe_sigpipe(&groups[idx++]);
     run_test_time(&groups[idx++]);
     run_test_links(groups, &idx);
+    run_test_nanosleep(&groups[idx++]);
 
     /* comprehensive libc conformance tests */
     run_test_libc_string(groups, &idx);
     run_test_libc_ctype(groups, &idx);
     run_test_libc_stdio(groups, &idx);
     run_test_libc_stdlib(groups, &idx);
+    run_test_libc_time(groups, &idx);
 
     return ut_suite_end(groups, idx);
 }
