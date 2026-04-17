@@ -51,6 +51,8 @@
 .global getpgid
 .global tcsetpgrp
 .global tcgetpgrp
+.global nanosleep
+.global clock_nanosleep
 
 mmap:
     li a7, 14
@@ -315,5 +317,27 @@ tcsetpgrp:
 
 tcgetpgrp:
     li a7, 42
+    ecall
+    ret
+
+nanosleep:
+    li a7, 92
+    ecall
+    ret
+
+clock_nanosleep:
+    li a7, 93
+    ecall
+    ret
+
+.globl getitimer
+getitimer:
+    li a7, 94
+    ecall
+    ret
+
+.globl setitimer
+setitimer:
+    li a7, 95
     ecall
     ret

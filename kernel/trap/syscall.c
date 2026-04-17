@@ -366,6 +366,26 @@ void syscall_handler(trap_frame *frame) {
             ret = sys_tcgetpgrp();
             break;
 
+        case SYS_nanosleep:
+            ret = sys_nanosleep((const struct timespec *)arg0,
+                                (struct timespec *)arg1);
+            break;
+
+        case SYS_clock_nanosleep:
+            ret = sys_clock_nanosleep((clockid_t)arg0, (int)arg1,
+                                      (const struct timespec *)arg2,
+                                      (struct timespec *)arg3);
+            break;
+
+        case SYS_getitimer:
+            ret = sys_getitimer((int)arg0, (struct itimerval_k *)arg1);
+            break;
+
+        case SYS_setitimer:
+            ret = sys_setitimer((int)arg0, (const struct itimerval_k *)arg1,
+                                (struct itimerval_k *)arg2);
+            break;
+
         default:
             printk("Unknown system call: %d\n", syscall_num);
             ret = -1;
@@ -1285,17 +1305,11 @@ int sys_gettimeofday(struct timeval_k *tv, void *tz) {
         struct timeval_k ktv;
         ktv.tv_sec  = ns / 1000000000ULL;
         ktv.tv_usec = (ns % 1000000000ULL) / 1000ULL;
-        set_csr_bit(sstatus, SSTATUS_SUM);
-        *tv = ktv;
-        clear_csr_bit(sstatus, SSTATUS_SUM);
+        copy_to_user(tv, &ktv, sizeof(ktv));
     }
     if (tz) {
-        // struct timezone = { int tz_minuteswest; int tz_dsttime; }
-        // Always return UTC (both fields zero).
         int zeros[2] = {0, 0};
-        set_csr_bit(sstatus, SSTATUS_SUM);
-        __builtin_memcpy(tz, zeros, sizeof(zeros));
-        clear_csr_bit(sstatus, SSTATUS_SUM);
+        copy_to_user(tz, zeros, sizeof(zeros));
     }
     return 0;
 }
@@ -1730,4 +1744,183 @@ int sys_tcsetpgrp(pid_t pgid) {
  */
 pid_t sys_tcgetpgrp(void) {
     return console_term.foreground_pgid;
+}
+
+int sys_nanosleep(const struct timespec *req, struct timespec *rem) {
+    if (!req) return -1;
+
+    /* Read request from userspace via safe copy (sets/clears SUM). */
+    struct timespec kreq;
+    copy_from_user(&kreq, req, sizeof(kreq));
+    long sec  = kreq.tv_sec;
+    long nsec = kreq.tv_nsec;
+
+    if (sec < 0 || nsec < 0 || nsec >= 1000000000L) return -EINVAL;
+
+    /* Convert to ticks, rounding up to the next tick boundary. */
+    uint64_t ns_per_tick = 1000000000ULL / TICKS_PER_SEC;
+    uint64_t ticks = (uint64_t)sec * TICKS_PER_SEC +
+                     ((uint64_t)nsec + ns_per_tick - 1) / ns_per_tick;
+    if (ticks == 0) {
+        if (rem) {
+            struct timespec krem = {0, 0};
+            copy_to_user(rem, &krem, sizeof(krem));
+        }
+        return 0;
+    }
+
+    /*
+     * Sleep on the process itself.  timer_handler() detects expiry via
+     * wake_tick and calls proc_wakeup(p) where p == current, which matches
+     * the channel we pass to proc_sleep().  Signal delivery uses
+     * proc_unblock() and wakes us regardless of channel.
+     */
+    current->wake_tick = timer_ticks + ticks;
+    proc_sleep(current);
+
+    /*
+     * Determine why we woke.  timer_handler() clears wake_tick to 0 before
+     * calling proc_wakeup(), so wake_tick == 0 means normal expiry and
+     * wake_tick != 0 means a signal interrupted us early.
+     */
+    if (current->wake_tick == 0) {
+        if (rem) {
+            struct timespec krem = {0, 0};
+            copy_to_user(rem, &krem, sizeof(krem));
+        }
+        return 0;
+    }
+
+    /* Signal interrupted — report remaining time, clear the pending tick. */
+    uint64_t ticks_left = current->wake_tick - timer_ticks;
+    current->wake_tick = 0;
+    if (rem) {
+        struct timespec krem;
+        krem.tv_sec  = (long)(ticks_left / TICKS_PER_SEC);
+        krem.tv_nsec = (long)((ticks_left % TICKS_PER_SEC) * ns_per_tick);
+        copy_to_user(rem, &krem, sizeof(krem));
+    }
+    return -EINTR;
+}
+
+int sys_clock_nanosleep(clockid_t clockid, int flags,
+                        const struct timespec *req, struct timespec *rem) {
+    if (!req) return -1;
+    if (clockid == CLOCK_REALTIME) return -1;
+    if (clockid != CLOCK_MONOTONIC) return -EINVAL;
+
+    /* Read request from userspace via safe copy (sets/clears SUM). */
+    struct timespec kreq;
+    copy_from_user(&kreq, req, sizeof(kreq));
+    long sec  = kreq.tv_sec;
+    long nsec = kreq.tv_nsec;
+
+    if (nsec < 0 || nsec >= 1000000000L) return -EINVAL;
+
+    uint64_t ns_per_tick = 1000000000ULL / TICKS_PER_SEC;
+    uint64_t ticks;
+
+    if (flags == TIMER_ABSTIME) {
+        /* Absolute time: sleep until the given tick value is reached. */
+        if (sec < 0) return 0;   /* already in the past */
+        uint64_t abs_ticks = (uint64_t)sec * TICKS_PER_SEC +
+                             ((uint64_t)nsec + ns_per_tick - 1) / ns_per_tick;
+        if (abs_ticks <= timer_ticks) return 0;
+        ticks = abs_ticks - timer_ticks;
+        rem = NULL;   /* POSIX: rem unused for TIMER_ABSTIME */
+    } else {
+        /* Relative time — same logic as sys_nanosleep(). */
+        if (sec < 0) return -EINVAL;
+        ticks = (uint64_t)sec * TICKS_PER_SEC +
+                ((uint64_t)nsec + ns_per_tick - 1) / ns_per_tick;
+    }
+
+    if (ticks == 0) return 0;
+
+    current->wake_tick = timer_ticks + ticks;
+    proc_sleep(current);
+
+    if (current->wake_tick == 0) {
+        if (rem) {
+            struct timespec krem = {0, 0};
+            copy_to_user(rem, &krem, sizeof(krem));
+        }
+        return 0;
+    }
+
+    uint64_t ticks_left = current->wake_tick - timer_ticks;
+    current->wake_tick = 0;
+    if (rem) {
+        struct timespec krem;
+        krem.tv_sec  = (long)(ticks_left / TICKS_PER_SEC);
+        krem.tv_nsec = (long)((ticks_left % TICKS_PER_SEC) * ns_per_tick);
+        copy_to_user(rem, &krem, sizeof(krem));
+    }
+    return -EINTR;
+}
+
+/* ---------- helpers: convert between ticks and timeval_k ---------- */
+
+static void ticks_to_timeval(uint64_t ticks, struct timeval_k *tv) {
+    tv->tv_sec  = ticks / TICKS_PER_SEC;
+    tv->tv_usec = (ticks % TICKS_PER_SEC) * (1000000ULL / TICKS_PER_SEC);
+}
+
+static uint64_t timeval_to_ticks(const struct timeval_k *tv) {
+    uint64_t us_per_tick = 1000000ULL / TICKS_PER_SEC;
+    return tv->tv_sec * TICKS_PER_SEC +
+           (tv->tv_usec + us_per_tick - 1) / us_per_tick;   /* round up */
+}
+
+/* ---------- sys_getitimer / sys_setitimer ---------- */
+
+int sys_getitimer(int which, struct itimerval_k *curr_value) {
+    if (which != ITIMER_REAL) return -EINVAL;
+    if (!curr_value) return -EINVAL;
+
+    struct itimerval_k kval;
+    memset(&kval, 0, sizeof(kval));
+
+    if (current->itimer_value != 0 && current->itimer_value > timer_ticks) {
+        ticks_to_timeval(current->itimer_value - timer_ticks, &kval.it_value);
+    }
+    ticks_to_timeval(current->itimer_interval, &kval.it_interval);
+
+    copy_to_user(curr_value, &kval, sizeof(kval));
+    return 0;
+}
+
+int sys_setitimer(int which, const struct itimerval_k *new_value,
+                  struct itimerval_k *old_value) {
+    if (which != ITIMER_REAL) return -EINVAL;
+
+    /* Return previous timer state if requested */
+    if (old_value) {
+        struct itimerval_k kold;
+        memset(&kold, 0, sizeof(kold));
+        if (current->itimer_value != 0 && current->itimer_value > timer_ticks)
+            ticks_to_timeval(current->itimer_value - timer_ticks, &kold.it_value);
+        ticks_to_timeval(current->itimer_interval, &kold.it_interval);
+        copy_to_user(old_value, &kold, sizeof(kold));
+    }
+
+    /* Arm or disarm the timer */
+    if (new_value) {
+        struct itimerval_k knew;
+        copy_from_user(&knew, new_value, sizeof(knew));
+
+        uint64_t val_ticks = timeval_to_ticks(&knew.it_value);
+        uint64_t int_ticks = timeval_to_ticks(&knew.it_interval);
+
+        if (val_ticks == 0) {
+            /* Disarm */
+            current->itimer_value    = 0;
+            current->itimer_interval = 0;
+        } else {
+            current->itimer_value    = timer_ticks + val_ticks;
+            current->itimer_interval = int_ticks;
+        }
+    }
+
+    return 0;
 }

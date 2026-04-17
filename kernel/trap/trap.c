@@ -531,6 +531,16 @@ void timer_handler(void) {
             if (p->state == PROC_BLOCKED)
                 proc_unblock(p);
         }
+        // ITIMER_REAL: fire SIGALRM and auto-reload if interval is set
+        if (p->itimer_value != 0 && timer_ticks >= p->itimer_value) {
+            if (p->itimer_interval != 0)
+                p->itimer_value = timer_ticks + p->itimer_interval;
+            else
+                p->itimer_value = 0;
+            p->pending_signals |= (1U << KERNEL_SIGALRM);
+            if (p->state == PROC_BLOCKED)
+                proc_unblock(p);
+        }
     }
 
     // Wake any processes whose timed sleep deadline has expired.
