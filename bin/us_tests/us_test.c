@@ -55,6 +55,7 @@ void run_test_time(us_test_group_t *group);
 void run_test_termios_tty(us_test_group_t *group);
 void run_test_pgrp(us_test_group_t *group);
 void run_test_jobctl(us_test_group_t *group);
+void run_test_links(us_test_group_t groups[], int *idx);
 
 /* comprehensive libc conformance suites (each fills multiple groups) */
 void run_test_libc_string(us_test_group_t groups[], int *idx);
@@ -109,6 +110,7 @@ int main(void) {
     run_test_pgrp(&groups[idx++]);
     run_test_jobctl(&groups[idx++]);
     run_test_time(&groups[idx++]);
+    run_test_links(groups, &idx);
 
     /* comprehensive libc conformance tests */
     run_test_libc_string(groups, &idx);

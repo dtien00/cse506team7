@@ -232,6 +232,19 @@ void syscall_handler(trap_frame *frame) {
             ret = sys_unlink((const char *) arg0);
             break;
 
+        case SYS_link:
+            ret = sys_link((const char *)arg0, (const char *)arg1);
+            break;
+
+        case SYS_symlink:
+            ret = sys_symlink((const char *)arg0, (const char *)arg1);
+            break;
+
+        case SYS_readlink:
+            ret = (uint64_t)(int64_t)sys_readlink(
+                      (const char *)arg0, (char *)arg1, (size_t)arg2);
+            break;
+
         case SYS_mkdir:
             ret = sys_mkdir((const char *) arg0, (mode_t) arg1);
             break;
@@ -310,6 +323,10 @@ void syscall_handler(trap_frame *frame) {
 
         case SYS_fstat:
             ret = sys_fstat((int)arg0, (void *)arg1);
+            break;
+
+        case SYS_lstat:
+            ret = sys_lstat((const char *)arg0, (void *)arg1);
             break;
 
         case SYS_chmod:
@@ -1122,6 +1139,88 @@ int sys_unlink(const char *path) {
     return vfs_unlink(kpath);
 }
 
+int sys_link(const char *uoldpath, const char *unewpath) {
+    if (!current) return -1;
+
+    char *kold = kmalloc(MAX_PATH);
+    char *knew = kmalloc(MAX_PATH);
+    if (!kold || !knew) { kfree(kold); kfree(knew); return -ENOMEM; }
+
+    set_csr_bit(sstatus, SSTATUS_SUM);
+    strncpy(kold, uoldpath, MAX_PATH - 1);
+    kold[MAX_PATH - 1] = '\0';
+    strncpy(knew, unewpath, MAX_PATH - 1);
+    knew[MAX_PATH - 1] = '\0';
+    clear_csr_bit(sstatus, SSTATUS_SUM);
+
+    if (dentry_normalize_path(current->fs->cwd, vfs_get_root(),
+                              kold, kold, MAX_PATH) < 0) {
+        kfree(kold); kfree(knew); return -ENAMETOOLONG;
+    }
+    if (dentry_normalize_path(current->fs->cwd, vfs_get_root(),
+                              knew, knew, MAX_PATH) < 0) {
+        kfree(kold); kfree(knew); return -ENAMETOOLONG;
+    }
+
+    int ret = vfs_link(kold, knew);
+    kfree(kold); kfree(knew);
+    return ret;
+}
+
+int sys_symlink(const char *utarget, const char *ulinkpath) {
+    if (!current) return -1;
+
+    char *ktarget   = kmalloc(MAX_PATH);
+    char *klinkpath = kmalloc(MAX_PATH);
+    if (!ktarget || !klinkpath) { kfree(ktarget); kfree(klinkpath); return -ENOMEM; }
+
+    set_csr_bit(sstatus, SSTATUS_SUM);
+    strncpy(ktarget,   utarget,   MAX_PATH - 1);
+    ktarget[MAX_PATH - 1] = '\0';
+    strncpy(klinkpath, ulinkpath, MAX_PATH - 1);
+    klinkpath[MAX_PATH - 1] = '\0';
+    clear_csr_bit(sstatus, SSTATUS_SUM);
+
+    if (dentry_normalize_path(current->fs->cwd, vfs_get_root(),
+                              klinkpath, klinkpath, MAX_PATH) < 0) {
+        kfree(ktarget); kfree(klinkpath); return -ENAMETOOLONG;
+    }
+
+    int ret = vfs_symlink(ktarget, klinkpath);
+    kfree(ktarget); kfree(klinkpath);
+    return ret;
+}
+
+ssize_t sys_readlink(const char *upath, char *ubuf, size_t bufsiz) {
+    if (!current || bufsiz == 0) return -EINVAL;
+
+    char *kpath = kmalloc(MAX_PATH);
+    if (!kpath) return -ENOMEM;
+
+    set_csr_bit(sstatus, SSTATUS_SUM);
+    strncpy(kpath, upath, MAX_PATH - 1);
+    kpath[MAX_PATH - 1] = '\0';
+    clear_csr_bit(sstatus, SSTATUS_SUM);
+
+    if (dentry_normalize_path(current->fs->cwd, vfs_get_root(),
+                              kpath, kpath, MAX_PATH) < 0) {
+        kfree(kpath); return -ENAMETOOLONG;
+    }
+
+    char *kbuf = kmalloc(MAX_PATH);
+    if (!kbuf) { kfree(kpath); return -ENOMEM; }
+    size_t copy_size = bufsiz < MAX_PATH ? bufsiz : MAX_PATH;
+    ssize_t r = vfs_readlink(kpath, kbuf, copy_size);
+    kfree(kpath);
+    if (r < 0) { kfree(kbuf); return r; }
+
+    set_csr_bit(sstatus, SSTATUS_SUM);
+    memcpy(ubuf, kbuf, (size_t)r);
+    clear_csr_bit(sstatus, SSTATUS_SUM);
+    kfree(kbuf);
+    return r;
+}
+
 int sys_mkdir(const char *path, mode_t mode) {
     if (!current) return -1;
 
@@ -1418,6 +1517,22 @@ int sys_stat(const char *upath, struct stat *ustat)
     // 3. Copy result back to user
     copy_to_user(ustat, &kst, sizeof(struct stat));
 
+    return 0;
+}
+
+int sys_lstat(const char *upath, struct stat *ustat)
+{
+    if (!current || !upath || !ustat) return -EINVAL;
+
+    char kpath[MAX_PATH];
+    strncpy_from_user(kpath, upath, MAX_PATH - 1);
+    kpath[MAX_PATH - 1] = '\0';
+
+    struct stat kst;
+    int ret = file_lstat(kpath, &kst);
+    if (ret != 0) return ret;
+
+    copy_to_user(ustat, &kst, sizeof(struct stat));
     return 0;
 }
 

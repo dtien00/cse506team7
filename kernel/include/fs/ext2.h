@@ -12,6 +12,9 @@ int ext2_write(vnode_t *vnode, const void *buf, size_t offset, size_t len);
 int ext2_create(mount_t *mnt, const char *path, uint32_t mode);
 int ext2_unlink(mount_t *mnt, const char *path);
 int ext2_mkdir(mount_t *mnt, const char *path, uint32_t mode);
+int ext2_link(mount_t *mnt, const char *oldpath, const char *newpath);
+int ext2_symlink(mount_t *mnt, const char *target, const char *linkpath);
+int ext2_readlink(vnode_t *vnode, char *buf, size_t size);
 
 // Get the registered ext2 filesystem type
 fs_type_t *ext2_get_type(void);

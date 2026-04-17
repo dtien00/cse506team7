@@ -21,6 +21,7 @@
 .global chdir
 .global getcwd
 .global stat
+.global lstat
 .global fstat
 .global mkdir
 .global chmod
@@ -164,6 +165,11 @@ getcwd:
 
 stat:
     li a7, 79
+    ecall
+    ret
+
+lstat:
+    li a7, 107
     ecall
     ret
 

@@ -12,7 +12,8 @@ typedef unsigned long ino_t; // inode number
 
 typedef enum {
     VNODE_REG, // regular file
-    VNODE_DIR // directory
+    VNODE_DIR, // directory
+    VNODE_LNK  // symbolic link
 } vnode_type_t;
 
 #define PIPE_CAPACITY 4096
@@ -59,6 +60,10 @@ typedef struct filesystem_operations {
                    uint32_t *entries_out);
     int (*chmod)(struct mount *mnt, vnode_t *vnode, mode_t mode);
     int (*rmdir)(struct mount *mnt, const char *path);
+    int (*link)(struct mount *mnt, const char *oldpath, const char *newpath);
+    int (*symlink)(struct mount *mnt, const char *target, const char *linkpath);
+    int (*readlink)(vnode_t *vnode, char *buf, size_t size);
+    uint32_t (*get_nlink)(vnode_t *vnode); // optional: return fresh nlink from fs
 } fs_ops_t;
 
 typedef struct fs_struct {
@@ -105,6 +110,10 @@ int vfs_fchmod(vnode_t *vn, mode_t mode);
 int vfs_rmdir(const char *path);
 int vfs_chdir(const char *kpath);
 int vfs_readdir(dentry_t *dentry, uint32_t start_idx, void *buf, uint32_t bufsize, uint32_t *entries_out);
+int vfs_link(const char *oldpath, const char *newpath);
+int vfs_symlink(const char *target, const char *linkpath);
+ssize_t vfs_readlink(const char *path, char *buf, size_t size);
+int vfs_lookup_nofollow_pub(dentry_t *start, const char *path, dentry_t **out);
 
 fs_struct_t *fs_struct_alloc(void);
 fs_struct_t *fs_struct_copy(fs_struct_t *src); // used in fork

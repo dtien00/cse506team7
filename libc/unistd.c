@@ -52,10 +52,6 @@ int setpgrp(void) {
     return setpgid(0, 0);
 }
 
-int lstat(const char *pathname, struct stat *statbuf) {
-    (void)pathname; (void)statbuf;
-    return -1;
-}
 
 int rename(const char *oldpath, const char *newpath) {
     if (!oldpath || !newpath) {

@@ -619,11 +619,20 @@ vnode_t *ext2_lookup(mount_t *mnt, const char *path) {
     vnode->ino = ino;
     vnode->mode = current_inode->i_mode;
     vnode->size = current_inode->i_size;
+    vnode->nlink = current_inode->i_links_count;
     vnode->ref_count = 0;
     vnode->mount = mnt;
     vnode->fs_data = current_inode;
     vnode->fs_type = mnt->fs_type;
-    vnode->type = ((current_inode->i_mode & 0xF000) == EXT2_S_IFDIR) ? VNODE_DIR : VNODE_REG;
+    {
+        uint16_t fmt = current_inode->i_mode & 0xF000;
+        if (fmt == EXT2_S_IFDIR)
+            vnode->type = VNODE_DIR;
+        else if (fmt == EXT2_S_IFLNK)
+            vnode->type = VNODE_LNK;
+        else
+            vnode->type = VNODE_REG;
+    }
 
     return vnode;
 }
@@ -631,10 +640,14 @@ vnode_t *ext2_lookup(mount_t *mnt, const char *path) {
 // Read from ext2 file
 int ext2_read(vnode_t *vnode, void *buf, size_t offset, size_t len) {
     if (!vnode || !vnode->fs_data || !buf) return -1;
-    
+
     ext2_inode_t *inode = (ext2_inode_t *)vnode->fs_data;
     ext2_mount_data_t *mnt = (ext2_mount_data_t *)vnode->mount->fs_data;
-    
+
+    // Refresh inode from disk so hardlinks see writes made via other vnodes.
+    ext2_read_inode(mnt, (uint32_t)vnode->ino, inode);
+    vnode->size = inode->i_size;
+
     // Check if reading past end of file
     if (offset >= inode->i_size) {
         return 0;
@@ -679,6 +692,10 @@ int ext2_write(vnode_t *vnode, const void *buf, size_t offset, size_t len) {
 
     ext2_inode_t *inode = (ext2_inode_t *)vnode->fs_data;
     ext2_mount_data_t *mnt = (ext2_mount_data_t *)vnode->mount->fs_data;
+
+    // Refresh inode from disk so hardlinks see the current block map.
+    ext2_read_inode(mnt, (uint32_t)vnode->ino, inode);
+    vnode->size = inode->i_size;
 
     size_t bytes_written = 0;
     uint8_t *block_buf = (uint8_t *)kmalloc(mnt->block_size);
@@ -975,56 +992,87 @@ int ext2_unlink(mount_t *mnt, const char *path) {
 
     int found = 0;
     uint32_t file_ino = 0;
+    size_t name_len = strlen(filename);
 
-    if (parent_inode->i_block[0] != 0) {
-        if (block_cache_read(parent_inode->i_block[0], block_buf) == 0) {
-            uint32_t offset = 0;
-            size_t name_len = strlen(filename);
+    uint32_t dir_blocks = (parent_inode->i_size + ext2_mnt->block_size - 1) / ext2_mnt->block_size;
+    for (uint32_t bi = 0; bi < dir_blocks && bi < EXT2_NDIR_BLOCKS && !found; bi++) {
+        if (parent_inode->i_block[bi] == 0) continue;
+        if (block_cache_read(parent_inode->i_block[bi], block_buf) != 0) continue;
 
-            while (offset < parent_inode->i_size && offset < ext2_mnt->block_size) {
-                ext2_dirent_t *dirent = (ext2_dirent_t *)(block_buf + offset);
-                if (dirent->rec_len == 0) break;
-                
-                if (dirent->inode != 0 && 
-                    dirent->name_len == name_len &&
-                    strncmp(dirent->name, filename, name_len) == 0) {
-                    // Found it - mark as deleted
-                    file_ino = dirent->inode;
-                    dirent->inode = 0;
-                    found = 1;
-                    break;
-                }
-                
-                offset += dirent->rec_len;
+        uint32_t offset = 0;
+        while (offset + 8 <= ext2_mnt->block_size) {
+            ext2_dirent_t *dirent = (ext2_dirent_t *)(block_buf + offset);
+            if (dirent->rec_len == 0) break;
+
+            if (dirent->inode != 0 &&
+                dirent->name_len == name_len &&
+                strncmp(dirent->name, filename, name_len) == 0) {
+                file_ino = dirent->inode;
+                dirent->inode = 0;
+                found = 1;
+                block_cache_write(parent_inode->i_block[bi], block_buf);
+                break;
             }
-            
-            if (found) {
-                block_cache_write(parent_inode->i_block[0], block_buf);
-            }
+
+            offset += dirent->rec_len;
         }
     }
-    
+
     kfree(block_buf);
     kfree(parent_vnode->fs_data);
     kfree(parent_vnode);
     kfree(path_copy);
-    
+
     if (!found) {
         printk("ext2: file not found for unlink: %s\n", path);
         return -1;
     }
-    
-    // Decrement link count and free inode if needed
+
+    // Decrement link count; free inode and its blocks when count reaches zero
     ext2_inode_t inode;
     if (ext2_read_inode(ext2_mnt, file_ino, &inode) == 0) {
-        inode.i_links_count--;
+        if (inode.i_links_count > 0)
+            inode.i_links_count--;
+
         if (inode.i_links_count == 0) {
-            inode.i_dtime = 0;  // Set deletion time
-            // TODO: Free data blocks
+            inode.i_dtime = 1; // non-zero marks inode as deleted
+
+            // Free direct data blocks
+            for (int i = 0; i < EXT2_NDIR_BLOCKS; i++) {
+                uint32_t blk = inode.i_block[i];
+                if (blk == 0) continue;
+                uint32_t grp = (blk - ext2_mnt->sb->s_first_data_block) / ext2_mnt->blocks_per_group;
+                uint32_t bit = (blk - ext2_mnt->sb->s_first_data_block) % ext2_mnt->blocks_per_group;
+                uint8_t *bmap = (uint8_t *)kmalloc(ext2_mnt->block_size);
+                if (bmap && block_cache_read(ext2_mnt->group_desc[grp].bg_block_bitmap, bmap) == 0) {
+                    bmap[bit / 8] &= ~(uint8_t)(1 << (bit % 8));
+                    block_cache_write(ext2_mnt->group_desc[grp].bg_block_bitmap, bmap);
+                    ext2_mnt->group_desc[grp].bg_free_blocks_count++;
+                    ext2_mnt->sb->s_free_blocks_count++;
+                }
+                if (bmap) kfree(bmap);
+                inode.i_block[i] = 0;
+            }
+            inode.i_blocks = 0;
+
+            // Free the inode bitmap bit
+            uint32_t igrp = (file_ino - 1) / ext2_mnt->inodes_per_group;
+            uint32_t ibit = (file_ino - 1) % ext2_mnt->inodes_per_group;
+            uint8_t *imap = (uint8_t *)kmalloc(ext2_mnt->block_size);
+            if (imap && block_cache_read(ext2_mnt->group_desc[igrp].bg_inode_bitmap, imap) == 0) {
+                imap[ibit / 8] &= ~(uint8_t)(1 << (ibit % 8));
+                block_cache_write(ext2_mnt->group_desc[igrp].bg_inode_bitmap, imap);
+                ext2_mnt->group_desc[igrp].bg_free_inodes_count++;
+                ext2_mnt->sb->s_free_inodes_count++;
+            }
+            if (imap) kfree(imap);
         }
+
         ext2_write_inode(ext2_mnt, file_ino, &inode);
+        ext2_write_superblock(ext2_mnt);
+        ext2_write_gdt(ext2_mnt);
     }
-    
+
     block_cache_flush();
     printk("ext2: unlinked %s\n", path);
     return 0;
@@ -1208,6 +1256,10 @@ static int ext2_truncate(vnode_t *vnode) {
     ext2_inode_t *inode = (ext2_inode_t *)vnode->fs_data;
     ext2_mount_data_t *mnt = (ext2_mount_data_t *)vnode->mount->fs_data;
 
+    // Refresh from disk so we don't clobber fields (e.g. i_links_count) updated
+    // via another vnode pointing to the same inode (hardlinks).
+    ext2_read_inode(mnt, (uint32_t)vnode->ino, inode);
+
     // Free each allocated direct block
     for (int i = 0; i < EXT2_NDIR_BLOCKS; i++) {
         uint32_t blk = inode->i_block[i];
@@ -1282,7 +1334,12 @@ static int ext2_readdir(mount_t *mnt, vnode_t *vnode, uint32_t start_idx,
             fs_dent_t *out = (fs_dent_t *)((char *)buf + buf_off);
             out->d_ino    = de->inode;
             out->d_reclen = (reclen_t)reclen;
-            out->d_type   = (de->file_type == EXT2_FT_DIR) ? DT_DIR : DT_REG;
+            if (de->file_type == EXT2_FT_DIR)
+                out->d_type = DT_DIR;
+            else if (de->file_type == EXT2_FT_SYMLINK)
+                out->d_type = DT_LNK;
+            else
+                out->d_type = DT_REG;
             memcpy(out->d_name, de->name, de->name_len);
             out->d_name[de->name_len] = '\0';
 
@@ -1362,6 +1419,250 @@ static int ext2_rmdir(mount_t *mnt, const char *path) {
     return ext2_unlink(mnt, path);
 }
 
+// Create a hard link: newpath is a new directory entry pointing to the same
+// inode as oldpath. Both paths must be on the same mount.
+int ext2_link(mount_t *mnt, const char *oldpath, const char *newpath) {
+    if (!mnt || !mnt->fs_data || !oldpath || !newpath) return -EINVAL;
+
+    ext2_mount_data_t *ext2_mnt = (ext2_mount_data_t *)mnt->fs_data;
+
+    // 1. Resolve oldpath to its inode number.
+    vnode_t *old_vnode = ext2_lookup(mnt, oldpath);
+    if (!old_vnode) return -ENOENT;
+    if (old_vnode->type == VNODE_DIR) {
+        kfree(old_vnode->fs_data); kfree(old_vnode);
+        return -EPERM;
+    }
+    uint32_t target_ino = (uint32_t)old_vnode->ino;
+    uint8_t  file_type  = EXT2_FT_REG_FILE;
+    kfree(old_vnode->fs_data); kfree(old_vnode);
+
+    // Fail if newpath already exists.
+    vnode_t *existing = ext2_lookup(mnt, newpath);
+    if (existing) {
+        kfree(existing->fs_data); kfree(existing);
+        return -EEXIST;
+    }
+
+    // 2. Parse newpath into parent directory and filename.
+    char *path_copy = kmalloc(strlen(newpath) + 1);
+    if (!path_copy) return -ENOMEM;
+    strcpy(path_copy, newpath);
+
+    char *last_slash = NULL;
+    for (char *p = path_copy; *p; p++)
+        if (*p == '/') last_slash = p;
+
+    char *new_name, *parent_path;
+    if (last_slash) {
+        *last_slash = '\0';
+        new_name    = last_slash + 1;
+        parent_path = path_copy;
+        if (*parent_path == '\0') parent_path = "/";
+    } else {
+        new_name    = path_copy;
+        parent_path = "/";
+    }
+
+    // 3. Look up parent directory.
+    vnode_t *parent = ext2_lookup(mnt, parent_path);
+    if (!parent) { kfree(path_copy); return -ENOENT; }
+    ext2_inode_t *par_inode = (ext2_inode_t *)parent->fs_data;
+
+    // 4. Insert directory entry.
+    uint8_t *block_buf = kmalloc(ext2_mnt->block_size);
+    if (!block_buf) {
+        kfree(parent->fs_data); kfree(parent); kfree(path_copy);
+        return -ENOMEM;
+    }
+    if (par_inode->i_block[0] == 0 ||
+        block_cache_read(par_inode->i_block[0], block_buf) != 0) {
+        kfree(block_buf); kfree(parent->fs_data);
+        kfree(parent); kfree(path_copy);
+        return -EIO;
+    }
+    if (ext2_dirent_append(block_buf, ext2_mnt->block_size,
+                           target_ino, new_name, file_type) != 0) {
+        kfree(block_buf); kfree(parent->fs_data);
+        kfree(parent); kfree(path_copy);
+        return -ENOSPC;
+    }
+    block_cache_write(par_inode->i_block[0], block_buf);
+    kfree(block_buf); kfree(parent->fs_data); kfree(parent); kfree(path_copy);
+
+    // 5. Increment i_links_count on the target inode.
+    ext2_inode_t tgt_inode;
+    if (ext2_read_inode(ext2_mnt, target_ino, &tgt_inode) != 0) return -EIO;
+    tgt_inode.i_links_count++;
+    ext2_write_inode(ext2_mnt, target_ino, &tgt_inode);
+
+    ext2_write_superblock(ext2_mnt);
+    ext2_write_gdt(ext2_mnt);
+    block_cache_flush();
+    return 0;
+}
+
+// Create a symbolic link: linkpath is a new inode whose data is the string target.
+int ext2_symlink(mount_t *mnt, const char *target, const char *linkpath) {
+    if (!mnt || !mnt->fs_data || !target || !linkpath) return -EINVAL;
+
+    ext2_mount_data_t *ext2_mnt = (ext2_mount_data_t *)mnt->fs_data;
+
+    // Fail if linkpath already exists.
+    vnode_t *existing = ext2_lookup(mnt, linkpath);
+    if (existing) {
+        kfree(existing->fs_data); kfree(existing);
+        return -EEXIST;
+    }
+
+    // Parse linkpath into parent + name.
+    char *path_copy = kmalloc(strlen(linkpath) + 1);
+    if (!path_copy) return -ENOMEM;
+    strcpy(path_copy, linkpath);
+
+    char *last_slash = NULL;
+    for (char *p = path_copy; *p; p++)
+        if (*p == '/') last_slash = p;
+
+    char *link_name, *parent_path;
+    if (last_slash) {
+        *last_slash = '\0';
+        link_name   = last_slash + 1;
+        parent_path = path_copy;
+        if (*parent_path == '\0') parent_path = "/";
+    } else {
+        link_name   = path_copy;
+        parent_path = "/";
+    }
+
+    // Look up parent directory.
+    vnode_t *parent = ext2_lookup(mnt, parent_path);
+    if (!parent) { kfree(path_copy); return -ENOENT; }
+    ext2_inode_t *par_inode = (ext2_inode_t *)parent->fs_data;
+
+    // Allocate a new inode.
+    uint32_t new_ino = ext2_alloc_inode(ext2_mnt);
+    if (new_ino == 0) {
+        kfree(parent->fs_data); kfree(parent); kfree(path_copy);
+        return -ENOSPC;
+    }
+
+    size_t tlen = strlen(target);
+
+    // Build the new symlink inode.
+    ext2_inode_t new_inode;
+    memset(&new_inode, 0, sizeof(ext2_inode_t));
+    new_inode.i_mode        = (uint16_t)(EXT2_S_IFLNK | 0777);
+    new_inode.i_links_count = 1;
+    new_inode.i_size        = (uint32_t)tlen;
+
+    if (tlen <= 60) {
+        // Fast symlink: store target directly in i_block array.
+        memcpy((char *)new_inode.i_block, target, tlen);
+        new_inode.i_blocks = 0;
+    } else {
+        // Slow symlink: allocate a data block.
+        uint32_t blk = ext2_alloc_block(ext2_mnt);
+        if (blk == 0) {
+            kfree(parent->fs_data); kfree(parent); kfree(path_copy);
+            return -ENOSPC;
+        }
+        uint8_t *blk_buf = kmalloc(ext2_mnt->block_size);
+        if (!blk_buf) {
+            kfree(parent->fs_data); kfree(parent); kfree(path_copy);
+            return -ENOMEM;
+        }
+        memset(blk_buf, 0, ext2_mnt->block_size);
+        memcpy(blk_buf, target, tlen);
+        block_cache_write(blk, blk_buf);
+        kfree(blk_buf);
+
+        new_inode.i_block[0] = blk;
+        new_inode.i_blocks   = 2; // 512-byte units
+    }
+
+    ext2_write_inode(ext2_mnt, new_ino, &new_inode);
+
+    // Insert directory entry in parent.
+    uint8_t *block_buf = kmalloc(ext2_mnt->block_size);
+    if (!block_buf) {
+        kfree(parent->fs_data); kfree(parent); kfree(path_copy);
+        return -ENOMEM;
+    }
+
+    if (par_inode->i_block[0] == 0) {
+        uint32_t new_blk = ext2_alloc_block(ext2_mnt);
+        if (new_blk == 0) {
+            kfree(block_buf); kfree(parent->fs_data); kfree(parent); kfree(path_copy);
+            return -ENOSPC;
+        }
+        par_inode->i_block[0] = new_blk;
+        par_inode->i_blocks  += 2;
+        memset(block_buf, 0, ext2_mnt->block_size);
+    } else {
+        if (block_cache_read(par_inode->i_block[0], block_buf) != 0) {
+            kfree(block_buf); kfree(parent->fs_data); kfree(parent); kfree(path_copy);
+            return -EIO;
+        }
+    }
+
+    if (ext2_dirent_append(block_buf, ext2_mnt->block_size,
+                           new_ino, link_name, EXT2_FT_SYMLINK) != 0) {
+        kfree(block_buf); kfree(parent->fs_data); kfree(parent); kfree(path_copy);
+        return -ENOSPC;
+    }
+
+    block_cache_write(par_inode->i_block[0], block_buf);
+
+    if (par_inode->i_size < ext2_mnt->block_size)
+        par_inode->i_size = ext2_mnt->block_size;
+    ext2_write_inode(ext2_mnt, parent->ino, par_inode);
+    ext2_write_superblock(ext2_mnt);
+    ext2_write_gdt(ext2_mnt);
+
+    kfree(block_buf); kfree(parent->fs_data); kfree(parent); kfree(path_copy);
+    block_cache_flush();
+    return 0;
+}
+
+// Read the target of a symlink vnode into buf (up to size bytes, no null terminator).
+int ext2_readlink(vnode_t *vnode, char *buf, size_t size) {
+    if (!vnode || !vnode->fs_data || !buf || size == 0) return -EINVAL;
+
+    ext2_inode_t *inode = (ext2_inode_t *)vnode->fs_data;
+    if ((inode->i_mode & 0xF000) != EXT2_S_IFLNK) return -EINVAL;
+
+    size_t link_len = inode->i_size;
+    if (link_len > size) link_len = size;
+
+    if (inode->i_blocks == 0) {
+        // Fast symlink: target is stored in i_block array.
+        memcpy(buf, (char *)inode->i_block, link_len);
+        return (int)link_len;
+    }
+
+    // Slow symlink: target is in a data block.
+    ext2_mount_data_t *mnt = (ext2_mount_data_t *)vnode->mount->fs_data;
+    uint8_t *block_buf = kmalloc(mnt->block_size);
+    if (!block_buf) return -ENOMEM;
+    if (block_cache_read(inode->i_block[0], block_buf) != 0) {
+        kfree(block_buf); return -EIO;
+    }
+    memcpy(buf, block_buf, link_len);
+    kfree(block_buf);
+    return (int)link_len;
+}
+
+static uint32_t ext2_get_nlink(vnode_t *vnode) {
+    if (!vnode || !vnode->fs_data) return 1;
+    ext2_inode_t *inode = (ext2_inode_t *)vnode->fs_data;
+    ext2_mount_data_t *ext2_mnt = (ext2_mount_data_t *)vnode->mount->fs_data;
+    ext2_inode_t fresh;
+    if (ext2_read_inode(ext2_mnt, (uint32_t)vnode->ino, &fresh) != 0)
+        return inode->i_links_count;
+    return fresh.i_links_count;
+}
+
 // Initialize ext2 filesystem type
 void ext2_init(void) {
     ext2_fs_type.name = "ext2";
@@ -1377,6 +1678,10 @@ void ext2_init(void) {
     ext2_fs_type.ops.readdir  = ext2_readdir;
     ext2_fs_type.ops.chmod    = ext2_chmod;
     ext2_fs_type.ops.rmdir    = ext2_rmdir;
+    ext2_fs_type.ops.link     = ext2_link;
+    ext2_fs_type.ops.symlink  = ext2_symlink;
+    ext2_fs_type.ops.readlink = ext2_readlink;
+    ext2_fs_type.ops.get_nlink = ext2_get_nlink;
     ext2_fs_type.next = NULL;
     
     vfs_register_fs(&ext2_fs_type);

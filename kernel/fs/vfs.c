@@ -15,6 +15,7 @@
 // -----------------------------------------------------------------------------
 
 #define MAX_COMPONENTS 16   // max path depth for iterative dentry chain build
+#define VFS_MAX_SYMLINK_DEPTH 8
 
 static fs_type_t *fs_types = NULL;  // Linked list of registered filesystems
 static mount_t *mounts = NULL;      // Linked list of mount points
@@ -369,24 +370,24 @@ static int vfs_step(dentry_t *cur, mount_t **mnt, const char *comp,
     }
 
     // 3. Cache miss — build relative path within current mount
-    char rel_path[MAX_PATH];
+    char *rel_path = kmalloc(MAX_PATH);
+    if (!rel_path) return -ENOMEM;
     size_t rel_len = strlen(effective_rel);
     size_t comp_len = strlen(comp);
     if (rel_len == 0) {
-        if (comp_len >= sizeof(rel_path))
-            return -ENAMETOOLONG;
-        strncpy(rel_path, comp, sizeof(rel_path) - 1);
+        if (comp_len >= (size_t)MAX_PATH) { kfree(rel_path); return -ENAMETOOLONG; }
+        strncpy(rel_path, comp, MAX_PATH - 1);
         rel_path[comp_len] = '\0';
     } else {
-        if (rel_len + 1 + comp_len >= sizeof(rel_path))
-            return -ENAMETOOLONG;
-        strncpy(rel_path, effective_rel, sizeof(rel_path) - 1);
+        if (rel_len + 1 + comp_len >= (size_t)MAX_PATH) { kfree(rel_path); return -ENAMETOOLONG; }
+        strncpy(rel_path, effective_rel, MAX_PATH - 1);
         rel_path[rel_len] = '/';
-        strncpy(rel_path + rel_len + 1, comp, sizeof(rel_path) - rel_len - 2);
+        strncpy(rel_path + rel_len + 1, comp, MAX_PATH - rel_len - 2);
         rel_path[rel_len + 1 + comp_len] = '\0';
     }
 
     vnode_t *vnode = (*mnt)->fs_type->ops.lookup(*mnt, rel_path);
+    kfree(rel_path);
     if (!vnode)
         return -ENOENT;
 
@@ -427,16 +428,24 @@ static int vfs_step(dentry_t *cur, mount_t **mnt, const char *comp,
     return 0;
 }
 
+// Forward declaration for recursive symlink following.
+static int vfs_walk(dentry_t *start, mount_t *mnt,
+                    char **comps, int n, dentry_t **out, int symlink_depth);
+
 // Component walk loop. Calls vfs_step for each component in comps[0..n-1].
 // Precondition: start != NULL, mnt != NULL, n > 0.
 // Postcondition (success): *out has exactly 1 ref; start's external ref untouched.
 // On failure: all refs from completed steps are released before returning.
 static int vfs_walk(dentry_t *start, mount_t *mnt,
-                    char **comps, int n, dentry_t **out) {
+                    char **comps, int n, dentry_t **out, int symlink_depth) {
+    if (symlink_depth > VFS_MAX_SYMLINK_DEPTH)
+        return -ELOOP;
+
     dentry_t *cur = start;
     dentry_get(cur);
 
-    char rel_buf[MAX_PATH];
+    char *rel_buf = kmalloc(MAX_PATH);
+    if (!rel_buf) { dentry_put(cur); return -ENOMEM; }
     rel_buf[0] = '\0';
 
     for (int i = 0; i < n; i++) {
@@ -445,32 +454,119 @@ static int vfs_walk(dentry_t *start, mount_t *mnt,
         int err = vfs_step(cur, &mnt, comps[i], rel_buf,
                            (i == n - 1), &crossed, &next);
         dentry_put(cur);
-        if (err)
+        if (err) {
+            kfree(rel_buf);
             return err;
+        }
+
+        // If the resolved node is a symlink, expand it and continue the walk.
+        if (next->d_vnode && next->d_vnode->type == VNODE_LNK) {
+            if (!next->d_vnode->mount ||
+                !next->d_vnode->mount->fs_type->ops.readlink) {
+                dentry_put(next);
+                kfree(rel_buf);
+                return -EINVAL;
+            }
+
+            char *link_target = kmalloc(MAX_PATH);
+            char *remainder   = kmalloc(MAX_PATH);
+            if (!link_target || !remainder) {
+                kfree(link_target);
+                kfree(remainder);
+                dentry_put(next);
+                kfree(rel_buf);
+                return -ENOMEM;
+            }
+
+            int r = next->d_vnode->mount->fs_type->ops.readlink(
+                        next->d_vnode, link_target, MAX_PATH - 1);
+            dentry_put(next);
+            if (r < 0) {
+                kfree(link_target);
+                kfree(remainder);
+                kfree(rel_buf);
+                return r;
+            }
+            link_target[r] = '\0';
+
+            err = dentry_normalize_path(
+                current && current->fs ? current->fs->cwd : vfs_root,
+                vfs_root, link_target, link_target, MAX_PATH);
+            if (err) {
+                kfree(link_target);
+                kfree(remainder);
+                kfree(rel_buf);
+                return err;
+            }
+
+            // Build remainder: normalized symlink target + remaining comps.
+            strncpy(remainder, link_target, MAX_PATH - 1);
+            remainder[MAX_PATH - 1] = '\0';
+            kfree(link_target);
+
+            for (int j = i + 1; j < n; j++) {
+                size_t rlen = strlen(remainder);
+                size_t clen = strlen(comps[j]);
+                if (rlen + 1 + clen < (size_t)MAX_PATH) {
+                    remainder[rlen] = '/';
+                    strncpy(remainder + rlen + 1, comps[j],
+                            MAX_PATH - rlen - 2);
+                    remainder[rlen + 1 + clen] = '\0';
+                }
+            }
+
+            kfree(rel_buf);
+
+            if (remainder[0] == '/' && remainder[1] == '\0') {
+                kfree(remainder);
+                dentry_get(vfs_root);
+                *out = vfs_root;
+                return 0;
+            }
+
+            char *sub_comps[MAX_COMPONENTS];
+            int sub_n = dentry_split_path(remainder, sub_comps, MAX_COMPONENTS);
+            if (sub_n < 0) {
+                kfree(remainder);
+                return -ENAMETOOLONG;
+            }
+
+            mount_t *sub_mnt = vfs_find_mount(remainder);
+            if (!sub_mnt) {
+                kfree(remainder);
+                return -ENOENT;
+            }
+
+            int sub_err = vfs_walk(vfs_root, sub_mnt, sub_comps, sub_n, out,
+                                   symlink_depth + 1);
+            kfree(remainder);
+            return sub_err;
+        }
 
         // Update rel_buf for next step.
         // After a mount crossing, current component is first entry in new mount.
         if (crossed) {
             size_t clen = strlen(comps[i]);
-            if (clen < sizeof(rel_buf)) {
-                strncpy(rel_buf, comps[i], sizeof(rel_buf) - 1);
+            if (clen < (size_t)MAX_PATH) {
+                strncpy(rel_buf, comps[i], MAX_PATH - 1);
                 rel_buf[clen] = '\0';
             }
         } else {
             size_t rlen = strlen(rel_buf);
             size_t clen = strlen(comps[i]);
             if (rlen == 0) {
-                strncpy(rel_buf, comps[i], sizeof(rel_buf) - 1);
-                rel_buf[clen < sizeof(rel_buf) - 1 ? clen : sizeof(rel_buf) - 1] = '\0';
-            } else if (rlen + 1 + clen < sizeof(rel_buf)) {
+                strncpy(rel_buf, comps[i], MAX_PATH - 1);
+                rel_buf[clen < (size_t)(MAX_PATH - 1) ? clen : (size_t)(MAX_PATH - 1)] = '\0';
+            } else if (rlen + 1 + clen < (size_t)MAX_PATH) {
                 rel_buf[rlen] = '/';
-                strncpy(rel_buf + rlen + 1, comps[i], sizeof(rel_buf) - rlen - 2);
+                strncpy(rel_buf + rlen + 1, comps[i], MAX_PATH - rlen - 2);
                 rel_buf[rlen + 1 + clen] = '\0';
             }
         }
         cur = next;
     }
 
+    kfree(rel_buf);
     *out = cur;
     return 0;
 }
@@ -485,33 +581,37 @@ int vfs_lookup_from(dentry_t *start, const char *path, dentry_t **out) {
     if (!path || !out)
         return -EINVAL;
 
-    char normalized[MAX_PATH];
+    char *normalized = kmalloc(MAX_PATH);
+    if (!normalized) return -ENOMEM;
+
     int err = dentry_normalize_path(start ? start : vfs_root, vfs_root,
-                                    path, normalized, sizeof(normalized));
-    if (err)
-        return err;
+                                    path, normalized, MAX_PATH);
+    if (err) { kfree(normalized); return err; }
 
     // Root lookup
     if (normalized[0] == '/' && normalized[1] == '\0') {
+        kfree(normalized);
         dentry_get(vfs_root);
         *out = vfs_root;
         return 0;
     }
 
-    char path_buf[MAX_PATH]; // dentry_split_path writes NULs into this
-    strncpy(path_buf, normalized, sizeof(path_buf) - 1);
-    path_buf[sizeof(path_buf) - 1] = '\0';
+    char *path_buf = kmalloc(MAX_PATH);
+    if (!path_buf) { kfree(normalized); return -ENOMEM; }
+    strncpy(path_buf, normalized, MAX_PATH - 1);
+    path_buf[MAX_PATH - 1] = '\0';
 
     char *comps[MAX_COMPONENTS];
     int n = dentry_split_path(path_buf, comps, MAX_COMPONENTS);
-    if (n < 0)
-        return -ENAMETOOLONG;
+    if (n < 0) { kfree(path_buf); kfree(normalized); return -ENAMETOOLONG; }
 
     mount_t *mnt = vfs_find_mount(normalized);
-    if (!mnt)
-        return -ENOENT;
+    kfree(normalized);
+    if (!mnt) { kfree(path_buf); return -ENOENT; }
 
-    return vfs_walk(vfs_root, mnt, comps, n, out);
+    int ret = vfs_walk(vfs_root, mnt, comps, n, out, 0);
+    kfree(path_buf);
+    return ret;
 }
 
 int vfs_lookup(const char *path, dentry_t **out) {
@@ -540,12 +640,14 @@ int vfs_create(const char *path, uint32_t mode) {
     return -1;
 }
 
+static int vfs_lookup_nofollow(dentry_t *start, const char *path, dentry_t **out);
+
 int vfs_unlink(const char *path) {
     if (!path)
         return -EINVAL;
 
     dentry_t *d = NULL;
-    int err = vfs_lookup_from(
+    int err = vfs_lookup_nofollow(
         current && current->fs ? current->fs->cwd : vfs_root,
         path, &d);
     if (err)
@@ -619,6 +721,22 @@ int vfs_readdir(dentry_t *dentry, uint32_t start_idx, void *buf, uint32_t bufsiz
     while (m) {
         if (m->cover && m->cover->d_parent == dentry) {
             size_t namelen = strlen(m->cover->d_name);
+
+            // Skip if the underlying FS already emitted an entry with this name.
+            int already_present = 0;
+            char *scan = (char *)buf;
+            char *scan_end = (char *)buf + n;
+            while (scan < scan_end) {
+                fs_dent_t *existing = (fs_dent_t *)scan;
+                if (existing->d_reclen == 0) break;
+                if (strcmp(existing->d_name, m->cover->d_name) == 0) {
+                    already_present = 1;
+                    break;
+                }
+                scan += existing->d_reclen;
+            }
+            if (already_present) { m = m->next; continue; }
+
             reclen_t reclen = FS_DENT_RECLEN(namelen);
             if (remaining < reclen)
                 break;
@@ -729,6 +847,204 @@ int vfs_rmdir(const char *path) {
         dentry_put(d);
     }
     return ret;
+}
+
+int vfs_link(const char *oldpath, const char *newpath) {
+    if (!oldpath || !newpath) return -EINVAL;
+
+    // Resolve oldpath without following symlinks for the final component so we
+    // get the actual file entry (not what a symlink points to).
+    dentry_t *old_d = NULL;
+    int err = vfs_lookup_from(
+        current && current->fs ? current->fs->cwd : vfs_root,
+        oldpath, &old_d);
+    if (err) return err;
+
+    if (old_d->d_vnode && old_d->d_vnode->type == VNODE_DIR) {
+        dentry_put(old_d);
+        return -EPERM; // POSIX: cannot hard-link a directory
+    }
+
+    mount_t *mnt = old_d->d_vnode ? old_d->d_vnode->mount : NULL;
+    if (!mnt || !mnt->fs_type->ops.link) {
+        dentry_put(old_d);
+        return -ENOSYS;
+    }
+
+    // Build relative path of old_d within its mount.
+    char old_rel[MAX_PATH];
+    if (dentry_build_path(old_d, mnt->root, old_rel, sizeof(old_rel)) != 0) {
+        dentry_put(old_d);
+        return -ENAMETOOLONG;
+    }
+
+    const char *or = old_rel[0] == '/' ? old_rel + 1 : old_rel;
+
+    // newpath relative to mount root.
+    size_t mp_len = strlen(mnt->mountpoint);
+    if (strncmp(newpath, mnt->mountpoint, mp_len) != 0) {
+        dentry_put(old_d);
+        return -EXDEV; // different filesystem
+    }
+
+    const char *nr = newpath + mp_len;
+    if (*nr == '/') nr++;
+
+    int ret = mnt->fs_type->ops.link(mnt, or, nr);
+
+    // On success, update the cached vnode's nlink so stat() returns the new count.
+    if (ret == 0 && old_d->d_vnode)
+        old_d->d_vnode->nlink++;
+
+    dentry_put(old_d);
+    return ret;
+}
+
+int vfs_symlink(const char *target, const char *linkpath) {
+    if (!target || !linkpath) return -EINVAL;
+
+    mount_t *mnt = vfs_find_mount(linkpath);
+    if (!mnt || !mnt->fs_type->ops.symlink) return -ENOSYS;
+
+    const char *rel = linkpath + strlen(mnt->mountpoint);
+    if (*rel == '/') rel++;
+
+    return mnt->fs_type->ops.symlink(mnt, target, rel);
+}
+
+// vfs_lookup_nofollow: like vfs_lookup_from but stops before following the
+// final symlink component, so readlink can obtain the symlink vnode itself.
+static int vfs_lookup_nofollow(dentry_t *start, const char *path, dentry_t **out) {
+    if (!path || !out) return -EINVAL;
+
+    char *normalized = kmalloc(MAX_PATH);
+    if (!normalized) return -ENOMEM;
+
+    int err = dentry_normalize_path(start ? start : vfs_root, vfs_root,
+                                    path, normalized, MAX_PATH);
+    if (err) { kfree(normalized); return err; }
+
+    if (normalized[0] == '/' && normalized[1] == '\0') {
+        kfree(normalized);
+        dentry_get(vfs_root);
+        *out = vfs_root;
+        return 0;
+    }
+
+    char *path_buf = kmalloc(MAX_PATH);
+    if (!path_buf) { kfree(normalized); return -ENOMEM; }
+    strncpy(path_buf, normalized, MAX_PATH - 1);
+    path_buf[MAX_PATH - 1] = '\0';
+
+    char *comps[MAX_COMPONENTS];
+    int n = dentry_split_path(path_buf, comps, MAX_COMPONENTS);
+    if (n < 0) { kfree(path_buf); kfree(normalized); return -ENAMETOOLONG; }
+
+    mount_t *mnt = vfs_find_mount(normalized);
+    if (!mnt) { kfree(path_buf); kfree(normalized); return -ENOENT; }
+
+    if (n == 1) {
+        dentry_get(vfs_root);
+        dentry_t *cur = vfs_root;
+        char *rel_buf = kmalloc(MAX_PATH);
+        if (!rel_buf) {
+            dentry_put(cur);
+            kfree(path_buf); kfree(normalized);
+            return -ENOMEM;
+        }
+        rel_buf[0] = '\0';
+        int crossed = 0;
+        dentry_t *child = NULL;
+        err = vfs_step(cur, &mnt, comps[0], rel_buf, 1, &crossed, &child);
+        kfree(rel_buf);
+        dentry_put(cur);
+        kfree(path_buf); kfree(normalized);
+        if (err) return err;
+        *out = child;
+        return 0;
+    }
+
+    // Walk all but the last component following symlinks normally, then do one
+    // raw vfs_step for the final component to get the symlink vnode itself.
+    char *parent_buf = kmalloc(MAX_PATH);
+    if (!parent_buf) { kfree(path_buf); kfree(normalized); return -ENOMEM; }
+    strncpy(parent_buf, normalized, MAX_PATH - 1);
+    parent_buf[MAX_PATH - 1] = '\0';
+    kfree(normalized);
+
+    // Rebuild parent path by stripping the last component.
+    char *last_slash = NULL;
+    for (char *p = parent_buf; *p; p++)
+        if (*p == '/') last_slash = p;
+    if (last_slash) {
+        if (last_slash == parent_buf)
+            parent_buf[1] = '\0';
+        else
+            *last_slash = '\0';
+    }
+
+    dentry_t *parent_d = NULL;
+    err = vfs_lookup_from(start, parent_buf, &parent_d);
+    kfree(parent_buf);
+    if (err) { kfree(path_buf); return err; }
+
+    mount_t *parent_mnt = parent_d->d_vnode ? parent_d->d_vnode->mount : mnt;
+
+    char *rel_buf = kmalloc(MAX_PATH);
+    char *par_rel = kmalloc(MAX_PATH);
+    if (!rel_buf || !par_rel) {
+        kfree(rel_buf); kfree(par_rel);
+        dentry_put(parent_d); kfree(path_buf);
+        return -ENOMEM;
+    }
+    rel_buf[0] = '\0';
+
+    if (dentry_build_path(parent_d, parent_mnt->root, par_rel, MAX_PATH) == 0) {
+        const char *r = par_rel[0] == '/' ? par_rel + 1 : par_rel;
+        strncpy(rel_buf, r, MAX_PATH - 1);
+        rel_buf[MAX_PATH - 1] = '\0';
+    }
+    kfree(par_rel);
+
+    int crossed = 0;
+    dentry_t *child = NULL;
+    err = vfs_step(parent_d, &parent_mnt, comps[n - 1], rel_buf, 1,
+                   &crossed, &child);
+    kfree(rel_buf);
+    dentry_put(parent_d);
+    kfree(path_buf);
+    if (err) return err;
+    *out = child;
+    return 0;
+}
+
+int vfs_lookup_nofollow_pub(dentry_t *start, const char *path, dentry_t **out) {
+    return vfs_lookup_nofollow(start, path, out);
+}
+
+ssize_t vfs_readlink(const char *path, char *buf, size_t size) {
+    if (!path || !buf || size == 0) return -EINVAL;
+
+    dentry_t *d = NULL;
+    int err = vfs_lookup_nofollow(
+        current && current->fs ? current->fs->cwd : vfs_root,
+        path, &d);
+    if (err) return err;
+
+    vnode_t *vn = d->d_vnode;
+    if (!vn || vn->type != VNODE_LNK) {
+        dentry_put(d);
+        return -EINVAL;
+    }
+
+    if (!vn->mount || !vn->mount->fs_type->ops.readlink) {
+        dentry_put(d);
+        return -ENOSYS;
+    }
+
+    ssize_t r = vn->mount->fs_type->ops.readlink(vn, buf, size);
+    dentry_put(d);
+    return r;
 }
 
 // -----------------------------------------------------------------------------

@@ -61,6 +61,7 @@
 #define SYS_fs_getdents  61
 #define SYS_stat     79
 #define SYS_fstat    80
+#define SYS_lstat    107
 #define SYS_link     86
 #define SYS_symlink  88
 #define SYS_readlink 89
@@ -107,9 +108,13 @@ char  *sys_getcwd(char *buf, size_t size);
 int sys_fs_getdents(int fd, void *dirp, uint32_t count);
 int sys_stat(const char *upath, struct stat *ustat);
 int sys_fstat(int fd, struct stat *ustat);
+int sys_lstat(const char *upath, struct stat *ustat);
 int sys_chmod(const char *upath, mode_t mode);
 int sys_fchmod(int fd, mode_t mode);
 int sys_rmdir(const char *path);
+int sys_link(const char *oldpath, const char *newpath);
+int sys_symlink(const char *target, const char *linkpath);
+ssize_t sys_readlink(const char *path, char *buf, size_t bufsiz);
 int    sys_getrusage(int who, struct rusage *usage);
 int    sys_gettimeofday(struct timeval_k *tv, void *tz);
 int    sys_nice(int increment);

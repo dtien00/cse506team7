@@ -14,6 +14,7 @@
 
 #define S_IFREG 0100000
 #define S_IFDIR 0040000
+#define S_IFLNK 0120000
 
 static void file_release(file_t *f);
 
@@ -461,13 +462,21 @@ static int vnode_fill_stat(vnode_t *vn, struct stat *kst) {
         case VNODE_DIR:
             type_bits = S_IFDIR;
             break;
+        case VNODE_LNK:
+            type_bits = S_IFLNK;
+            break;
         default:
             type_bits = 0;
             break;
     }
     kst->st_mode = (mode_t) (type_bits | (vn->mode & 0xFFF));
 
-    kst->st_nlink = (nlink_t) vn->nlink;
+    uint32_t nlink = vn->nlink;
+    if (vn->mount && vn->mount->fs_type && vn->mount->fs_type->ops.get_nlink)
+        nlink = vn->mount->fs_type->ops.get_nlink(vn);
+    printk("vnode_fill_stat: ino=%u vnode->nlink=%u fresh_nlink=%u\n",
+           (unsigned)vn->ino, (unsigned)vn->nlink, nlink);
+    kst->st_nlink = (nlink_t) nlink;
     kst->st_uid = 0; // no user model
     kst->st_gid = 0; // no group model
     kst->st_size = (off_t) vn->size;
@@ -485,6 +494,20 @@ int file_stat(const char *kpath, struct stat *kst) {
 
     dentry_t *d = NULL;
     int lookup_err = vfs_lookup_from(current->fs->cwd, kpath, &d);
+    if (lookup_err)
+        return lookup_err;
+
+    int ret = vnode_fill_stat(d->d_vnode, kst);
+    dentry_put(d);
+    return ret;
+}
+
+int file_lstat(const char *kpath, struct stat *kst) {
+    if (!kpath || !kst || !current || !current->fs)
+        return -EINVAL;
+
+    dentry_t *d = NULL;
+    int lookup_err = vfs_lookup_nofollow_pub(current->fs->cwd, kpath, &d);
     if (lookup_err)
         return lookup_err;
 
