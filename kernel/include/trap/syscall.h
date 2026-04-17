@@ -66,6 +66,10 @@
 #define SYS_readlink 89
 #define SYS_chmod    90
 #define SYS_fchmod   91
+#define SYS_nanosleep       92
+#define SYS_clock_nanosleep 93
+#define SYS_getitimer       94
+#define SYS_setitimer       95
 
 // Initialize syscall subsystem
 void syscall_init(void);
@@ -126,3 +130,9 @@ pid_t sys_setsid(void);
 pid_t sys_getpgid(pid_t pid);
 int   sys_tcsetpgrp(pid_t pgid);
 pid_t sys_tcgetpgrp(void);
+int sys_nanosleep(const struct timespec *req, struct timespec *rem);
+int sys_clock_nanosleep(clockid_t clockid, int flags,
+                        const struct timespec *req, struct timespec *rem);
+int sys_getitimer(int which, struct itimerval_k *curr_value);
+int sys_setitimer(int which, const struct itimerval_k *new_value,
+                  struct itimerval_k *old_value);

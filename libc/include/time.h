@@ -20,8 +20,12 @@ struct timespec {
     long   tv_nsec;
 };
 
-#define CLOCK_REALTIME  0
-#define CLOCK_MONOTONIC 1
+#define CLOCK_REALTIME           0
+#define CLOCK_MONOTONIC          1
+#define CLOCK_PROCESS_CPUTIME_ID 2
+#define CLOCK_THREAD_CPUTIME_ID  3
+
+#define TIMER_ABSTIME 1
 
 time_t time(time_t *tloc);
 int clock_gettime(int clk_id, struct timespec *tp);
@@ -33,5 +37,7 @@ char* ctime(const time_t *timep);
 size_t strftime(char *s, size_t max, const char *format, const struct tm *tm);
 
 int nanosleep(const struct timespec *req, struct timespec *rem);
+int clock_nanosleep(int clockid, int flags,
+                    const struct timespec *req, struct timespec *rem);
 
 #endif

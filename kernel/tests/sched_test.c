@@ -296,9 +296,119 @@ void sched_fairness_test_run(void) {
     printk("========================================\n");
 }
 
+/*
+ * sched_idle_test_run — kernel unit tests for idle-path behaviour.
+ *
+ * The real idle loop (wfi + swtch) cannot be exercised in RUN_TESTS mode
+ * because scheduler_context is not yet live.  Instead we verify the
+ * observable data-path properties that underpin correct idling:
+ *
+ * IT1: Empty MLFQ — proc_next_ready returns NULL (scheduler would idle).
+ * IT2: Recovery from empty — enqueue after drain; scheduler finds the proc.
+ * IT3: All levels empty — verify every mlfq[i] is NULL after full drain.
+ * IT4: Blocked proc does not satisfy proc_next_ready (stays in idle path).
+ * IT5: Wakeup from blocked — proc_unblock re-enqueues, breaking idle.
+ */
 void sched_idle_test_run(void) {
-    printk("[sched_idle_test_run] Not implemented yet.\n");
-    TEST("sched_idle_test_run stub", 0);
+    extern struct proc *mlfq[];
+
+    printk("\n========================================\n");
+    printk("  Scheduler Idle-Path Tests\n");
+    printk("========================================\n\n");
+
+    /* ── IT1: empty MLFQ returns NULL ──────────────────────────────────── */
+    printk("=== IT1: proc_next_ready returns NULL on empty MLFQ ===\n");
+    {
+        /* Drain anything left by earlier tests / init. */
+        struct proc *d;
+        while ((d = proc_next_ready()) != NULL) (void)d;
+
+        struct proc *got = proc_next_ready();
+        TEST("IT1: proc_next_ready returns NULL (idle trigger)", got == NULL);
+    }
+
+    /* ── IT2: recovery from empty — enqueue breaks idle ────────────────── */
+    printk("\n=== IT2: enqueue after drain breaks idle ===\n");
+    {
+        struct proc *d;
+        struct proc *p = proc_alloc();
+        TEST("IT2: proc_alloc", p != NULL);
+        if (p) {
+            proc_ready(p);
+            struct proc *got = proc_next_ready();
+            TEST("IT2: proc_next_ready returns enqueued proc", got == p);
+
+            /* Drain leftovers */
+            while ((d = proc_next_ready()) != NULL) (void)d;
+            proc_free(p);
+        }
+    }
+
+    /* ── IT3: all MLFQ levels are NULL after full drain ────────────────── */
+    printk("\n=== IT3: all mlfq[] levels NULL after drain ===\n");
+    {
+        struct proc *d;
+        while ((d = proc_next_ready()) != NULL) (void)d;
+
+        int all_empty = 1;
+        for (int i = 0; i < MLFQ_LEVELS; i++) {
+            if (mlfq[i] != NULL) { all_empty = 0; break; }
+        }
+        TEST("IT3: every mlfq level is NULL", all_empty);
+    }
+
+    /* ── IT4: BLOCKED proc does not satisfy proc_next_ready ────────────── */
+    printk("\n=== IT4: blocked proc invisible to scheduler ===\n");
+    {
+        struct proc *d;
+        while ((d = proc_next_ready()) != NULL) (void)d;
+
+        struct proc *p = proc_alloc();
+        TEST("IT4: proc_alloc", p != NULL);
+        if (p) {
+            proc_ready(p);
+            proc_block(p);
+            TEST("IT4: state is BLOCKED", p->state == PROC_BLOCKED);
+
+            struct proc *got = proc_next_ready();
+            TEST("IT4: proc_next_ready returns NULL (blocked not dequeued)", got == NULL);
+
+            /* Clean up: unblock then drain */
+            proc_unblock(p);
+            while ((d = proc_next_ready()) != NULL) (void)d;
+            proc_free(p);
+        }
+    }
+
+    /* ── IT5: unblock re-enqueues, scheduler finds proc ────────────────── */
+    printk("\n=== IT5: unblock re-enqueues proc (breaks idle) ===\n");
+    {
+        struct proc *d;
+        while ((d = proc_next_ready()) != NULL) (void)d;
+
+        struct proc *p = proc_alloc();
+        TEST("IT5: proc_alloc", p != NULL);
+        if (p) {
+            proc_ready(p);
+            proc_block(p);
+
+            /* MLFQ should be empty now */
+            TEST("IT5: MLFQ empty while blocked", proc_next_ready() == NULL);
+
+            proc_unblock(p);
+            TEST("IT5: state is READY after unblock", p->state == PROC_READY);
+
+            struct proc *got = proc_next_ready();
+            TEST("IT5: proc_next_ready finds unblocked proc", got == p);
+
+            while ((d = proc_next_ready()) != NULL) (void)d;
+            proc_free(p);
+        }
+    }
+
+    printk("\n========================================\n");
+    printk("  Results: %d passed, %d failed\n", passed, failed);
+    printk("========================================\n");
 }
 
 /* ------------------------------------------------------------------ */
