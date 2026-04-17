@@ -50,6 +50,7 @@ static int  job_resolve(const char *spec);
 static int  builtin_bg(char **argv);
 static int  builtin_fg(char **argv);
 static int  builtin_jobs(char **argv);
+static int  builtin_kill(char **argv);
 
 static int is_space(char ch) {
     return ch == ' ' || ch == '\t' || ch == '\n';
@@ -276,7 +277,7 @@ static int is_builtin(char **argv) {
     }
     return strcmp(argv[0], "cd") == 0 || strcmp(argv[0], "exit") == 0 ||
            strcmp(argv[0], "bg") == 0 || strcmp(argv[0], "fg") == 0 ||
-           strcmp(argv[0], "jobs") == 0;
+           strcmp(argv[0], "jobs") == 0 || strcmp(argv[0], "kill") == 0;
 }
 
 static int run_builtin(char **argv) {
@@ -289,6 +290,7 @@ static int run_builtin(char **argv) {
     if (strcmp(argv[0], "bg") == 0) return builtin_bg(argv);
     if (strcmp(argv[0], "fg") == 0) return builtin_fg(argv);
     if (strcmp(argv[0], "jobs") == 0) return builtin_jobs(argv);
+    if (strcmp(argv[0], "kill") == 0) return builtin_kill(argv);
     return -1;
 }
 
@@ -749,6 +751,59 @@ static int builtin_jobs(char **argv) {
             default:          state_str = "Unknown"; break;
         }
         printf("[%d]%c  %-10s %s\n", jobs[i].job_id, mark, state_str, jobs[i].command);
+    }
+    return 0;
+}
+
+static int builtin_kill(char **argv) {
+    if (!argv[1]) {
+        dprintf(STDERR_FILENO, "kill: usage: kill [-signal] pid|%%job\n");
+        return 1;
+    }
+
+    int sig = SIGTERM;
+    int arg_idx = 1;
+
+    // Parse optional -SIGNAL
+    if (argv[arg_idx][0] == '-' && argv[arg_idx][1] >= '0' &&
+        argv[arg_idx][1] <= '9') {
+        sig = atoi(argv[arg_idx] + 1);
+        arg_idx++;
+        if (!argv[arg_idx]) {
+            dprintf(STDERR_FILENO, "kill: missing pid or job spec\n");
+            return 1;
+        }
+    }
+
+    // Process each target
+    for (; argv[arg_idx]; arg_idx++) {
+        const char *target = argv[arg_idx];
+
+        if (target[0] == '%') {
+            // Job spec — resolve via shell job table
+            int idx = job_resolve(target);
+            if (idx < 0 || jobs[idx].state == JOB_UNUSED) {
+                dprintf(STDERR_FILENO, "kill: %s: no such job\n", target);
+                return 1;
+            }
+            pid_t pgid = jobs[idx].pgid;
+
+            // Send the requested signal to the process group
+            kill(-pgid, sig);
+
+            // A stopped process can't handle signals until continued.
+            // POSIX shells send SIGCONT so the target actually dies.
+            if (jobs[idx].state == JOB_STOPPED && sig != SIGCONT)
+                kill(-pgid, SIGCONT);
+        } else {
+            // Bare PID
+            pid_t pid = (pid_t)atoi(target);
+            if (pid == 0) {
+                dprintf(STDERR_FILENO, "kill: invalid pid: %s\n", target);
+                return 1;
+            }
+            kill(pid, sig);
+        }
     }
     return 0;
 }
