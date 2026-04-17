@@ -128,6 +128,9 @@ void printk(const char *fmt, ...) {
                 } else if (*p == 'u') {
                     const unsigned long v = va_arg(args, unsigned long);
                     put_u64_buf(buf, &idx, v);
+                } else if (*p == 'x') {
+                    const unsigned long v = va_arg(args, unsigned long);
+                    put_hex_buf(buf, &idx, v, 16);
                 } else {
                     putc_buf(buf, &idx, '%');
                     putc_buf(buf, &idx, 'l');
