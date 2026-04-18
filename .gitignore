@@ -15,3 +15,5 @@ dump/**
 /docs/
 /thirdparty/
 /rootfs/bin/
+/dev-remote.sh
+/.gdbinit

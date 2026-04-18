@@ -2,8 +2,11 @@
  * test_libc_stdlib.c — comprehensive stdlib.h conformance tests
  *
  * Covers: atoi/atol/atoll, strtol/strtoul/strtoll/strtoull, abs/labs/llabs,
- * div/ldiv/lldiv, rand/srand, qsort, bsearch, getenv/setenv/unsetenv,
+ * div/ldiv/lldiv, rand/srand, qsort, bsearch,
  * and atexit/exit (smoke only — we can't observe exit from here).
+ *
+ * getenv/setenv/unsetenv tests live in test_exec_envp.c alongside the
+ * exec-path envp tests they depend on.
  */
 
 #include <stdlib.h>
@@ -290,43 +293,6 @@ static void test_bsearch(us_test_group_t *g) {
     ut_group_end(g);
 }
 
-/* ---------- getenv / setenv / unsetenv ----------------------------- */
-static void test_env(us_test_group_t *g) {
-    char *v;
-
-    ut_group_begin(g, "getenv/setenv/unsetenv");
-
-    /* variable that is presumably not set */
-    v = getenv("_SBUNIX_LIBC_TEST_VAR_");
-    TEST(g, "getenv unset returns NULL", v == NULL);
-
-    /* setenv then getenv */
-    setenv("_SBUNIX_LIBC_TEST_VAR_", "hello", 1);
-    v = getenv("_SBUNIX_LIBC_TEST_VAR_");
-    TEST(g, "getenv after setenv", v != NULL && strcmp(v, "hello") == 0);
-
-    /* overwrite=0 must not change existing value */
-    setenv("_SBUNIX_LIBC_TEST_VAR_", "world", 0);
-    v = getenv("_SBUNIX_LIBC_TEST_VAR_");
-    TEST(g, "setenv overwrite=0 keeps old value", v != NULL && strcmp(v, "hello") == 0);
-
-    /* overwrite=1 changes value */
-    setenv("_SBUNIX_LIBC_TEST_VAR_", "world", 1);
-    v = getenv("_SBUNIX_LIBC_TEST_VAR_");
-    TEST(g, "setenv overwrite=1 updates value", v != NULL && strcmp(v, "world") == 0);
-
-    /* unsetenv */
-    unsetenv("_SBUNIX_LIBC_TEST_VAR_");
-    v = getenv("_SBUNIX_LIBC_TEST_VAR_");
-    TEST(g, "getenv after unsetenv returns NULL", v == NULL);
-
-    /* unsetenv a non-existent variable must not crash */
-    unsetenv("_SBUNIX_LIBC_TEST_VAR_");
-    TEST(g, "unsetenv non-existent no crash", 1);
-
-    ut_group_end(g);
-}
-
 /* ================================================================ entry point */
 
 void run_test_libc_stdlib(us_test_group_t groups[], int *idx) {
@@ -339,5 +305,4 @@ void run_test_libc_stdlib(us_test_group_t groups[], int *idx) {
     test_rand    (&groups[(*idx)++]);
     test_qsort   (&groups[(*idx)++]);
     test_bsearch (&groups[(*idx)++]);
-    test_env     (&groups[(*idx)++]);
 }

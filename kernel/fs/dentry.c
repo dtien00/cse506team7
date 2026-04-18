@@ -192,37 +192,51 @@ int dentry_build_path(dentry_t *d, dentry_t *root, char *buf, size_t size) {
     if (!d || !buf || size == 0)
         return -1;
 
-    // collect components walking upward
-    const char *segs[128];
-    int n = 0;
-    dentry_t *cur = d;
+    /*
+     * Build the path directly into buf in reverse (from end toward start),
+     * then shift the result to the front. This avoids a large on-stack
+     * segs[] pointer array that would overflow the kernel stack.
+     */
+    char *end = buf + size - 1;
+    char *p = end;
+    *p = '\0';
 
+    dentry_t *cur = d;
     while (cur && cur != root) {
         if (cur == cur->d_parent) {
-            /* Self-referencing mount root — cross to cover dentry in parent namespace */
             dentry_t *cover = vfs_find_cover_for_root(cur);
-            if (!cover) break; /* global root or unknown mount */
-            cur = cover;       /* jump to cover; next iteration collects its name */
+            if (!cover) break;
+            cur = cover;
         } else {
-            if (n >= 128) return -1;
-            segs[n++] = cur->d_name;
+            const char *name = cur->d_name;
+            size_t nlen = 0;
+            while (name[nlen]) nlen++;
+
+            if (p - buf < (int)(nlen + 1))
+                return -1; /* buf too small */
+
+            p -= nlen;
+            for (size_t i = 0; i < nlen; i++)
+                p[i] = name[i];
+            *(--p) = '/';
+
             cur = cur->d_parent;
         }
     }
 
-    // build string by reversing
-    char *p = buf;
-    char *end = buf + size - 1;
-
-    *p++ = '/';
-    for (int i = n - 1; i >= 0 && p < end; i--) {
-        const char *s = segs[i];
-        while (*s && p < end)
-            *p++ = *s++;
-        if (i > 0 && p < end)
-            *p++ = '/';
+    if (p == end) {
+        /* d was the root itself */
+        if (size < 2) return -1;
+        buf[0] = '/';
+        buf[1] = '\0';
+        return 0;
     }
-    *p = '\0';
+
+    /* shift result to front of buf */
+    size_t rlen = (size_t)(end - p);
+    for (size_t i = 0; i <= rlen; i++)
+        buf[i] = p[i];
+
     return 0;
 }
 
@@ -235,35 +249,47 @@ int dentry_normalize_path(dentry_t *start, dentry_t *root,
     if (!input || !out || size == 0)
         return -EINVAL;
 
-    char tmp[256]; // MAX_PATH
+    char *tmp = kmalloc(512);
+    if (!tmp) return -ENOMEM;
+    size_t tmp_size = 512;
     size_t pos = 0;
 
     if (input[0] == '/') {
         size_t i = 0;
-        while (input[i] && pos + 1 < sizeof(tmp))
+        while (input[i] && pos + 1 < tmp_size)
             tmp[pos++] = input[i++];
-        if (input[i] != '\0')
+        if (input[i] != '\0') {
+            kfree(tmp);
             return -ENAMETOOLONG;
+        }
         tmp[pos] = '\0';
     } else {
-        char base[256];
+        char *base = kmalloc(256);
+        if (!base) { kfree(tmp); return -ENOMEM; }
         dentry_t *base_dentry = start ? start : root;
-        if (!base_dentry)
+        if (!base_dentry) {
+            kfree(base); kfree(tmp);
             return -EINVAL;
+        }
 
-        if (dentry_build_path(base_dentry, root, base, sizeof(base)) != 0)
+        if (dentry_build_path(base_dentry, root, base, 256) != 0) {
+            kfree(base); kfree(tmp);
             return -ENAMETOOLONG;
+        }
 
         size_t i = 0;
-        while (base[i] && pos + 1 < sizeof(tmp))
+        while (base[i] && pos + 1 < tmp_size)
             tmp[pos++] = base[i++];
-        if (pos > 0 && tmp[pos - 1] != '/' && pos + 1 < sizeof(tmp))
+        if (pos > 0 && tmp[pos - 1] != '/' && pos + 1 < tmp_size)
             tmp[pos++] = '/';
         i = 0;
-        while (input[i] && pos + 1 < sizeof(tmp))
+        while (input[i] && pos + 1 < tmp_size)
             tmp[pos++] = input[i++];
-        if (input[i] != '\0')
+        kfree(base);
+        if (input[i] != '\0') {
+            kfree(tmp);
             return -ENAMETOOLONG;
+        }
         tmp[pos] = '\0';
     }
 
@@ -298,12 +324,16 @@ int dentry_normalize_path(dentry_t *start, dentry_t *root,
             }
         } else {
             if (opos > 1) {
-                if (opos + 1 >= size)
+                if (opos + 1 >= size) {
+                    kfree(tmp);
                     return -ENAMETOOLONG;
+                }
                 out[opos++] = '/';
             }
-            if (opos + clen >= size)
+            if (opos + clen >= size) {
+                kfree(tmp);
                 return -ENAMETOOLONG;
+            }
             for (size_t i = 0; i < clen; i++)
                 out[opos++] = p[i];
             out[opos] = '\0';
@@ -312,6 +342,7 @@ int dentry_normalize_path(dentry_t *start, dentry_t *root,
         p = *slash ? slash + 1 : slash;
     }
 
+    kfree(tmp);
     return 0;
 }
 

@@ -71,10 +71,10 @@ void proc_init(void) {
     static char *argv[] = { "init", NULL };
     // Set current to init so exec uses the right process
     current = init;
-    if (exec("/bin/init", argv) < 0) {
+    if (exec("/bin/init", argv, NULL) < 0) {
         printk("[init] exec failed for /bin/init, falling back to /bin/sh\n");
         static char *sh_argv[] = { "sh", NULL };
-        if (exec("/bin/sh", sh_argv) < 0)
+        if (exec("/bin/sh", sh_argv, NULL) < 0)
             printk("[init] exec failed fallback to /bin/sh\n");
     }
     proc_ready(init);
@@ -440,17 +440,135 @@ void proc_start_user(struct proc *p, uint64_t entry, uint64_t user_sp) {
     // correct architectural registers before the sret instruction fires.
     register uint64_t a0_r asm("a0") = p->regs[10]; /* argc */
     register uint64_t a1_r asm("a1") = p->regs[11]; /* argv */
+    register uint64_t a2_r asm("a2") = p->regs[12]; /* envp */
+    /* a0_r/a1_r/a2_r are not referenced by %N in the template, but GCC is
+     * required to hold named register variables in their bound register for
+     * the lifetime of the asm block.  They will be live in a0/a1/a2 at sret,
+     * giving userspace argc/argv/envp in the standard RISC-V calling convention. */
     asm volatile(
         "mv sp, %2\n"
         "sret\n"
         :
-        : "r"(a0_r), "r"(a1_r), "r"(user_sp)
+        : "r"(a0_r), "r"(a1_r), "r"(user_sp), "r"(a2_r)
         : "memory"
     );
     __builtin_unreachable();
 }
 
-int exec(const char *path, char *const argv[]) {
+/**
+ * build_user_stack - Construct the initial process stack in two passes.
+ *
+ * Pass 1: Measure total frame size (strings + pointer array + alignment).
+ *         Compute final sp once — no adjustments after this point.
+ * Pass 2: Write strings then pointer/metadata region at known offsets.
+ *
+ * Stack layout (addresses increase upward):
+ *   sp+0                        : argc (uintptr_t)
+ *   sp+8                        : argv[0] VA
+ *   ...
+ *   sp+(argc+1)*8               : NULL  (argv terminator)
+ *   sp+(argc+2)*8               : envp[0] VA
+ *   ...
+ *   sp+(argc+envc+2)*8          : NULL  (envp terminator)
+ *   sp+ptrs_bytes .. stack_top  : NUL-terminated strings
+ *
+ * Returns 0 on success, -1 on any failure.
+ */
+static int build_user_stack(pagetable_t pt, uintptr_t stack_top,
+                            char *const argv[], char *const envp[],
+                            uintptr_t *sp_out, uintptr_t *argv_out,
+                            uintptr_t *envp_out, int *argc_out) {
+    /* --- Pass 1: measure --- */
+    int argc = 0, envc = 0;
+    size_t argv_str_bytes = 0, envp_str_bytes = 0;
+
+    while (argv && argv[argc]) { argv_str_bytes += strlen(argv[argc]) + 1; argc++; }
+    while (envp && envp[envc]) { envp_str_bytes += strlen(envp[envc]) + 1; envc++; }
+
+    /* Pointer region: 1 word (argc) + argc words (argv ptrs) + 1 NULL
+     *               + envc words (envp ptrs) + 1 NULL              */
+    size_t ptrs_bytes    = (size_t)(1 + argc + 1 + envc + 1) * sizeof(uintptr_t);
+    size_t strings_bytes = argv_str_bytes + envp_str_bytes;
+    size_t total         = ptrs_bytes + strings_bytes;
+    total                = (total + 15u) & ~(size_t)15u; /* round up to 16 */
+
+    /* Sanity: must fit in the single pre-allocated stack page */
+    if (total > PGSIZE)
+        return -1;
+
+    /* stack_top (KERNBASE) is page-aligned (multiple of 16), and total is a
+     * multiple of 16, so sp is guaranteed 16-byte aligned.               */
+    uintptr_t sp = stack_top - total;
+
+    /* --- Pass 2: write --- */
+    uintptr_t *argv_va = (uintptr_t *)kmalloc((size_t)(argc + 1) * sizeof(uintptr_t));
+    if (!argv_va) return -1;
+    uintptr_t *envp_va = (uintptr_t *)kmalloc((size_t)(envc + 1) * sizeof(uintptr_t));
+    if (!envp_va) { kfree(argv_va); return -1; }
+
+    /* String region starts right after the pointer region */
+    uintptr_t str_cursor = sp + ptrs_bytes;
+
+    /* Safe to memcpy from a single vmm_translate per string: the total frame
+     * size was checked against PGSIZE above, so the entire frame — strings
+     * included — fits within one physical page. No string crosses a page
+     * boundary.                                                             */
+    /* Write argv strings */
+    for (int i = 0; i < argc; i++) {
+        size_t len = strlen(argv[i]) + 1;
+        uintptr_t pa = vmm_translate(pt, str_cursor);
+        if (!pa) { kfree(envp_va); kfree(argv_va); return -1; }
+        memcpy((void *)pa, argv[i], len);
+        argv_va[i] = str_cursor;
+        str_cursor += len;
+    }
+    argv_va[argc] = 0;
+
+    /* Same single-page invariant holds for envp strings. */
+    /* Write envp strings */
+    for (int i = 0; i < envc; i++) {
+        size_t len = strlen(envp[i]) + 1;
+        uintptr_t pa = vmm_translate(pt, str_cursor);
+        if (!pa) { kfree(envp_va); kfree(argv_va); return -1; }
+        memcpy((void *)pa, envp[i], len);
+        envp_va[i] = str_cursor;
+        str_cursor += len;
+    }
+    envp_va[envc] = 0;
+
+#define STACK_WRITE(va, val) do {                               \
+    uintptr_t _pa = vmm_translate(pt, (uintptr_t)(va));         \
+    if (!_pa) { kfree(envp_va); kfree(argv_va); return -1; }   \
+    *(uintptr_t *)_pa = (uintptr_t)(val);                       \
+} while (0)
+
+    uintptr_t user_argv = sp + sizeof(uintptr_t);
+    uintptr_t user_envp = user_argv + (uintptr_t)(argc + 1) * sizeof(uintptr_t);
+
+    /* Each pointer slot is 8 bytes and 8-byte-aligned; since the entire frame
+     * fits in one physical page (verified by total > PGSIZE guard), no slot
+     * crosses a page boundary. STACK_WRITE's single vmm_translate is safe.  */
+    STACK_WRITE(sp, (uintptr_t)argc);
+
+    for (int i = 0; i <= argc; i++)
+        STACK_WRITE(user_argv + (uintptr_t)i * sizeof(uintptr_t), argv_va[i]);
+
+    for (int i = 0; i <= envc; i++)
+        STACK_WRITE(user_envp + (uintptr_t)i * sizeof(uintptr_t), envp_va[i]);
+
+#undef STACK_WRITE
+
+    kfree(argv_va);
+    kfree(envp_va);
+
+    *sp_out   = sp;
+    *argv_out = user_argv;
+    *envp_out = user_envp;
+    *argc_out = argc;
+    return 0;
+}
+
+int exec(const char *path, char *const argv[], char *const envp[]) {
     // 1. Open the binary
     int fd = file_open(path);
     if (fd < 0) return -1;
@@ -567,60 +685,15 @@ int exec(const char *path, char *const argv[]) {
         goto fail_vma;
     }
 
-    // 6. Copy argv strings onto the user stack via physical addresses
-    int argc = 0;
-    while (argv && argv[argc]) argc++;
-
-    uintptr_t *argv_uvas = (uintptr_t *)kmalloc((size_t)(argc + 1) * sizeof(uintptr_t));
-    if (!argv_uvas) goto fail_vma;
-
-    uintptr_t sp = stack_top;
-    for (int i = argc - 1; i >= 0; i--) {
-        size_t len = strlen(argv[i]) + 1;
-        sp -= len;
-        uintptr_t pa = vmm_translate(new_pt, sp);
-        if (!pa) { kfree(argv_uvas); goto fail_vma; }
-        memcpy((void *)pa, argv[i], len);
-        argv_uvas[i] = sp;   // user-space VA of this string
-    }
-    argv_uvas[argc] = 0;     // NULL terminator
-
-    // Align sp to 16 bytes before the pointer arrays.
-    sp &= ~(uintptr_t)0xF;
-
-    // Push envp[0] = NULL (empty environment).  This must sit between the
-    // argv pointer array and the argv strings so that the standard ABI
-    // envp = argv + (argc+1)*8 lands on a NULL, not on the string data.
-    sp -= sizeof(uintptr_t);
-    {
-        uintptr_t envp_pa = vmm_translate(new_pt, sp);
-        if (!envp_pa) { kfree(argv_uvas); goto fail_vma; }
-        *(uintptr_t *)envp_pa = 0;
-    }
-
-    // Push the argv pointer array (argv[0]...argv[argc-1], NULL).
-    sp -= (uint64_t)(argc + 1) * sizeof(uintptr_t);
-    for (int i = 0; i <= argc; i++) {
-        uintptr_t slot_va = sp + (uint64_t)i * sizeof(uintptr_t);
-        uintptr_t slot_pa = vmm_translate(new_pt, slot_va);
-        if (!slot_pa) { kfree(argv_uvas); goto fail_vma; }
-        *(uintptr_t *)slot_pa = argv_uvas[i];
-    }
-    uintptr_t user_argv = sp;
-
-    // Push argc below the argv array so that sp points to argc on entry.
-    // Required by the standard Linux/POSIX _start ABI:
-    //   *(sp+0)             = argc
-    //   *(sp+8)             = argv[0]          (user_argv)
-    //   *(sp + (argc+1)*8)  = NULL             (argv terminator)
-    //   *(sp + (argc+2)*8)  = NULL             (envp[0], empty env)
-    sp -= sizeof(uintptr_t);
-    {
-        uintptr_t argc_pa = vmm_translate(new_pt, sp);
-        if (!argc_pa) { kfree(argv_uvas); goto fail_vma; }
-        *(uintptr_t *)argc_pa = (uintptr_t)argc;
-    }
-    kfree(argv_uvas);
+    // 6. Build user stack: argc/argv/envp strings and pointer arrays.
+    int argc;
+    uintptr_t sp = 0;
+    uintptr_t user_argv, user_envp;
+    // printk("gonna build the userspace process stack.\n");
+    // printk("argv[0]: %s", argv[0]);
+    if (build_user_stack(new_pt, stack_top, argv, envp,
+                         &sp, &user_argv, &user_envp, &argc) < 0)
+        goto fail_vma;
 
     // 7. Commit: install new address space, then tear down the old one.
     // Keep the old root alive until after SATP switches away from it.
@@ -660,12 +733,14 @@ int exec(const char *path, char *const argv[]) {
         current->trapframe->sp      = sp;
         current->trapframe->a0      = (uint64_t)argc;
         current->trapframe->a1      = user_argv;
+        current->trapframe->a2      = user_envp;
     }
     // Fallback proc fields for boot-time exec (no trapframe yet)
     current->pc       = ehdr.e_entry;
     current->sp       = sp;
     current->regs[10] = (uint64_t)argc;
     current->regs[11] = user_argv;
+    current->regs[12] = user_envp;
 
     // current->pagetable is already active after commit above.
 

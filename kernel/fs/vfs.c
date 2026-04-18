@@ -18,7 +18,7 @@
 #define VFS_MAX_SYMLINK_DEPTH 8
 
 static fs_type_t *fs_types = NULL;  // Linked list of registered filesystems
-static mount_t *mounts = NULL;      // Linked list of mount points
+static mount_t *mounts = NULL;      // Linked list of mount pointsj
 static uint32_t dev_counter = 0;
 
 // file-scope pool declarations for pool allocator
@@ -1061,8 +1061,6 @@ int vfs_chdir(const char *kpath) {
 
     // 3. Hand off to fs_struct — it looks up, validates, and swaps the cwd dentry
     int rc = fs_struct_set_cwd(current->fs, resolved);
-    printk("[vfs_chdir] fs_struct_set_cwd returned %d, new cwd dentry=%p\n",
-           rc, current->fs->cwd);
     return rc;
 }
 

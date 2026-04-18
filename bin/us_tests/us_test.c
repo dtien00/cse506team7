@@ -21,6 +21,8 @@
  */
 
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include "us_test_common.h"
 
 void run_test_printf(us_test_group_t *group);
@@ -64,12 +66,36 @@ void run_test_libc_string(us_test_group_t groups[], int *idx);
 void run_test_libc_ctype(us_test_group_t groups[], int *idx);
 void run_test_libc_stdio(us_test_group_t groups[], int *idx);
 void run_test_libc_stdlib(us_test_group_t groups[], int *idx);
+void run_test_exec_envp(us_test_group_t groups[], int *idx);
 void run_test_libc_time(us_test_group_t groups[], int *idx);
 
 /* base groups + 6 fs_persist sub-groups + libc conformance suites */
 #define MAX_GROUPS 200
 
-int main(void) {
+int main(int argc, char **argv, char **envp) {
+    /*
+     * Probe modes for execve(envp) tests.  Must run before any test
+     * infrastructure so the child process exits cleanly with a simple code.
+     *
+     *   --envp-probe KEY=VALUE   exit 0 if getenv(KEY) == VALUE
+     *   --envp-empty             exit 0 if getenv("SBX_SENTINEL") == NULL
+     */
+    if (argc >= 2 && strcmp(argv[1], "--envp-probe") == 0) {
+        if (argc < 3) return 2;
+        /* argv[2] is "KEY=VALUE"; split at '=' to get key and expected value */
+        char *eq = strchr(argv[2], '=');
+        if (!eq) return 2;
+        *eq = '\0';
+        const char *key = argv[2];
+        const char *expected = eq + 1;
+        char *got = getenv(key);
+        return (got && strcmp(got, expected) == 0) ? 0 : 3;
+    }
+    if (argc >= 2 && strcmp(argv[1], "--envp-empty") == 0) {
+        return (getenv("SBX_SENTINEL") == NULL) ? 0 : 4;
+    }
+    (void)envp; /* not used in normal test mode; environ is the live copy */
+
     us_test_group_t groups[MAX_GROUPS];
     int i;
     for (i = 0; i < MAX_GROUPS; i++) {
@@ -116,6 +142,7 @@ int main(void) {
     run_test_time(&groups[idx++]);
     run_test_links(groups, &idx);
     run_test_nanosleep(&groups[idx++]);
+    run_test_exec_envp(groups, &idx);
 
     /* comprehensive libc conformance tests */
     run_test_libc_string(groups, &idx);
