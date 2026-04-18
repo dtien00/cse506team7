@@ -67,6 +67,9 @@ int   setpgid(pid_t pid, pid_t pgid);
 pid_t getpgrp(void);
 int   setsid(void);
 
+int   tcsetpgrp(int fd, pid_t pgid);
+pid_t tcgetpgrp(int fd);
+
 int link(const char *oldpath, const char *newpath);
 int symlink(const char *target, const char *linkpath);
 ssize_t readlink(const char *pathname, char *buf, size_t bufsiz);

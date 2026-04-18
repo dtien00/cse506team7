@@ -12,6 +12,7 @@
 #include "lib/string.h"
 #include "elf/elf.h"
 #include "fs/file.h"
+#include "process/wait.h"
 
 #ifndef SEEK_SET
 #define SEEK_SET 0
@@ -265,47 +266,83 @@ int proc_wait(int *exit_code_out) {
 // options: 1 = WNOHANG (return 0 immediately if no qualifying child found).
 //          2 = WUNTRACED / 8 = WCONTINUED: accepted but no-op until SIGSTOP/SIGCONT are implemented.
 int proc_waitpid(pid_t target_pid, int *exit_code_out, int options) {
-    // POSIX: pid == -1 means wait for any child.
-    if (target_pid == -1)
-        return proc_wait(exit_code_out);
-
     if (!current) return -1;
+
+    // POSIX pid semantics:
+    //   -1      → any child
+    //   > 0     → specific child pid
+    //   0       → any child in caller's process group
+    //   < -1    → any child whose pgid == abs(pid)
+    // match_mode: 0 = specific pid, 1 = pgid match, 2 = any child
+    int match_mode = 0;
+    pid_t target_pgid = 0;
+    if (target_pid == -1) {
+        match_mode = 2;  // any child
+    } else if (target_pid < -1) {
+        match_mode = 1;
+        target_pgid = -target_pid;
+    } else if (target_pid == 0) {
+        match_mode = 1;
+        target_pgid = current->pgid;
+    }
+
     while (1) {
         int have_target = 0;
         struct proc *child = current->first_child;
         while (child) {
-            if (child->pid == target_pid) {
+            int matches;
+            switch (match_mode) {
+                case 2:  matches = 1; break;                          // any
+                case 1:  matches = (child->pgid == target_pgid); break; // pgid
+                default: matches = (child->pid == target_pid); break;   // specific
+            }
+            if (matches) {
                 have_target = 1;
                 if (child->state == PROC_ZOMBIE) {
-                    // Remove from parent's child list
                     struct proc **link = &current->first_child;
                     while (*link && *link != child) link = &(*link)->sibling;
                     if (*link == child) *link = child->sibling;
                     if (exit_code_out) {
                         set_csr_bit(sstatus, SSTATUS_SUM);
-                        // Negative exit_code means killed by signal (POSIX convention):
-                        //   signal death → low 7 bits = signal number (WIFSIGNALED)
-                        //   normal exit  → high byte  = exit status  (WIFEXITED)
                         if (child->exit_code < 0)
                             *exit_code_out = (-child->exit_code) & 0x7f;
                         else
                             *exit_code_out = (child->exit_code & 0xff) << 8;
                         clear_csr_bit(sstatus, SSTATUS_SUM);
                     }
-                    // Accumulate child CPU time into parent before freeing
                     current->children_utime += child->utime_ticks;
-
+                    pid_t ret = child->pid;
                     proc_free(child);
-                    return target_pid;
+                    return ret;
                 }
-                // WUNTRACED (options & 2): would report PROC_STOPPED children here once SIGSTOP is added.
-                // WCONTINUED (options & 8): would report cont_unreported children here once SIGCONT is added.
-                break;
+                // WUNTRACED: report PROC_STOPPED children
+                if ((options & WUNTRACED) && child->state == PROC_STOPPED && child->stop_unreported) {
+                    child->stop_unreported = 0;
+                    if (exit_code_out) {
+                        set_csr_bit(sstatus, SSTATUS_SUM);
+                        int ss = child->stop_signal ? child->stop_signal : SIGSTOP;
+                        *exit_code_out = (ss << 8) | 0x7f;
+                        clear_csr_bit(sstatus, SSTATUS_SUM);
+                    }
+                    return child->pid;
+                }
+                // WCONTINUED: report continued children
+                if ((options & WCONTINUED) && child->cont_unreported) {
+                    child->cont_unreported = 0;
+                    if (exit_code_out) {
+                        set_csr_bit(sstatus, SSTATUS_SUM);
+                        *exit_code_out = 0xffff;
+                        clear_csr_bit(sstatus, SSTATUS_SUM);
+                    }
+                    return child->pid;
+                }
+                // For multi-child matches, keep scanning siblings
+                if (match_mode == 0) break;
             }
             child = child->sibling;
         }
-        if (!have_target) return -1;  // not our child
-        if (options & 1) return 0;    // WNOHANG: no qualifying child found, don't block
+        if (!have_target) return -1;
+        if (options & 1) return 0;    // WNOHANG
         proc_sleep(current);
     }
 }
@@ -675,6 +712,11 @@ int exec(const char *path, char *const argv[], char *const envp[]) {
     current->vma_list = new_vma_list;
     current->sz        = highest_seg_end;
     current->satp      = MAKE_SATP((uintptr_t)new_pt);
+    
+    // Reset MLFQ scheduling state so the new image starts fresh.
+    current->mlfq_level = 0;
+    current->time_slice = 1;   // 1 << 0
+    current->total_time = 0;
 
     // Switch to the new page table before freeing old page-table pages.
     vmm_switch(current->pagetable);

@@ -261,9 +261,13 @@ void trap_handler(trap_frame *frame) {
     if (current && !(frame->sstatus & SSTATUS_SPP)) {
         // Deliver pending signals before every return to user mode.
         // Catches processes signaled while running in tight loops (no syscalls).
+        // Stop signals: SIGSTOP is unmaskable; SIGTSTP/SIGTTIN/SIGTTOU respect signal_mask.
         uint32_t pending_stop = current->pending_signals & KERNEL_STOP_SIGS;
+        uint32_t catchable_stops = pending_stop & ~(1U << KERNEL_SIGSTOP);
+        pending_stop &= ~(catchable_stops & current->signal_mask);
         if (pending_stop) {
             current->pending_signals &= ~pending_stop;
+            current->stop_signal = (uint8_t)kernel_ctz(pending_stop);
             proc_stop(current);  // yields; resumes after SIGCONT
         }
 
@@ -524,6 +528,16 @@ void timer_handler(void) {
             // syscall.c:670) so the process wakes regardless of which
             // channel it slept on.  Guard on PROC_BLOCKED so we do not
             // disturb a process that is already RUNNING or READY.
+            if (p->state == PROC_BLOCKED)
+                proc_unblock(p);
+        }
+        // ITIMER_REAL: fire SIGALRM and auto-reload if interval is set
+        if (p->itimer_value != 0 && timer_ticks >= p->itimer_value) {
+            if (p->itimer_interval != 0)
+                p->itimer_value = timer_ticks + p->itimer_interval;
+            else
+                p->itimer_value = 0;
+            p->pending_signals |= (1U << KERNEL_SIGALRM);
             if (p->state == PROC_BLOCKED)
                 proc_unblock(p);
         }

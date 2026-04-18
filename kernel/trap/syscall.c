@@ -42,10 +42,14 @@ void syscall_handler(trap_frame *frame) {
     }
 
     if (current) {
-        // SIGSTOP: cannot be masked, handle before any other signal (POSIX)
+        // Stop signals: SIGSTOP is unmaskable; SIGTSTP/SIGTTIN/SIGTTOU respect signal_mask.
         uint32_t pending_stop = current->pending_signals & KERNEL_STOP_SIGS;
+        // Keep masked catchable stop signals pending (only SIGSTOP is unmaskable)
+        uint32_t catchable_stops = pending_stop & ~(1U << KERNEL_SIGSTOP);
+        pending_stop &= ~(catchable_stops & current->signal_mask);
         if (pending_stop) {
             current->pending_signals &= ~pending_stop;
+            current->stop_signal = (uint8_t)kernel_ctz(pending_stop);
             proc_stop(current);
             // Execution resumes here after SIGCONT.
             // Re-evaluate signals — new ones may have arrived while stopped.
@@ -94,7 +98,7 @@ void syscall_handler(trap_frame *frame) {
     // exec rewrites the entire trapframe on success; handle before the
     // generic ret path so frame->a0 is not overwritten afterwards.
     if (syscall_num == SYS_exec) {
-        char  kpath[KARG_MAX];
+        char kpath[KARG_MAX];
         char *kargv[MAX_ARGS + 1];
         char *kenvp[MAX_ARGS + 1];
         int   argc = 0, envc = 0;
@@ -155,6 +159,13 @@ void syscall_handler(trap_frame *frame) {
         if (rc < 0) {
             printk("[exec] exec(%s) failed rc=%d argc=%d\n", kpath, rc, argc);
             frame->a0 = (uint64_t)-1LL;
+        } else {
+            // Update process name to the basename of the executed binary
+            const char *base = kpath;
+            for (const char *p = kpath; *p; p++)
+                if (*p == '/') base = p + 1;
+            strncpy(current->name, base, MAX_NAME - 1);
+            current->name[MAX_NAME - 1] = '\0';
         }
         return;
     }
@@ -239,6 +250,19 @@ void syscall_handler(trap_frame *frame) {
             ret = sys_unlink((const char *) arg0);
             break;
 
+        case SYS_link:
+            ret = sys_link((const char *)arg0, (const char *)arg1);
+            break;
+
+        case SYS_symlink:
+            ret = sys_symlink((const char *)arg0, (const char *)arg1);
+            break;
+
+        case SYS_readlink:
+            ret = (uint64_t)(int64_t)sys_readlink(
+                      (const char *)arg0, (char *)arg1, (size_t)arg2);
+            break;
+
         case SYS_mkdir:
             ret = sys_mkdir((const char *) arg0, (mode_t) arg1);
             break;
@@ -319,6 +343,10 @@ void syscall_handler(trap_frame *frame) {
             ret = sys_fstat((int)arg0, (void *)arg1);
             break;
 
+        case SYS_lstat:
+            ret = sys_lstat((const char *)arg0, (void *)arg1);
+            break;
+
         case SYS_chmod:
             ret = sys_chmod((const char *)arg0, (mode_t)arg1);
             break;
@@ -363,6 +391,34 @@ void syscall_handler(trap_frame *frame) {
 
         case SYS_getpgid:
             ret = sys_getpgid((pid_t)arg0);
+            break;
+
+        case SYS_tcsetpgrp:
+            ret = sys_tcsetpgrp((pid_t)arg1);
+            break;
+
+        case SYS_tcgetpgrp:
+            ret = sys_tcgetpgrp();
+            break;
+
+        case SYS_nanosleep:
+            ret = sys_nanosleep((const struct timespec *)arg0,
+                                (struct timespec *)arg1);
+            break;
+
+        case SYS_clock_nanosleep:
+            ret = sys_clock_nanosleep((clockid_t)arg0, (int)arg1,
+                                      (const struct timespec *)arg2,
+                                      (struct timespec *)arg3);
+            break;
+
+        case SYS_getitimer:
+            ret = sys_getitimer((int)arg0, (struct itimerval_k *)arg1);
+            break;
+
+        case SYS_setitimer:
+            ret = sys_setitimer((int)arg0, (const struct itimerval_k *)arg1,
+                                (struct itimerval_k *)arg2);
             break;
 
         default:
@@ -701,16 +757,14 @@ pid_t sys_getppid(void) {
 int sys_sleep(int seconds) {
     if (seconds <= 0) return 0;
     uint64_t wake_at = timer_ticks + (uint64_t)seconds * TICKS_PER_SEC;
-    current->wake_tick = wake_at;
-    proc_sleep(current);   // sleep on self; timer_handler calls proc_wakeup(p)
-    // Clear wake_tick: if we were woken early by a signal, a stale non-zero
-    // wake_tick would cause the timer to attempt proc_wakeup() on a running process.
-    current->wake_tick = 0;
-    // POSIX: return the number of seconds left to sleep if interrupted early.
-    if (timer_ticks < wake_at) {
-        uint64_t ticks_left = wake_at - timer_ticks;
-        return (int)(ticks_left / TICKS_PER_SEC);
-    }
+    // Loop: if woken early by stop/continue (SIGTSTP+SIGCONT), go back to
+    // sleep for the remaining time.  Fatal signals (SIGINT, SIGKILL, …) are
+    // handled inside proc_sleep (calls proc_exit), so we never loop on those.
+    do {
+        current->wake_tick = wake_at;
+        proc_sleep(current);   // sleep on self; timer_handler calls proc_wakeup(p)
+        current->wake_tick = 0;
+    } while (timer_ticks < wake_at);
     return 0;
 }
 
@@ -740,12 +794,20 @@ int sys_kill(pid_t pid, int sig) {
                 p->pending_signals &= ~KERNEL_STOP_SIGS;
                 if (p->state == PROC_STOPPED)
                     proc_unstop(p);
-            } else if (sig == KERNEL_SIGSTOP) {
-                p->pending_signals &= ~(1U << KERNEL_SIGCONT);
-                if (p->state == PROC_READY || p->state == PROC_BLOCKED)
-                    proc_stop(p);
-                else
-                    p->pending_signals |= KERNEL_STOP_SIGS;
+            } else if ((1U << sig) & KERNEL_STOP_SIGS) {
+                // POSIX: SIG_IGN discards catchable stop signals entirely
+                if (sig != KERNEL_SIGSTOP && p->handlers[sig] == (void *)1 /* SIG_IGN */)
+                    continue;
+                if (sig != KERNEL_SIGSTOP && (p->signal_mask & (1U << sig))) {
+                    p->pending_signals |= (1U << sig);
+                } else {
+                    p->pending_signals &= ~(1U << KERNEL_SIGCONT);
+                    if (p->state == PROC_READY || p->state == PROC_BLOCKED) {
+                        p->stop_signal = (uint8_t)sig;
+                        proc_stop(p);
+                    } else
+                        p->pending_signals |= (1U << sig);
+                }
             } else {
                 p->pending_signals |= (1U << sig);
                 if (p->state == PROC_BLOCKED &&
@@ -784,12 +846,20 @@ int sys_kill(pid_t pid, int sig) {
                 p->pending_signals &= ~KERNEL_STOP_SIGS;
                 if (p->state == PROC_STOPPED)
                     proc_unstop(p);
-            } else if (sig == KERNEL_SIGSTOP) {
-                p->pending_signals &= ~(1U << KERNEL_SIGCONT);
-                if (p->state == PROC_READY || p->state == PROC_BLOCKED)
-                    proc_stop(p);
-                else
-                    p->pending_signals |= KERNEL_STOP_SIGS;
+            } else if ((1U << sig) & KERNEL_STOP_SIGS) {
+                // POSIX: SIG_IGN discards catchable stop signals entirely
+                if (sig != KERNEL_SIGSTOP && p->handlers[sig] == (void *)1 /* SIG_IGN */)
+                    continue;
+                if (sig != KERNEL_SIGSTOP && (p->signal_mask & (1U << sig))) {
+                    p->pending_signals |= (1U << sig);
+                } else {
+                    p->pending_signals &= ~(1U << KERNEL_SIGCONT);
+                    if (p->state == PROC_READY || p->state == PROC_BLOCKED) {
+                        p->stop_signal = (uint8_t)sig;
+                        proc_stop(p);
+                    } else
+                        p->pending_signals |= (1U << sig);
+                }
             } else {
                 p->pending_signals |= (1U << sig);
                 if (p->state == PROC_BLOCKED &&
@@ -815,14 +885,24 @@ int sys_kill(pid_t pid, int sig) {
         return 0;
     }
 
-    // SIGSTOP cannot be masked (POSIX). Act immediately when possible.
-    if (sig == SIGSTOP) {
+    // Stop signals: act immediately when possible.
+    // SIGSTOP is unmaskable (POSIX); SIGTSTP/SIGTTIN/SIGTTOU respect signal_mask.
+    // POSIX: SIG_IGN discards catchable stop signals entirely.
+    if ((1U << sig) & KERNEL_STOP_SIGS) {
+        if (sig != KERNEL_SIGSTOP && target->handlers[sig] == (void *)1 /* SIG_IGN */)
+            return 0;
+        if (sig != KERNEL_SIGSTOP && (target->signal_mask & (1U << sig))) {
+            // Catchable stop signal is masked — just pend it
+            target->pending_signals |= (1U << sig);
+            return 0;
+        }
         target->pending_signals &= ~(1U << KERNEL_SIGCONT); // discard pending CONT
-        if (target->state == PROC_READY || target->state == PROC_BLOCKED)
+        if (target->state == PROC_READY || target->state == PROC_BLOCKED) {
+            target->stop_signal = (uint8_t)sig;
             proc_stop(target);
-        else
+        } else
             // Target is RUNNING (unreachable single-core) — defer via pending bit
-            target->pending_signals |= KERNEL_STOP_SIGS;
+            target->pending_signals |= (1U << sig);
         return 0;
     }
 
@@ -1097,6 +1177,88 @@ int sys_unlink(const char *path) {
     return vfs_unlink(kpath);
 }
 
+int sys_link(const char *uoldpath, const char *unewpath) {
+    if (!current) return -1;
+
+    char *kold = kmalloc(MAX_PATH);
+    char *knew = kmalloc(MAX_PATH);
+    if (!kold || !knew) { kfree(kold); kfree(knew); return -ENOMEM; }
+
+    set_csr_bit(sstatus, SSTATUS_SUM);
+    strncpy(kold, uoldpath, MAX_PATH - 1);
+    kold[MAX_PATH - 1] = '\0';
+    strncpy(knew, unewpath, MAX_PATH - 1);
+    knew[MAX_PATH - 1] = '\0';
+    clear_csr_bit(sstatus, SSTATUS_SUM);
+
+    if (dentry_normalize_path(current->fs->cwd, vfs_get_root(),
+                              kold, kold, MAX_PATH) < 0) {
+        kfree(kold); kfree(knew); return -ENAMETOOLONG;
+    }
+    if (dentry_normalize_path(current->fs->cwd, vfs_get_root(),
+                              knew, knew, MAX_PATH) < 0) {
+        kfree(kold); kfree(knew); return -ENAMETOOLONG;
+    }
+
+    int ret = vfs_link(kold, knew);
+    kfree(kold); kfree(knew);
+    return ret;
+}
+
+int sys_symlink(const char *utarget, const char *ulinkpath) {
+    if (!current) return -1;
+
+    char *ktarget   = kmalloc(MAX_PATH);
+    char *klinkpath = kmalloc(MAX_PATH);
+    if (!ktarget || !klinkpath) { kfree(ktarget); kfree(klinkpath); return -ENOMEM; }
+
+    set_csr_bit(sstatus, SSTATUS_SUM);
+    strncpy(ktarget,   utarget,   MAX_PATH - 1);
+    ktarget[MAX_PATH - 1] = '\0';
+    strncpy(klinkpath, ulinkpath, MAX_PATH - 1);
+    klinkpath[MAX_PATH - 1] = '\0';
+    clear_csr_bit(sstatus, SSTATUS_SUM);
+
+    if (dentry_normalize_path(current->fs->cwd, vfs_get_root(),
+                              klinkpath, klinkpath, MAX_PATH) < 0) {
+        kfree(ktarget); kfree(klinkpath); return -ENAMETOOLONG;
+    }
+
+    int ret = vfs_symlink(ktarget, klinkpath);
+    kfree(ktarget); kfree(klinkpath);
+    return ret;
+}
+
+ssize_t sys_readlink(const char *upath, char *ubuf, size_t bufsiz) {
+    if (!current || bufsiz == 0) return -EINVAL;
+
+    char *kpath = kmalloc(MAX_PATH);
+    if (!kpath) return -ENOMEM;
+
+    set_csr_bit(sstatus, SSTATUS_SUM);
+    strncpy(kpath, upath, MAX_PATH - 1);
+    kpath[MAX_PATH - 1] = '\0';
+    clear_csr_bit(sstatus, SSTATUS_SUM);
+
+    if (dentry_normalize_path(current->fs->cwd, vfs_get_root(),
+                              kpath, kpath, MAX_PATH) < 0) {
+        kfree(kpath); return -ENAMETOOLONG;
+    }
+
+    char *kbuf = kmalloc(MAX_PATH);
+    if (!kbuf) { kfree(kpath); return -ENOMEM; }
+    size_t copy_size = bufsiz < MAX_PATH ? bufsiz : MAX_PATH;
+    ssize_t r = vfs_readlink(kpath, kbuf, copy_size);
+    kfree(kpath);
+    if (r < 0) { kfree(kbuf); return r; }
+
+    set_csr_bit(sstatus, SSTATUS_SUM);
+    memcpy(ubuf, kbuf, (size_t)r);
+    clear_csr_bit(sstatus, SSTATUS_SUM);
+    kfree(kbuf);
+    return r;
+}
+
 int sys_mkdir(const char *path, mode_t mode) {
     if (!current) return -1;
 
@@ -1258,17 +1420,11 @@ int sys_gettimeofday(struct timeval_k *tv, void *tz) {
         struct timeval_k ktv;
         ktv.tv_sec  = ns / 1000000000ULL;
         ktv.tv_usec = (ns % 1000000000ULL) / 1000ULL;
-        set_csr_bit(sstatus, SSTATUS_SUM);
-        *tv = ktv;
-        clear_csr_bit(sstatus, SSTATUS_SUM);
+        copy_to_user(tv, &ktv, sizeof(ktv));
     }
     if (tz) {
-        // struct timezone = { int tz_minuteswest; int tz_dsttime; }
-        // Always return UTC (both fields zero).
         int zeros[2] = {0, 0};
-        set_csr_bit(sstatus, SSTATUS_SUM);
-        __builtin_memcpy(tz, zeros, sizeof(zeros));
-        clear_csr_bit(sstatus, SSTATUS_SUM);
+        copy_to_user(tz, zeros, sizeof(zeros));
     }
     return 0;
 }
@@ -1391,6 +1547,22 @@ int sys_stat(const char *upath, struct stat *ustat)
     // 3. Copy result back to user
     copy_to_user(ustat, &kst, sizeof(struct stat));
 
+    return 0;
+}
+
+int sys_lstat(const char *upath, struct stat *ustat)
+{
+    if (!current || !upath || !ustat) return -EINVAL;
+
+    char kpath[MAX_PATH];
+    strncpy_from_user(kpath, upath, MAX_PATH - 1);
+    kpath[MAX_PATH - 1] = '\0';
+
+    struct stat kst;
+    int ret = file_lstat(kpath, &kst);
+    if (ret != 0) return ret;
+
+    copy_to_user(ustat, &kst, sizeof(struct stat));
     return 0;
 }
 
@@ -1545,10 +1717,15 @@ int sys_sigsuspend(const uint32_t *mask) {
      * are now unmasked by new_mask, which proc_wakeup() would never fire for.
      */
 
-    /* Step 1: SIGSTOP — cannot be masked; highest priority. */
+    /* Step 1: Stop signals — SIGSTOP unmaskable; others respect signal_mask. */
     uint32_t pending_stop = current->pending_signals & KERNEL_STOP_SIGS;
+    {
+        uint32_t catchable_stops = pending_stop & ~(1U << KERNEL_SIGSTOP);
+        pending_stop &= ~(catchable_stops & current->signal_mask);
+    }
     if (pending_stop) {
         current->pending_signals &= ~pending_stop;
+        current->stop_signal = (uint8_t)kernel_ctz(pending_stop);
         proc_stop(current);
         /* Resumes here after SIGCONT is delivered. */
     }
@@ -1678,4 +1855,203 @@ pid_t sys_getpgid(pid_t pid) {
     if (!p || p->state == PROC_UNUSED || p->state == PROC_ZOMBIE)
         return -1;
     return p->pgid;
+}
+
+/*
+ * sys_tcsetpgrp — set the foreground process group of the terminal.
+ *
+ * Simplified version: no fd parameter, always operates on console_term.
+ * The shell calls this before running each foreground job so the terminal
+ * knows which process group to signal on Ctrl-Z / Ctrl-C.
+ */
+int sys_tcsetpgrp(pid_t pgid) {
+    if (!current) return -1;
+    console_term.foreground_pgid = pgid;
+    return 0;
+}
+
+/*
+ * sys_tcgetpgrp — return the foreground process group of the terminal.
+ */
+pid_t sys_tcgetpgrp(void) {
+    return console_term.foreground_pgid;
+}
+
+int sys_nanosleep(const struct timespec *req, struct timespec *rem) {
+    if (!req) return -1;
+
+    /* Read request from userspace via safe copy (sets/clears SUM). */
+    struct timespec kreq;
+    copy_from_user(&kreq, req, sizeof(kreq));
+    long sec  = kreq.tv_sec;
+    long nsec = kreq.tv_nsec;
+
+    if (sec < 0 || nsec < 0 || nsec >= 1000000000L) return -EINVAL;
+
+    /* Convert to ticks, rounding up to the next tick boundary. */
+    uint64_t ns_per_tick = 1000000000ULL / TICKS_PER_SEC;
+    uint64_t ticks = (uint64_t)sec * TICKS_PER_SEC +
+                     ((uint64_t)nsec + ns_per_tick - 1) / ns_per_tick;
+    if (ticks == 0) {
+        if (rem) {
+            struct timespec krem = {0, 0};
+            copy_to_user(rem, &krem, sizeof(krem));
+        }
+        return 0;
+    }
+
+    /*
+     * Sleep on the process itself.  timer_handler() detects expiry via
+     * wake_tick and calls proc_wakeup(p) where p == current, which matches
+     * the channel we pass to proc_sleep().  Signal delivery uses
+     * proc_unblock() and wakes us regardless of channel.
+     */
+    current->wake_tick = timer_ticks + ticks;
+    proc_sleep(current);
+
+    /*
+     * Determine why we woke.  timer_handler() clears wake_tick to 0 before
+     * calling proc_wakeup(), so wake_tick == 0 means normal expiry and
+     * wake_tick != 0 means a signal interrupted us early.
+     */
+    if (current->wake_tick == 0) {
+        if (rem) {
+            struct timespec krem = {0, 0};
+            copy_to_user(rem, &krem, sizeof(krem));
+        }
+        return 0;
+    }
+
+    /* Signal interrupted — report remaining time, clear the pending tick. */
+    uint64_t ticks_left = current->wake_tick - timer_ticks;
+    current->wake_tick = 0;
+    if (rem) {
+        struct timespec krem;
+        krem.tv_sec  = (long)(ticks_left / TICKS_PER_SEC);
+        krem.tv_nsec = (long)((ticks_left % TICKS_PER_SEC) * ns_per_tick);
+        copy_to_user(rem, &krem, sizeof(krem));
+    }
+    return -EINTR;
+}
+
+int sys_clock_nanosleep(clockid_t clockid, int flags,
+                        const struct timespec *req, struct timespec *rem) {
+    if (!req) return -1;
+    if (clockid == CLOCK_REALTIME) return -1;
+    if (clockid != CLOCK_MONOTONIC) return -EINVAL;
+
+    /* Read request from userspace via safe copy (sets/clears SUM). */
+    struct timespec kreq;
+    copy_from_user(&kreq, req, sizeof(kreq));
+    long sec  = kreq.tv_sec;
+    long nsec = kreq.tv_nsec;
+
+    if (nsec < 0 || nsec >= 1000000000L) return -EINVAL;
+
+    uint64_t ns_per_tick = 1000000000ULL / TICKS_PER_SEC;
+    uint64_t ticks;
+
+    if (flags == TIMER_ABSTIME) {
+        /* Absolute time: sleep until the given tick value is reached. */
+        if (sec < 0) return 0;   /* already in the past */
+        uint64_t abs_ticks = (uint64_t)sec * TICKS_PER_SEC +
+                             ((uint64_t)nsec + ns_per_tick - 1) / ns_per_tick;
+        if (abs_ticks <= timer_ticks) return 0;
+        ticks = abs_ticks - timer_ticks;
+        rem = NULL;   /* POSIX: rem unused for TIMER_ABSTIME */
+    } else {
+        /* Relative time — same logic as sys_nanosleep(). */
+        if (sec < 0) return -EINVAL;
+        ticks = (uint64_t)sec * TICKS_PER_SEC +
+                ((uint64_t)nsec + ns_per_tick - 1) / ns_per_tick;
+    }
+
+    if (ticks == 0) return 0;
+
+    current->wake_tick = timer_ticks + ticks;
+    proc_sleep(current);
+
+    if (current->wake_tick == 0) {
+        if (rem) {
+            struct timespec krem = {0, 0};
+            copy_to_user(rem, &krem, sizeof(krem));
+        }
+        return 0;
+    }
+
+    uint64_t ticks_left = current->wake_tick - timer_ticks;
+    current->wake_tick = 0;
+    if (rem) {
+        struct timespec krem;
+        krem.tv_sec  = (long)(ticks_left / TICKS_PER_SEC);
+        krem.tv_nsec = (long)((ticks_left % TICKS_PER_SEC) * ns_per_tick);
+        copy_to_user(rem, &krem, sizeof(krem));
+    }
+    return -EINTR;
+}
+
+/* ---------- helpers: convert between ticks and timeval_k ---------- */
+
+static void ticks_to_timeval(uint64_t ticks, struct timeval_k *tv) {
+    tv->tv_sec  = ticks / TICKS_PER_SEC;
+    tv->tv_usec = (ticks % TICKS_PER_SEC) * (1000000ULL / TICKS_PER_SEC);
+}
+
+static uint64_t timeval_to_ticks(const struct timeval_k *tv) {
+    uint64_t us_per_tick = 1000000ULL / TICKS_PER_SEC;
+    return tv->tv_sec * TICKS_PER_SEC +
+           (tv->tv_usec + us_per_tick - 1) / us_per_tick;   /* round up */
+}
+
+/* ---------- sys_getitimer / sys_setitimer ---------- */
+
+int sys_getitimer(int which, struct itimerval_k *curr_value) {
+    if (which != ITIMER_REAL) return -EINVAL;
+    if (!curr_value) return -EINVAL;
+
+    struct itimerval_k kval;
+    memset(&kval, 0, sizeof(kval));
+
+    if (current->itimer_value != 0 && current->itimer_value > timer_ticks) {
+        ticks_to_timeval(current->itimer_value - timer_ticks, &kval.it_value);
+    }
+    ticks_to_timeval(current->itimer_interval, &kval.it_interval);
+
+    copy_to_user(curr_value, &kval, sizeof(kval));
+    return 0;
+}
+
+int sys_setitimer(int which, const struct itimerval_k *new_value,
+                  struct itimerval_k *old_value) {
+    if (which != ITIMER_REAL) return -EINVAL;
+
+    /* Return previous timer state if requested */
+    if (old_value) {
+        struct itimerval_k kold;
+        memset(&kold, 0, sizeof(kold));
+        if (current->itimer_value != 0 && current->itimer_value > timer_ticks)
+            ticks_to_timeval(current->itimer_value - timer_ticks, &kold.it_value);
+        ticks_to_timeval(current->itimer_interval, &kold.it_interval);
+        copy_to_user(old_value, &kold, sizeof(kold));
+    }
+
+    /* Arm or disarm the timer */
+    if (new_value) {
+        struct itimerval_k knew;
+        copy_from_user(&knew, new_value, sizeof(knew));
+
+        uint64_t val_ticks = timeval_to_ticks(&knew.it_value);
+        uint64_t int_ticks = timeval_to_ticks(&knew.it_interval);
+
+        if (val_ticks == 0) {
+            /* Disarm */
+            current->itimer_value    = 0;
+            current->itimer_interval = 0;
+        } else {
+            current->itimer_value    = timer_ticks + val_ticks;
+            current->itimer_interval = int_ticks;
+        }
+    }
+
+    return 0;
 }

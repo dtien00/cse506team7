@@ -157,20 +157,57 @@ void term_handle_input(terminal_t *t, char c)
             sig = TERM_SIG_INT;
         else if (c == (char)tm->c_cc[VQUIT])  // ^\ → SIGQUIT
             sig = TERM_SIG_QUIT;
+        else if (c == (char)tm->c_cc[VSUSP])
+            sig = TERM_SIG_SUSP;
 
         if (sig != TERM_SIG_NONE) {
-            // Print visual indicator (^C or ^\)
             if (tm->c_lflag & ECHO) {
-                const char *label = (sig == TERM_SIG_INT) ? "^C\n" : "^\\\n";
+                const char *label;
+                if (sig == TERM_SIG_INT)       label = "^C\n";
+                else if (sig == TERM_SIG_QUIT) label = "^\\\n";
+                else                           label = "^Z\n";
                 console_write(3, label);
             }
-            // Record signal for term_read() to act on in process context
-            t->sig_pending = sig;
+
             // Discard any partial line so the next prompt starts clean
             t->llen       = 0;
             t->line_ready = 0;
-            // Wake the sleeping reader — it will see sig_pending and exit
-            proc_wakeup(t);
+
+            // Deliver signal to the foreground process group if one is set,
+            // otherwise fall back to waking the sleeping reader.
+            if (t->foreground_pgid > 0) {
+                pid_t fg = t->foreground_pgid;
+                for (int i = 0; i < MAX_PROCS; i++) {
+                    struct proc *p = &proctab[i];
+                    if (p->state == PROC_UNUSED  ||
+                        p->state == PROC_ZOMBIE  ||
+                        p->state == PROC_CREATED) continue;
+                    if (p->pgid != fg) continue;
+
+                    if (sig == TERM_SIG_SUSP) {
+                        // POSIX: SIGTSTP with SIG_IGN disposition is discarded
+                        if (p->handlers[KERNEL_SIGTSTP] == (void *)1 /* SIG_IGN */)
+                            continue;
+                        // Stop signals: clear any pending SIGCONT, then stop
+                        p->pending_signals &= ~(1U << KERNEL_SIGCONT);
+                        if (p->state == PROC_READY || p->state == PROC_BLOCKED) {
+                            p->stop_signal = KERNEL_SIGTSTP;
+                            proc_stop(p);
+                        } else
+                            p->pending_signals |= (1U << KERNEL_SIGTSTP);
+                    } else {
+                        // SIGINT / SIGQUIT: set pending, unblock if sleeping
+                        p->pending_signals |= (1U << sig);
+                        if (p->state == PROC_BLOCKED &&
+                            !(p->signal_mask & (1U << sig)))
+                            proc_unblock(p);
+                    }
+                }
+            } else {
+                // No foreground pgid — legacy path: record for term_read()
+                t->sig_pending = sig;
+                proc_wakeup(t);
+            }
             return;
         }
     }
@@ -253,19 +290,27 @@ int term_read(terminal_t *t, char *buf, uint32_t n)
         t->reader = current;
 
         // Sleep until the ISR sets line_ready or sig_pending
-        while (!t->line_ready && t->sig_pending == TERM_SIG_NONE)
+        while (!t->line_ready && t->sig_pending == TERM_SIG_NONE) {
             proc_sleep(t);     // sleeps on (t) as channel
+            // Woken by a delivered signal (e.g. SIGINT with SIG_IGN) rather
+            // than a completed line — return EINTR so the caller can retry.
+            if (!t->line_ready && t->sig_pending == TERM_SIG_NONE) {
+                t->reader = NULL;
+                return -1;
+            }
+        }
 
         t->reader = NULL;
 
-        // A signal arrived while we were sleeping (e.g. ^C)
+        // A signal arrived while we were sleeping (e.g. ^C, ^Z)
         if (t->sig_pending != TERM_SIG_NONE) {
-            // Clear so the next read doesn't re-trigger
+            int sig = t->sig_pending;
             t->sig_pending = TERM_SIG_NONE;
-            // Terminate the current process.
-            // proc_exit() calls schedule() and does not return.
-            proc_exit(-1);
-            return -1;   // unreachable; keeps the compiler happy
+            // Set the signal as pending on the current process so the trap
+            // handler delivers it properly (SIGINT → fatal, SIGTSTP → stop).
+            if (current)
+                current->pending_signals |= (1U << sig);
+            return -1;
         }
 
         // EOF: ^D on an empty line — return 0 to signal EOF to the caller

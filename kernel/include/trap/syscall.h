@@ -49,6 +49,8 @@
 #define SYS_sigaction 38
 #define SYS_sigpending 39
 #define SYS_sigsuspend 40
+#define SYS_tcsetpgrp  41
+#define SYS_tcgetpgrp  42
 #define SYS_getgid   47
 #define SYS_chdir    49
 #define SYS_getpgrp  50
@@ -59,11 +61,16 @@
 #define SYS_fs_getdents  61
 #define SYS_stat     79
 #define SYS_fstat    80
+#define SYS_lstat    107
 #define SYS_link     86
 #define SYS_symlink  88
 #define SYS_readlink 89
 #define SYS_chmod    90
 #define SYS_fchmod   91
+#define SYS_nanosleep       92
+#define SYS_clock_nanosleep 93
+#define SYS_getitimer       94
+#define SYS_setitimer       95
 
 // Initialize syscall subsystem
 void syscall_init(void);
@@ -105,9 +112,13 @@ char  *sys_getcwd(char *buf, size_t size);
 int sys_fs_getdents(int fd, void *dirp, uint32_t count);
 int sys_stat(const char *upath, struct stat *ustat);
 int sys_fstat(int fd, struct stat *ustat);
+int sys_lstat(const char *upath, struct stat *ustat);
 int sys_chmod(const char *upath, mode_t mode);
 int sys_fchmod(int fd, mode_t mode);
 int sys_rmdir(const char *path);
+int sys_link(const char *oldpath, const char *newpath);
+int sys_symlink(const char *target, const char *linkpath);
+ssize_t sys_readlink(const char *path, char *buf, size_t bufsiz);
 int    sys_getrusage(int who, struct rusage *usage);
 int    sys_gettimeofday(struct timeval_k *tv, void *tz);
 int    sys_nice(int increment);
@@ -122,3 +133,11 @@ pid_t sys_getpgrp(void);
 int   sys_setpgid(pid_t pid, pid_t pgid);
 pid_t sys_setsid(void);
 pid_t sys_getpgid(pid_t pid);
+int   sys_tcsetpgrp(pid_t pgid);
+pid_t sys_tcgetpgrp(void);
+int sys_nanosleep(const struct timespec *req, struct timespec *rem);
+int sys_clock_nanosleep(clockid_t clockid, int flags,
+                        const struct timespec *req, struct timespec *rem);
+int sys_getitimer(int which, struct itimerval_k *curr_value);
+int sys_setitimer(int which, const struct itimerval_k *new_value,
+                  struct itimerval_k *old_value);

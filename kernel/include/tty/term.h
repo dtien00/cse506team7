@@ -63,6 +63,7 @@ struct termios {
 #define TERM_SIG_NONE   0
 #define TERM_SIG_INT    2   // SIGINT  – ^C
 #define TERM_SIG_QUIT   3   // SIGQUIT – ^backslash
+#define TERM_SIG_SUSP  20   // SIGTSTP – ^Z
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Buffer sizes

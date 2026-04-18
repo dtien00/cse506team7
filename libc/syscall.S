@@ -21,6 +21,7 @@
 .global chdir
 .global getcwd
 .global stat
+.global lstat
 .global fstat
 .global mkdir
 .global chmod
@@ -49,7 +50,10 @@
 .global setpgid
 .global setsid
 .global getpgid
-
+.global tcsetpgrp
+.global tcgetpgrp
+.global nanosleep
+.global clock_nanosleep
 
 mmap:
     li a7, 14
@@ -163,6 +167,11 @@ getcwd:
 
 stat:
     li a7, 79
+    ecall
+    ret
+
+lstat:
+    li a7, 107
     ecall
     ret
 
@@ -304,5 +313,37 @@ setsid:
 
 getpgid:
     li a7, 53
+    ecall
+    ret
+
+tcsetpgrp:
+    li a7, 41
+    ecall
+    ret
+
+tcgetpgrp:
+    li a7, 42
+    ecall
+    ret
+
+nanosleep:
+    li a7, 92
+    ecall
+    ret
+
+clock_nanosleep:
+    li a7, 93
+    ecall
+    ret
+
+.globl getitimer
+getitimer:
+    li a7, 94
+    ecall
+    ret
+
+.globl setitimer
+setitimer:
+    li a7, 95
     ecall
     ret

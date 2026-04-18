@@ -3,6 +3,7 @@
 #include "fcntl.h"
 #include "errno.h"
 #include "string.h"
+#include "time.h"
 
 #define SYS_exit  1
 #define SYS_sleep 11
@@ -30,9 +31,10 @@ int uptime(void) {
 }
 
 int usleep(unsigned int usec) {
-    /* No sub-second sleep support in kernel; treat as sleep(0) */
-    (void)usec;
-    return 0;
+    struct timespec ts;
+    ts.tv_sec  = (long)(usec / 1000000U);
+    ts.tv_nsec = (long)(usec % 1000000U) * 1000L;
+    return nanosleep(&ts, (struct timespec *)0);
 }
 
 /* getppid() is implemented as an assembly syscall wrapper in syscall.S */
@@ -52,10 +54,6 @@ int setpgrp(void) {
     return setpgid(0, 0);
 }
 
-int lstat(const char *pathname, struct stat *statbuf) {
-    (void)pathname; (void)statbuf;
-    return -1;
-}
 
 int rename(const char *oldpath, const char *newpath) {
     if (!oldpath || !newpath) {

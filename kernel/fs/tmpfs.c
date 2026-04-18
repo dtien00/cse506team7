@@ -27,11 +27,14 @@ static tmpfs_inode_t *tmpfs_alloc_inode(tmpfs_mount_data_t *mnt_data, const char
     inode->mode = mode;
     inode->type = type;
     inode->size = 0;
+    inode->nlink = 1;
     inode->data = NULL;
     inode->capacity = 0;
+    inode->symlink_target = NULL;
     inode->parent = NULL;
     inode->next = NULL;
     inode->children = NULL;
+    inode->inode_body = NULL;
 
     if (name) {
         strncpy(inode->name, name, TMPFS_MAX_FILENAME - 1);
@@ -46,9 +49,25 @@ static void tmpfs_free_inode(tmpfs_mount_data_t *mnt_data, tmpfs_inode_t *inode)
     if (!inode)
         return;
 
-    if (inode->data) {
-        kfree(inode->data);
+    // If this is a hard-link dentry node, just free the dentry shell.
+    // The canonical body's nlink is managed by the caller (tmpfs_unlink).
+    if (inode->inode_body) {
+        mnt_data->file_count--;
+        kfree(inode);
+        return;
     }
+
+    // Canonical inode: decrement link count; only destroy when no names remain.
+    if (inode->nlink > 0)
+        inode->nlink--;
+    if (inode->nlink > 0)
+        return;
+
+    if (inode->data)
+        kfree(inode->data);
+
+    if (inode->symlink_target)
+        kfree(inode->symlink_target);
 
     // Recursively free children if it's a directory
     if (inode->type == TMPFS_TYPE_DIR) {
@@ -272,19 +291,30 @@ static vnode_t *tmpfs_lookup(mount_t *mnt, const char *path) {
     if (!inode)
         return NULL;
 
+    // Resolve to the canonical inode body (handles hard links).
+    tmpfs_inode_t *body = inode->inode_body ? inode->inode_body : inode;
+
     // Allocate a vnode
     vnode_t *vnode = kzalloc(sizeof(vnode_t));
     if (!vnode)
         return NULL;
 
-    vnode->ino = inode->ino;
-    vnode->mode = inode->mode;
-    vnode->size = inode->size;
+    vnode->ino = body->ino;
+    vnode->mode = body->mode;
+    vnode->size = body->size;
+    vnode->nlink = body->nlink;
     vnode->ref_count = 0;
     vnode->mount = mnt;
-    vnode->fs_data = inode;
+    vnode->fs_data = body;  // always point to canonical body
     vnode->fs_type = mnt->fs_type;
-    vnode->type = (inode->type == TMPFS_TYPE_DIR) ? VNODE_DIR : VNODE_REG;
+    // printk("tmpfs_lookup: path='%s' ino=%u nlink=%u size=%u\n",
+    //        path, body->ino, body->nlink, body->size);
+    if (body->type == TMPFS_TYPE_DIR)
+        vnode->type = VNODE_DIR;
+    else if (body->type == TMPFS_TYPE_SYMLINK)
+        vnode->type = VNODE_LNK;
+    else
+        vnode->type = VNODE_REG;
 
     return vnode;
 }
@@ -307,6 +337,8 @@ static int tmpfs_read(vnode_t *vnode, void *buf, size_t offset, size_t len) {
         memcpy(buf, inode->data + offset, to_copy);
     }
 
+    // printk("tmpfs_read: inode='%s' ino=%u offset=%u len=%u inode_size=%u to_copy=%u\n",
+    //        inode->name, inode->ino, (unsigned)offset, (unsigned)len, inode->size, (unsigned)to_copy);
     return (int) to_copy;
 }
 
@@ -371,6 +403,8 @@ static int tmpfs_write(vnode_t *vnode, const void *buf, size_t offset, size_t le
         vnode->size = needed;
     }
 
+    // printk("tmpfs_write: inode='%s' ino=%u offset=%u len=%u new_size=%u\n",
+    //        inode->name, inode->ino, (unsigned)offset, (unsigned)len, inode->size);
     return (int) len;
 }
 
@@ -453,8 +487,22 @@ static int tmpfs_unlink(mount_t *mnt, const char *path) {
                 return -1;
             }
 
+            tmpfs_inode_t *body = child->inode_body ? child->inode_body : child;
             tmpfs_remove_child(parent, child);
-            tmpfs_free_inode(mnt_data, child);
+            body->nlink--;
+            if (child->inode_body) {
+                // Hard-link dentry shell: free the shell; free body if nlink hits 0.
+                mnt_data->file_count--;
+                kfree(child);
+                if (body->nlink == 0) {
+                    if (body->data) kfree(body->data);
+                    mnt_data->file_count--;
+                    kfree(body);
+                }
+            } else {
+                if (body->nlink == 0)
+                    tmpfs_free_inode(mnt_data, child);
+            }
             return 0;
         }
         child = child->next;
@@ -462,6 +510,121 @@ static int tmpfs_unlink(mount_t *mnt, const char *path) {
 
     printk("tmpfs: file not found\n");
     return -1;
+}
+
+static uint32_t tmpfs_get_nlink(vnode_t *vnode) {
+    if (!vnode || !vnode->fs_data) return vnode ? vnode->nlink : 0;
+    tmpfs_inode_t *body = (tmpfs_inode_t *)vnode->fs_data;
+    // printk("tmpfs_get_nlink: inode='%s' ino=%u body->nlink=%u vnode->nlink=%u\n",
+    //        body->name, body->ino, body->nlink, vnode->nlink);
+    return body->nlink;
+}
+
+static int tmpfs_truncate(vnode_t *vnode) {
+    if (!vnode) return -EINVAL;
+    tmpfs_inode_t *inode = (tmpfs_inode_t *)vnode->fs_data;
+    if (!inode || inode->type != TMPFS_TYPE_FILE) return -EINVAL;
+    // printk("tmpfs_truncate: inode '%s' size %u -> 0\n", inode->name, inode->size);
+    inode->size = 0;
+    vnode->size = 0;
+    return 0;
+}
+
+static int tmpfs_link(mount_t *mnt, const char *oldpath, const char *newpath) {
+    if (!mnt || !mnt->fs_data || !oldpath || !newpath) return -EINVAL;
+
+    tmpfs_mount_data_t *mnt_data = (tmpfs_mount_data_t *)mnt->fs_data;
+
+    // Find the existing inode.
+    tmpfs_inode_t *target = tmpfs_find_inode(mnt_data->root, oldpath);
+    if (!target) {
+        // printk("tmpfs_link: oldpath '%s' not found\n", oldpath);
+        return -ENOENT;
+    }
+    if (target->type == TMPFS_TYPE_DIR) return -EPERM;
+
+    // Find the parent of newpath and extract the new name.
+    char parent_path[TMPFS_MAX_FILENAME];
+    char new_name[TMPFS_MAX_FILENAME];
+    if (tmpfs_split_path(newpath, parent_path, new_name, TMPFS_MAX_FILENAME) < 0)
+        return -EINVAL;
+
+    tmpfs_inode_t *new_parent = tmpfs_find_inode(mnt_data->root, parent_path);
+    if (!new_parent || new_parent->type != TMPFS_TYPE_DIR) return -ENOENT;
+
+    // Check new name does not already exist.
+    for (tmpfs_inode_t *c = new_parent->children; c; c = c->next)
+        if (strcmp(c->name, new_name) == 0) return -EEXIST;
+
+    // Resolve to canonical body (in case target is itself a hard-link dentry).
+    tmpfs_inode_t *body = target->inode_body ? target->inode_body : target;
+
+    // Create a lightweight dentry node that delegates to the canonical body.
+    tmpfs_inode_t *link_node = kzalloc(sizeof(tmpfs_inode_t));
+    if (!link_node) return -ENOMEM;
+    strncpy(link_node->name, new_name, TMPFS_MAX_FILENAME - 1);
+    link_node->name[TMPFS_MAX_FILENAME - 1] = '\0';
+    link_node->type = body->type;
+    link_node->next = NULL;
+    link_node->parent = NULL;
+    link_node->children = NULL;
+    link_node->inode_body = body;  // point to shared canonical inode
+
+    body->nlink++;
+    // printk("tmpfs_link: '%s' -> '%s', body ino=%u nlink now %u\n",
+    //        oldpath, newpath, body->ino, body->nlink);
+
+    tmpfs_add_child(new_parent, link_node);
+    mnt_data->file_count++;
+    return 0;
+}
+
+static int tmpfs_symlink(mount_t *mnt, const char *target, const char *linkpath) {
+    if (!mnt || !mnt->fs_data || !target || !linkpath) return -EINVAL;
+
+    tmpfs_mount_data_t *mnt_data = (tmpfs_mount_data_t *)mnt->fs_data;
+
+    char parent_path[TMPFS_MAX_FILENAME];
+    char link_name[TMPFS_MAX_FILENAME];
+    if (tmpfs_split_path(linkpath, parent_path, link_name, TMPFS_MAX_FILENAME) < 0)
+        return -EINVAL;
+
+    tmpfs_inode_t *parent = tmpfs_find_inode(mnt_data->root, parent_path);
+    if (!parent || parent->type != TMPFS_TYPE_DIR) return -ENOENT;
+
+    // Check for name collision.
+    for (tmpfs_inode_t *c = parent->children; c; c = c->next)
+        if (strcmp(c->name, link_name) == 0) return -EEXIST;
+
+    tmpfs_inode_t *sym = tmpfs_alloc_inode(mnt_data, link_name,
+                                            TMPFS_TYPE_SYMLINK, 0777);
+    if (!sym) return -ENOMEM;
+
+    size_t tlen = strlen(target);
+    sym->symlink_target = kmalloc(tlen + 1);
+    if (!sym->symlink_target) {
+        tmpfs_free_inode(mnt_data, sym);
+        return -ENOMEM;
+    }
+    memcpy(sym->symlink_target, target, tlen + 1);
+    sym->size = (uint32_t)tlen;
+
+    tmpfs_add_child(parent, sym);
+    return 0;
+}
+
+static int tmpfs_readlink(vnode_t *vnode, char *buf, size_t size) {
+    if (!vnode || !buf || size == 0) return -EINVAL;
+
+    tmpfs_inode_t *inode = (tmpfs_inode_t *)vnode->fs_data;
+    if (!inode || inode->type != TMPFS_TYPE_SYMLINK || !inode->symlink_target)
+        return -EINVAL;
+
+    size_t len = strlen(inode->symlink_target);
+    if (len > size) len = size;
+    memcpy(buf, inode->symlink_target, len);
+    // readlink does NOT null-terminate (POSIX); return byte count.
+    return (int)len;
 }
 
 static int tmpfs_readdir(mount_t *mnt, vnode_t *vnode, uint32_t start_idx, void *buf, uint32_t bufsize,
@@ -494,7 +657,12 @@ static int tmpfs_readdir(mount_t *mnt, vnode_t *vnode, uint32_t start_idx, void 
         memset(d, 0, reclen);
         d->d_ino = child->ino;
         d->d_reclen = reclen;
-        d->d_type = (child->type == TMPFS_TYPE_DIR) ? DT_DIR : DT_REG;
+        if (child->type == TMPFS_TYPE_DIR)
+            d->d_type = DT_DIR;
+        else if (child->type == TMPFS_TYPE_SYMLINK)
+            d->d_type = DT_LNK;
+        else
+            d->d_type = DT_REG;
         memcpy(d->d_name, child->name, nlen + 1);
 
         written += reclen;
@@ -574,6 +742,11 @@ static fs_type_t tmpfs_type = {.name = "tmpfs",
                                                .mkdir = tmpfs_mkdir,
                                                .rmdir = tmpfs_unlink,
                                                .readdir = tmpfs_readdir,
+                                               .link = tmpfs_link,
+                                               .symlink = tmpfs_symlink,
+                                               .readlink = tmpfs_readlink,
+                                               .truncate = tmpfs_truncate,
+                                               .get_nlink = tmpfs_get_nlink,
                                        },
                                .next = NULL};
 

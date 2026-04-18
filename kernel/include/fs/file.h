@@ -92,6 +92,7 @@ int file_write(int fd, const void *buf, size_t len);
 int file_lseek(int fd, size_t offset, int whence);
 void file_ref(file_t *f);
 int file_stat(const char *kpath, struct stat *kst);
+int file_lstat(const char *kpath, struct stat *kst);
 int file_fstat(int fd, struct stat *kst);
 
 struct proc;

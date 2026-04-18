@@ -19,6 +19,9 @@
 #define KERNEL_SIGTERM  15
 #define KERNEL_SIGCONT  18
 #define KERNEL_SIGSTOP  19
+#define KERNEL_SIGTSTP   20
+#define KERNEL_SIGTTIN   21
+#define KERNEL_SIGTTOU   22
 // Bitmask of signals that unconditionally terminate the process
 // Signals whose kernel action is proc_exit()
 // SIGPIPE is here so when pipes deliver it, action is automatic.
@@ -29,8 +32,9 @@
                            (1U << KERNEL_SIGINT)  | (1U << KERNEL_SIGPIPE) | \
                            (1U << KERNEL_SIGALRM))
 
-// SIGSTOP cannot be masked or ignored (POSIX)
-#define KERNEL_STOP_SIGS  (1U << KERNEL_SIGSTOP)
+// SIGSTOP, SIGSTP, SIGTTIN, SIGTTOU cannot be masked or ignored (POSIX)
+#define KERNEL_STOP_SIGS ((1U << KERNEL_SIGSTOP) | (1U << KERNEL_SIGTSTP) | \
+                          (1U << KERNEL_SIGTTIN) | (1U << KERNEL_SIGTTOU))
 
 // Signals whose POSIX default action is "ignore" (not "terminate").
 // When handler == SIG_DFL, these are silently discarded — identical to SIG_IGN.
@@ -121,6 +125,8 @@ struct proc {
     uint64_t children_utime; // sum of utime_ticks of all reaped children
     uint64_t wake_tick;      // 0 = not sleeping; >0 = timer_ticks value at which to wake
     uint64_t alarm_tick;    // Compared with for SIGALRM; alarm()
+    uint64_t itimer_value;    // ITIMER_REAL: tick at which to fire (0 = disarmed)
+    uint64_t itimer_interval; // ITIMER_REAL: reload interval in ticks (0 = one-shot)
     uint32_t pending_signals; // bitmask: bit N set means signal N is pending
     uint32_t signal_mask;
     struct proc *next;
@@ -151,6 +157,11 @@ struct proc {
     // Process group and session management
     pid_t pgid;
     pid_t sid; 
+
+    // Background/Foreground process
+    uint8_t stop_unreported;
+    uint8_t cont_unreported;
+    uint8_t stop_signal;        // which signal caused the stop (for WSTOPSIG)
 };
 
 extern struct proc proctab[];

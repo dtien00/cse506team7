@@ -1,16 +1,8 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <sys/procinfo.h>
 #include "us_test_common.h"
-
-struct proc_info {
-    int   pid;
-    int   ppid;
-    char  name[16];
-    int   state;    // 0=unused,1=created,2=ready,3=running,4=blocked,5=zombie,6=stopped
-    int   priority; // 0 if not implemented
-    uint64_t cpu_ticks;
-};
 
 // Declared in libc/syscall.S -> kernel SYS_procinfo (26)
 int procinfo(struct proc_info *infos, int max_count);

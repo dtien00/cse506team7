@@ -35,3 +35,4 @@ void stack_growth_test_run(void);
 void ext2_populate_test_run(void);
 void accounting_test_run(void);
 void rtc_test_run(void);
+void jobctl_test_run(void);
