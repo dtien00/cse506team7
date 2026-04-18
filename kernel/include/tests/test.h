@@ -18,6 +18,7 @@ void fs_test_run(void);
 void proc_test_run(void);
 void proc_waitpid_test_run(void);
 void procinfo_test_run(void);
+void procfs_test_run(void);
 void sched_test_run(void);
 void sched_timeslice_test_run(void);
 void sched_priority_test_run(void);

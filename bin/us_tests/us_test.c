@@ -49,6 +49,7 @@ void run_test_nice_extended(us_test_group_t *group);
 void run_test_yield(us_test_group_t *group);
 void run_test_pause(us_test_group_t *group);
 void run_test_procinfo(us_test_group_t *group);
+void run_test_procfs(us_test_group_t *group);
 void run_test_gettimeofday(us_test_group_t *group);
 void run_test_alarm(us_test_group_t *group);
 void run_test_sigaction(us_test_group_t *group);
@@ -132,6 +133,7 @@ int main(int argc, char **argv, char **envp) {
     run_test_yield(&groups[idx++]);
     run_test_pause(&groups[idx++]);
     run_test_procinfo(&groups[idx++]);
+    run_test_procfs(&groups[idx++]);
     run_test_gettimeofday(&groups[idx++]);
     run_test_alarm(&groups[idx++]);
     run_test_sigaction(&groups[idx++]);
