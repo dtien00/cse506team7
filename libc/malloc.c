@@ -190,9 +190,13 @@ void free(void *ptr) {
     } else {
         block->free = 1;
         /* Coalesce with the immediately following block if it is also free. */
+        // Only coalesce if next block is physically adjacent
         if (block->next && block->next->free && !block->next->is_large) {
-            block->size += BLOCK_SIZE + block->next->size;
-            block->next  = block->next->next;
+            block_t *expected_next = (block_t *) ((char *) block + BLOCK_SIZE + block->size);
+            if (block->next == expected_next) { // ← adjacency check
+                block->size += BLOCK_SIZE + block->next->size;
+                block->next = block->next->next;
+            }
         }
     }
 }

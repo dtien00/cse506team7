@@ -77,6 +77,17 @@ static int is_token(const char *token, char expected) {
     return token != NULL && token[0] == expected && token[1] == '\0';
 }
 
+static void free_cmdv(shell_command_t *cmdv, int cmdc) {
+    for (int i = 0; i < cmdc; i++) {
+        for (int j = 0; cmdv[i].argv[j] != NULL; j++) {
+            free(cmdv[i].argv[j]);
+        }
+        /* input_path and output_path are also strdup'd now */
+        if (cmdv[i].input_path)  free(cmdv[i].input_path);
+        if (cmdv[i].output_path) free(cmdv[i].output_path);
+    }
+}
+
 static int parse_line(char *line, shell_command_t *cmdv) {
     char *cursor = line;
     char *token;
@@ -88,11 +99,13 @@ static int parse_line(char *line, shell_command_t *cmdv) {
 
     while ((token = next_token(&cursor)) != NULL) {
         if (cmdc >= MAX_CMDS) {
+            free_cmdv(cmdv, cmdc + 1);
             return -1;
         }
 
         if (is_token(token, '|')) {
             if (argc == 0) {
+                free_cmdv(cmdv, cmdc + 1);
                 return -1;
             }
             cmdv[cmdc].argv[argc] = NULL;
@@ -105,35 +118,41 @@ static int parse_line(char *line, shell_command_t *cmdv) {
             char redirect_op = token[0];
             char *path = next_token(&cursor);
             if (path == NULL || is_token(path, '|') || is_token(path, '<') || is_token(path, '>')) {
+                free_cmdv(cmdv, cmdc + 1);
                 return -1;
             }
 
             if (cmdc >= MAX_CMDS) {
+                free_cmdv(cmdv, cmdc + 1);
                 return -1;
             }
 
             if (argc == 0 && cmdv[cmdc].argv[0] == NULL) {
+                free_cmdv(cmdv, cmdc + 1);
                 return -1;
             }
 
             if (redirect_op == '<') {
                 if (cmdv[cmdc].input_path != NULL) {
+                    free_cmdv(cmdv, cmdc + 1);
                     return -1;
                 }
-                cmdv[cmdc].input_path = path;
+                cmdv[cmdc].input_path = strdup(path);
             } else {
                 if (cmdv[cmdc].output_path != NULL) {
+                    free_cmdv(cmdv, cmdc + 1);
                     return -1;
                 }
-                cmdv[cmdc].output_path = path;
+                cmdv[cmdc].output_path = strdup(path);
             }
             continue;
         }
 
         if (argc >= MAX_ARGS - 1) {
+            free_cmdv(cmdv, cmdc + 1);
             return -1;
         }
-        cmdv[cmdc].argv[argc++] = token;
+        cmdv[cmdc].argv[argc++] = strdup(token);
     }
 
     if (argc == 0) {
@@ -205,7 +224,7 @@ static void exec_command(char **argv) {
     build_exec_path(argv[0], path, sizeof(path));
     execve(path, argv, NULL);
     dprintf(STDERR_FILENO, "sh: %s: command not found\n", argv[0]);
-    exit(127);
+    _exit(127);
 }
 
 static int builtin_cd(char **argv) {
@@ -251,7 +270,6 @@ static int execute_single(shell_command_t *cmd) {
     int saved_stdout = -1;
     pid_t pid;
     int status;
-
     if (!cmd->argv[0]) {
         return 0;
     }

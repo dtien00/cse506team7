@@ -745,8 +745,6 @@ int vfs_chdir(const char *kpath) {
 
     // 3. Hand off to fs_struct — it looks up, validates, and swaps the cwd dentry
     int rc = fs_struct_set_cwd(current->fs, resolved);
-    printk("[vfs_chdir] fs_struct_set_cwd returned %d, new cwd dentry=%p\n",
-           rc, current->fs->cwd);
     return rc;
 }
 

@@ -1169,8 +1169,6 @@ char *sys_getcwd(char *buf, size_t size) {
     char kbuf[MAX_PATH];
     if (fs_struct_get_cwd(current->fs, kbuf, MAX_PATH) < 0)
         return NULL;
-    printk("[sys_getcwd] pid=%d cwd='%s' cwd_dentry=%p\n",
-           current->pid, kbuf, current->fs->cwd);
 
     size_t cwd_len = strlen(kbuf);
     if (cwd_len + 1 > size) return NULL;   // user buffer too small
