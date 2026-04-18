@@ -1809,13 +1809,18 @@ int sys_setpgid(pid_t pid, pid_t pgid) {
     /* pgid == 0 means "join a new group with the target's own pid" */
     pid_t new_pgid = (pgid == 0) ? target->pid : pgid;
 
-    /* If joining an existing group, it must exist within the same session */
+    /* If joining an existing group, it must exist within the same session.
+     * Be tolerant of the common pipeline race where one child tries to join
+     * another child's soon-to-be-created group before that peer has finished
+     * setpgid(0, 0).  In that case, allow the join as long as the target pgid
+     * names a live process in the same session. */
     if (new_pgid != target->pid) {
         int found = 0;
         for (int i = 0; i < MAX_PROCS; i++) {
             struct proc *p = &proctab[i];
             if (p->state != PROC_UNUSED && p->state != PROC_ZOMBIE &&
-                p->pgid == new_pgid && p->sid == target->sid) {
+                p->sid == target->sid &&
+                (p->pgid == new_pgid || p->pid == new_pgid)) {
                 found = 1;
                 break;
             }

@@ -9,6 +9,7 @@
 #include "fs/vfs.h"
 #include "fs/tarfs.h"
 #include "fs/tmpfs.h"
+#include "fs/procfs.h"
 #include "fs/ext2.h"
 #include "fs/block_cache.h"
 #include "drivers/virtio.h"
@@ -43,6 +44,7 @@ void run_all_tests(void) {
     mem_test_run();
     // trap_test_run();
     fs_test_run();
+    procfs_test_run();
     
     sched_test_run();
     sched_timeslice_test_run();
@@ -123,6 +125,7 @@ void boot(uint64_t hart_id, uint64_t dtb) {
     vfs_init();
     tarfs_init();
     tmpfs_init();
+    procfs_init();
 
     // Initialize block storage and mount ext2 as root filesystem.
     // Discovers virtio-blk via PCIe ECAM enumeration (vendor 0x1AF4, device 0x1042)
@@ -146,6 +149,10 @@ void boot(uint64_t hart_id, uint64_t dtb) {
     if (vfs_mount(NULL, "/mnt", "ext2") < 0) {
         printk("FATAL: failed to mount ext2 at '/'\n");
         boot_fallback_to_idle();
+    }
+
+    if (vfs_mount(NULL, "/proc", "procfs") < 0) {
+        printk("WARNING: failed to mount procfs at '/proc'\n");
     }
 
     // root does not need to be writeable.
