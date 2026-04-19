@@ -424,6 +424,11 @@ void page_fault_handler(trap_frame *frame) {
 
     /* ── 3. Look up the VMA for demand paging and protection checks ─────── */
     struct vm_area *vma = vma_find(current->vma_list, faulting_va);
+    // printk("[PF] pid=%d scause=%lu va=0x%p existing_pa=0x%p vma=%p\n",
+    //        current->pid, scause, faulting_va, existing_pa, (uintptr_t)vma);
+    // if (vma)
+    //     printk("[PF] vma=[0x%p,0x%p) prot=%u type=%u\n",
+    //            vma->start, vma->end, vma->prot, vma->type);
     if (!vma) {
         /* ── 3a. GROWSDOWN: transparent stack expansion ──────────────────
          *
@@ -482,6 +487,10 @@ void page_fault_handler(trap_frame *frame) {
 
     /* ── 5. Already mapped but not COW — real protection fault ──────────── */
     if (existing_pa != 0) {
+        uint64_t *pte_ptr2 = vmm_walk(current->pagetable, page_va, 0);
+        printk("[PF] PROT FAULT: va=0x%p pa=0x%p pte=0x%p scause=%lu\n",
+               page_va, existing_pa,
+               pte_ptr2 ? *pte_ptr2 : 0, scause);
         kill_current(frame, "protection fault on already-mapped page");
         return;
     }

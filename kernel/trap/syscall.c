@@ -19,12 +19,14 @@
 #define MAP_FAILED ((void *) -1)
 #define PROT_READ  0x1
 #define PROT_WRITE 0x2
+#define PROT_EXEC  0x4
+#define MAP_SHARED    0x01
 #define MAP_PRIVATE   0x02
 #define MAP_ANONYMOUS 0x20
 #define MAP_FIXED     0x10
 
 #define USER_HEAP_START 0x11000000UL
-#define USER_HEAP_END   0x40000000UL
+#define USER_HEAP_END   0x70000000UL
 
 #define MAX_ARGS 64
 #define KARG_MAX 256
@@ -955,44 +957,22 @@ void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t off
         }
     }
 
-    uint64_t perm = PTE_U;
-    if (prot & PROT_READ) perm |= PTE_R;
-    if (prot & PROT_WRITE) perm |= PTE_W;
+    uint32_t vma_prot = 0;
+    if (prot & PROT_READ)  vma_prot |= VMA_PROT_READ;
+    if (prot & PROT_WRITE) vma_prot |= VMA_PROT_WRITE;
+    if (prot & PROT_EXEC)  vma_prot |= VMA_PROT_EXEC;
 
-    for (size_t i = 0; i < pages; i++) {
-        uintptr_t page_va = va + (i * PGSIZE);
-        void* page_pa = pmm_alloc_page();
+    uint32_t vma_flags = VMA_PRIVATE;
+    if (flags & MAP_SHARED) vma_flags = VMA_SHARED;
 
-        if (page_pa == NULL) {
-            for (size_t j = 0; j < i; j++) {
-                uintptr_t cleanup_va = va + (j * PGSIZE);
-                uint64_t *pte = vmm_walk(p->pagetable, cleanup_va, 0);
-                if (pte && (*pte & PTE_V)) {
-                    uintptr_t cleanup_pa = PTE_TO_PA(*pte);
-                    vmm_unmap(p->pagetable, cleanup_va);
-                    pmm_free_page((void*)cleanup_pa);
-                }
-            }
-            return MAP_FAILED;
-        }
+    struct vm_area *new_vma = vma_create(va, va + alloc_size,
+                                         vma_prot, vma_flags, VMA_TYPE_ANON);
+    if (!new_vma)
+        return MAP_FAILED;
 
-        for (int j = 0; j < PGSIZE; j++) {
-            ((char*)page_pa)[j] = 0;
-        }
-
-        if (vmm_map(p->pagetable, page_va, (uintptr_t)page_pa, perm) != 0) {
-            pmm_free_page(page_pa);
-            for (size_t j = 0; j < i; j++) {
-                uintptr_t cleanup_va = va + (j * PGSIZE);
-                uint64_t *pte = vmm_walk(p->pagetable, cleanup_va, 0);
-                if (pte && (*pte & PTE_V)) {
-                    uintptr_t cleanup_pa = PTE_TO_PA(*pte);
-                    vmm_unmap(p->pagetable, cleanup_va);
-                    pmm_free_page((void*)cleanup_pa);
-                }
-            }
-            return MAP_FAILED;
-        }
+    if (vma_insert(&p->vma_list, new_vma) != 0) {
+        vma_free(new_vma);
+        return MAP_FAILED;
     }
 
     if (!(flags & MAP_FIXED)) {
@@ -1013,18 +993,28 @@ int sys_munmap(void *addr, size_t length) {
         return -1;
     }
 
-    uintptr_t va = (uintptr_t)addr;
-    size_t pages = (length + PGSIZE - 1) / PGSIZE;
+    uintptr_t unmap_start = (uintptr_t)addr;
+    uintptr_t unmap_end   = unmap_start + PGROUNDUP(length);
 
-    for (size_t i = 0; i < pages; i++) {
-        uintptr_t page_va = va + (i * PGSIZE);
-
+    /* Free any physical pages that were demand-faulted in. */
+    for (uintptr_t page_va = unmap_start; page_va < unmap_end; page_va += PGSIZE) {
         uint64_t *pte = vmm_walk(p->pagetable, page_va, 0);
-        if (pte && (*pte & PTE_V)) {
+        if (pte && (*pte & PTE_V) && (*pte & PTE_U)) {
             uintptr_t pa = PTE_TO_PA(*pte);
             vmm_unmap(p->pagetable, page_va);
             pmm_free_page((void*)pa);
         }
+    }
+
+    /* Remove VMA(s) that cover this range. */
+    struct vm_area *v = p->vma_list;
+    while (v) {
+        struct vm_area *next = v->next;
+        if (v->start < unmap_end && v->end > unmap_start) {
+            vma_remove(&p->vma_list, v);
+            vma_free(v);
+        }
+        v = next;
     }
 
     return 0;
@@ -1053,58 +1043,52 @@ int sys_brk(void *addr) {
 
     uintptr_t old_break = p->sz;
 
+    /* Find existing heap VMA or create one on first brk growth. */
+    struct vm_area *heap_vma = NULL;
+    for (struct vm_area *v = p->vma_list; v; v = v->next) {
+        if (v->type == VMA_TYPE_HEAP) { heap_vma = v; break; }
+    }
+
     if (new_break > old_break) {
-        uintptr_t start = PGROUNDUP(old_break);
-        uintptr_t end = PGROUNDUP(new_break);
-        size_t pages = (end - start) / PGSIZE;
+        uintptr_t new_end = PGROUNDUP(new_break);
 
-        for (size_t i = 0; i < pages; i++) {
-            uintptr_t va = start + (i * PGSIZE);
-            void* pa = pmm_alloc_page();
-
-            if (pa == NULL) {
-                for (size_t j = 0; j < i; j++) {
-                    uintptr_t cleanup_va = start + (j * PGSIZE);
-                    uint64_t *pte = vmm_walk(p->pagetable, cleanup_va, 0);
-                    if (pte && (*pte & PTE_V)) {
-                        uintptr_t cleanup_pa = PTE_TO_PA(*pte);
-                        vmm_unmap(p->pagetable, cleanup_va);
-                        pmm_free_page((void*)cleanup_pa);
-                    }
-                }
-                return -1;
-            }
-
-            for (int j = 0; j < PGSIZE; j++) {
-                ((char*)pa)[j] = 0;
-            }
-
-            if (vmm_map(p->pagetable, va, (uintptr_t)pa, PTE_R | PTE_W | PTE_U) != 0) {
-                pmm_free_page(pa);
-                for (size_t j = 0; j < i; j++) {
-                    uintptr_t cleanup_va = start + (j * PGSIZE);
-                    uint64_t *pte = vmm_walk(p->pagetable, cleanup_va, 0);
-                    if (pte && (*pte & PTE_V)) {
-                        uintptr_t cleanup_pa = PTE_TO_PA(*pte);
-                        vmm_unmap(p->pagetable, cleanup_va);
-                        pmm_free_page((void*)cleanup_pa);
-                    }
-                }
+        if (heap_vma) {
+            /* Extend existing heap VMA — no physical pages allocated. */
+            if (new_end > heap_vma->end)
+                heap_vma->end = new_end;
+        } else {
+            /* First brk growth: create the heap VMA covering all touched pages.
+             * Round up to at least one page so vma_create's start < end holds. */
+            uintptr_t vma_start = PGROUNDUP(old_break);
+            uintptr_t vma_end   = (new_end > vma_start) ? new_end : vma_start + PGSIZE;
+            heap_vma = vma_create(vma_start, vma_end,
+                                  VMA_PROT_READ | VMA_PROT_WRITE,
+                                  VMA_PRIVATE, VMA_TYPE_HEAP);
+            if (!heap_vma) return -1;
+            if (vma_insert(&p->vma_list, heap_vma) != 0) {
+                vma_free(heap_vma);
                 return -1;
             }
         }
     } else if (new_break < old_break) {
-        uintptr_t start = PGROUNDUP(new_break);
-        uintptr_t end = PGROUNDUP(old_break);
-        size_t pages = (end - start) / PGSIZE;
-
-        for (size_t i = 0; i < pages; i++) {
-            uintptr_t va = start + (i * PGSIZE);
+        /* Shrink: free any physical pages in the released range. */
+        uintptr_t free_start = PGROUNDUP(new_break);
+        uintptr_t free_end   = PGROUNDUP(old_break);
+        for (uintptr_t va = free_start; va < free_end; va += PGSIZE) {
             uint64_t *pte = vmm_walk(p->pagetable, va, 0);
             if (pte && (*pte & PTE_V)) {
                 uintptr_t pa = PTE_TO_PA(*pte);
                 vmm_unmap(p->pagetable, va);
                 pmm_free_page((void*)pa);
+            }
+        }
+        if (heap_vma) {
+            uintptr_t new_end = PGROUNDUP(new_break);
+            if (new_end <= heap_vma->start) {
+                vma_remove(&p->vma_list, heap_vma);
+                vma_free(heap_vma);
+            } else {
+                heap_vma->end = new_end;
             }
         }
     }

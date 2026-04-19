@@ -14,8 +14,8 @@ typedef struct block {
 } block_t;
 
 #define BLOCK_SIZE       ALIGN8(sizeof(block_t))
-#define MMAP_THRESHOLD   4096
-#define ARENA_SIZE       (64 * 1024)
+#define MMAP_THRESHOLD   4096*4
+#define ARENA_SIZE       (128 * 1024)
 
 static block_t *head         = NULL;
 static void    *arena_start  = NULL;
