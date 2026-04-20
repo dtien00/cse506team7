@@ -334,14 +334,35 @@ static uint64_t vma_prot_to_pte(uint32_t prot) {
     return pte;
 }
 
+/* ── scan proctab for the process whose guard page covers va ─────────────*/
+static int find_guard_owner(uintptr_t va) {
+    uintptr_t page = PGROUNDDOWN(va);
+    for (int i = 0; i < MAX_PROCS; i++) {
+        if (proctab[i].state != PROC_UNUSED &&
+            proctab[i].kguard != NULL &&
+            (uintptr_t)proctab[i].kguard == page)
+            return i;
+    }
+    return -1;
+}
+
 /* ── kill current process on unrecoverable fault ─────────────────────────*/
 static void kill_current(trap_frame *frame, const char *reason) {
     // If the fault came from S-mode, panic.
     if (frame->sstatus & SSTATUS_SPP) {
-        printk("KERNEL PAGE FAULT: scause=0x%p stval=0x%p sepc=0x%p current=%d\n",
-               frame->scause, frame->stval, frame->sepc,
-               current ? current->pid : -1);
-        printk("  Reason: %s\n", reason);
+        int oi = find_guard_owner(frame->stval);
+        if (oi >= 0) {
+            printk("\nKERNEL STACK OVERFLOW: pid=%d name=%s\n",
+                   proctab[oi].pid, proctab[oi].name);
+            printk("  stval=0x%p sepc=0x%p sp=0x%p\n",
+                   frame->stval, frame->sepc, frame->sp);
+        } else {
+            printk("\nKERNEL PAGE FAULT: pid=%d name=%s scause=0x%p stval=0x%p sepc=0x%p\n",
+                   current ? current->pid : -1,
+                   current ? current->name : "none",
+                   frame->scause, frame->stval, frame->sepc);
+            printk("  Reason: %s\n", reason);
+        }
         dump_exception_diagnostics(frame);
         while (1) asm volatile("wfi");
     }

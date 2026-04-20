@@ -58,7 +58,6 @@ static inline int kernel_ctz(uint32_t x) {
 #define PROC_DEFAULT_PRIORITY 5
 
 extern struct proc *current;
-extern uint8_t kstacks[][KSTACK_SIZE];
 
 struct proc_info {
     int   pid;
@@ -130,6 +129,10 @@ struct proc {
     uint32_t pending_signals; // bitmask: bit N set means signal N is pending
     uint32_t signal_mask;
     struct proc *next;
+
+    // Per-process kernel stack with guard page below it
+    uint8_t *kstack;   // stack page — grows down from kstack + KSTACK_SIZE
+    uint8_t *kguard;   // guard page — unmapped; fault here = stack overflow
 
     // Kernel scheduler context (callee-saved regs, used by swtch)
     struct context context;

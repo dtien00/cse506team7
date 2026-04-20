@@ -37,3 +37,4 @@ void ext2_populate_test_run(void);
 void accounting_test_run(void);
 void rtc_test_run(void);
 void jobctl_test_run(void);
+void kstack_overflow_test_run(void);

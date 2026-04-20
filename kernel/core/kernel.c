@@ -45,7 +45,6 @@ void run_all_tests(void) {
     // trap_test_run();
     fs_test_run();
     procfs_test_run();
-    
     sched_test_run();
     sched_timeslice_test_run();
     sched_priority_test_run();
@@ -66,6 +65,7 @@ void run_all_tests(void) {
     accounting_test_run();
     rtc_test_run();
     jobctl_test_run();
+    // kstack_overflow_test_run();   // DESTRUCTIVE: must be last — triggers kernel stack overflow panic
 
     // printk("%d passed, %d failed\n", passed, failed);
 }
