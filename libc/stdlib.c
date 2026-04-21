@@ -239,33 +239,66 @@ void srand(unsigned int seed) {
     next_rand = seed;
 }
 
-/* Simple in-process environment store: array of "KEY=VALUE" strings. */
-#define ENV_MAX 64
-static char *_env_store[ENV_MAX];  /* NULL-terminated pointers */
-static int   _env_count = 0;
+/*
+ * POSIX environ — the global environment array.
+ *
+ * crt.S initialises this to the envp pointer passed by the kernel before
+ * calling main(), so getenv() sees exec-time environment variables from the
+ * very first instruction of userspace.
+ *
+ * setenv/unsetenv copy environ to a heap-owned array on first mutation so
+ * they can safely resize it without touching the original kernel stack frame.
+ */
+char **environ = NULL;
 
-/* Find the index of name in _env_store, or -1 if not found. */
+/* 1 once we have heap-owned the environ array; 0 if still pointing at stack */
+static int _env_heap = 0;
+
+/* Count entries in a NULL-terminated char** array */
+static int env_count(char **ep) {
+    int n = 0;
+    if (ep) while (ep[n]) n++;
+    return n;
+}
+
+/* Find the index of "name" in environ, or -1. */
 static int env_find(const char *name) {
+    if (!environ) return -1;
     size_t nlen = strlen(name);
-    for (int i = 0; i < _env_count; i++) {
-        if (_env_store[i] &&
-            strncmp(_env_store[i], name, nlen) == 0 &&
-            _env_store[i][nlen] == '=')
+    for (int i = 0; environ[i]; i++) {
+        if (strncmp(environ[i], name, nlen) == 0 && environ[i][nlen] == '=')
             return i;
     }
     return -1;
 }
 
-char* getenv(const char* name) {
-    int idx = env_find(name);
-    if (idx < 0) return NULL;
-    return _env_store[idx] + strlen(name) + 1; /* skip "NAME=" */
+/*
+ * Ensure environ is a heap-allocated array we can resize.
+ * Copies the pointer array (not the strings) to the heap on first call.
+ * Returns environ on success, NULL on allocation failure.
+ */
+static char **ensure_heap_environ(void) {
+    if (_env_heap) return environ;
+    int n = env_count(environ);
+    char **new_env = malloc((size_t)(n + 2) * sizeof(char *));
+    if (!new_env) return NULL;
+    for (int i = 0; i < n; i++) new_env[i] = environ[i];
+    new_env[n] = NULL;
+    environ = new_env;
+    _env_heap = 1;
+    return environ;
 }
 
-int setenv(const char* name, const char* value, int overwrite) {
+char *getenv(const char *name) {
+    int idx = env_find(name);
+    if (idx < 0) return NULL;
+    return environ[idx] + strlen(name) + 1; /* skip "NAME=" */
+}
+
+int setenv(const char *name, const char *value, int overwrite) {
     int idx = env_find(name);
     if (idx >= 0 && !overwrite)
-        return 0; /* exists, keep old value */
+        return 0;
 
     size_t nlen = strlen(name);
     size_t vlen = strlen(value);
@@ -276,22 +309,35 @@ int setenv(const char* name, const char* value, int overwrite) {
     memcpy(entry + nlen + 1, value, vlen + 1);
 
     if (idx >= 0) {
-        free(_env_store[idx]);
-        _env_store[idx] = entry;
-    } else {
-        if (_env_count >= ENV_MAX) { free(entry); return -1; }
-        _env_store[_env_count++] = entry;
+        /* Replace existing entry — string was either from envp (not ours) or
+         * a previous setenv (ours).  We don't track ownership per-entry, so
+         * just overwrite the pointer; the old string may leak on overwrite,
+         * which is acceptable for a kernel-course libc.                     */
+        environ[idx] = entry;
+        return 0;
     }
+
+    /* Append: need a larger heap array */
+    if (!ensure_heap_environ()) { free(entry); return -1; }
+    int n = env_count(environ);
+    char **new_env = malloc((size_t)(n + 2) * sizeof(char *));
+    if (!new_env) { free(entry); return -1; }
+    for (int i = 0; i < n; i++) new_env[i] = environ[i];
+    new_env[n]     = entry;
+    new_env[n + 1] = NULL;
+    free(environ); /* free old heap array (strings still live) */
+    environ = new_env;
     return 0;
 }
 
-int unsetenv(const char* name) {
+int unsetenv(const char *name) {
     int idx = env_find(name);
     if (idx < 0) return 0; /* not present — success per POSIX */
-    free(_env_store[idx]);
-    /* Compact the array */
-    _env_store[idx] = _env_store[--_env_count];
-    _env_store[_env_count] = NULL;
+    if (!ensure_heap_environ()) return -1;
+    /* Compact: move last entry into the gap, null-terminate */
+    int n = env_count(environ);
+    environ[idx] = environ[n - 1];
+    environ[n - 1] = NULL;
     return 0;
 }
 

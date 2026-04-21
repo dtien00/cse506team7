@@ -15,6 +15,7 @@
  */
 
 #include <fcntl.h>
+#include <signal.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -113,8 +114,10 @@ static void test_bad_pipe(us_test_group_t *group) {
     EXPECT_ERROR(group, "bad-pipe: pipe(NULL) returns error",
                  pipe(NULL));
 
-    EXPECT_ERROR(group, "bad-pipe: pipe((int*)1) returns error",
-                 pipe((int *)1));
+    EXPECT_ERROR(group, "bad-pipe: pipe((int*)1) returns error", ({
+        int (*pipe_fn)(int *) = (int (*)(int *))pipe;
+        pipe_fn((int *)1);
+    }));
 }
 
 /* ── execve ──────────────────────────────────────────────────────────────── */

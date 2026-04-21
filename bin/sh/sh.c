@@ -50,6 +50,7 @@ static int  job_resolve(const char *spec);
 static int  builtin_bg(char **argv);
 static int  builtin_fg(char **argv);
 static int  builtin_jobs(char **argv);
+static int  builtin_kill(char **argv);
 
 static int is_space(char ch) {
     return ch == ' ' || ch == '\t' || ch == '\n';
@@ -113,6 +114,17 @@ static int is_token(const char *token, char expected) {
     return token != NULL && token[0] == expected && token[1] == '\0';
 }
 
+static void free_cmdv(shell_command_t *cmdv, int cmdc) {
+    for (int i = 0; i < cmdc; i++) {
+        for (int j = 0; cmdv[i].argv[j] != NULL; j++) {
+            free(cmdv[i].argv[j]);
+        }
+        /* input_path and output_path are also strdup'd now */
+        if (cmdv[i].input_path)  free(cmdv[i].input_path);
+        if (cmdv[i].output_path) free(cmdv[i].output_path);
+    }
+}
+
 static int parse_line(char *line, shell_command_t *cmdv) {
     char *cursor = line;
     char *token;
@@ -124,11 +136,13 @@ static int parse_line(char *line, shell_command_t *cmdv) {
 
     while ((token = next_token(&cursor)) != NULL) {
         if (cmdc >= MAX_CMDS) {
+            free_cmdv(cmdv, cmdc + 1);
             return -1;
         }
 
         if (is_token(token, '|')) {
             if (argc == 0) {
+                free_cmdv(cmdv, cmdc + 1);
                 return -1;
             }
             cmdv[cmdc].argv[argc] = NULL;
@@ -141,35 +155,41 @@ static int parse_line(char *line, shell_command_t *cmdv) {
             char redirect_op = token[0];
             char *path = next_token(&cursor);
             if (path == NULL || is_token(path, '|') || is_token(path, '<') || is_token(path, '>')) {
+                free_cmdv(cmdv, cmdc + 1);
                 return -1;
             }
 
             if (cmdc >= MAX_CMDS) {
+                free_cmdv(cmdv, cmdc + 1);
                 return -1;
             }
 
             if (argc == 0 && cmdv[cmdc].argv[0] == NULL) {
+                free_cmdv(cmdv, cmdc + 1);
                 return -1;
             }
 
             if (redirect_op == '<') {
                 if (cmdv[cmdc].input_path != NULL) {
+                    free_cmdv(cmdv, cmdc + 1);
                     return -1;
                 }
-                cmdv[cmdc].input_path = path;
+                cmdv[cmdc].input_path = strdup(path);
             } else {
                 if (cmdv[cmdc].output_path != NULL) {
+                    free_cmdv(cmdv, cmdc + 1);
                     return -1;
                 }
-                cmdv[cmdc].output_path = path;
+                cmdv[cmdc].output_path = strdup(path);
             }
             continue;
         }
 
         if (argc >= MAX_ARGS - 1) {
+            free_cmdv(cmdv, cmdc + 1);
             return -1;
         }
-        cmdv[cmdc].argv[argc++] = token;
+        cmdv[cmdc].argv[argc++] = strdup(token);
     }
 
     if (argc == 0) {
@@ -247,7 +267,7 @@ static void exec_command(char **argv) {
     build_exec_path(argv[0], path, sizeof(path));
     execve(path, argv, NULL);
     dprintf(STDERR_FILENO, "sh: %s: command not found\n", argv[0]);
-    exit(127);
+    _exit(127);
 }
 
 static int builtin_cd(char **argv) {
@@ -276,7 +296,7 @@ static int is_builtin(char **argv) {
     }
     return strcmp(argv[0], "cd") == 0 || strcmp(argv[0], "exit") == 0 ||
            strcmp(argv[0], "bg") == 0 || strcmp(argv[0], "fg") == 0 ||
-           strcmp(argv[0], "jobs") == 0;
+           strcmp(argv[0], "jobs") == 0 || strcmp(argv[0], "kill") == 0;
 }
 
 static int run_builtin(char **argv) {
@@ -289,6 +309,7 @@ static int run_builtin(char **argv) {
     if (strcmp(argv[0], "bg") == 0) return builtin_bg(argv);
     if (strcmp(argv[0], "fg") == 0) return builtin_fg(argv);
     if (strcmp(argv[0], "jobs") == 0) return builtin_jobs(argv);
+    if (strcmp(argv[0], "kill") == 0) return builtin_kill(argv);
     return -1;
 }
 
@@ -299,7 +320,6 @@ static int execute_single(shell_command_t *cmd, int background,
     int saved_stdout = -1;
     pid_t pid;
     int status;
-
     if (!cmd->argv[0]) {
         return 0;
     }
@@ -749,6 +769,59 @@ static int builtin_jobs(char **argv) {
             default:          state_str = "Unknown"; break;
         }
         printf("[%d]%c  %-10s %s\n", jobs[i].job_id, mark, state_str, jobs[i].command);
+    }
+    return 0;
+}
+
+static int builtin_kill(char **argv) {
+    if (!argv[1]) {
+        dprintf(STDERR_FILENO, "kill: usage: kill [-signal] pid|%%job\n");
+        return 1;
+    }
+
+    int sig = SIGTERM;
+    int arg_idx = 1;
+
+    // Parse optional -SIGNAL
+    if (argv[arg_idx][0] == '-' && argv[arg_idx][1] >= '0' &&
+        argv[arg_idx][1] <= '9') {
+        sig = atoi(argv[arg_idx] + 1);
+        arg_idx++;
+        if (!argv[arg_idx]) {
+            dprintf(STDERR_FILENO, "kill: missing pid or job spec\n");
+            return 1;
+        }
+    }
+
+    // Process each target
+    for (; argv[arg_idx]; arg_idx++) {
+        const char *target = argv[arg_idx];
+
+        if (target[0] == '%') {
+            // Job spec — resolve via shell job table
+            int idx = job_resolve(target);
+            if (idx < 0 || jobs[idx].state == JOB_UNUSED) {
+                dprintf(STDERR_FILENO, "kill: %s: no such job\n", target);
+                return 1;
+            }
+            pid_t pgid = jobs[idx].pgid;
+
+            // Send the requested signal to the process group
+            kill(-pgid, sig);
+
+            // A stopped process can't handle signals until continued.
+            // POSIX shells send SIGCONT so the target actually dies.
+            if (jobs[idx].state == JOB_STOPPED && sig != SIGCONT)
+                kill(-pgid, SIGCONT);
+        } else {
+            // Bare PID
+            pid_t pid = (pid_t)atoi(target);
+            if (pid == 0) {
+                dprintf(STDERR_FILENO, "kill: invalid pid: %s\n", target);
+                return 1;
+            }
+            kill(pid, sig);
+        }
     }
     return 0;
 }

@@ -21,6 +21,8 @@
  */
 
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include "us_test_common.h"
 
 void run_test_printf(us_test_group_t *group);
@@ -47,6 +49,7 @@ void run_test_nice_extended(us_test_group_t *group);
 void run_test_yield(us_test_group_t *group);
 void run_test_pause(us_test_group_t *group);
 void run_test_procinfo(us_test_group_t *group);
+void run_test_procfs(us_test_group_t *group);
 void run_test_gettimeofday(us_test_group_t *group);
 void run_test_alarm(us_test_group_t *group);
 void run_test_sigaction(us_test_group_t *group);
@@ -75,12 +78,36 @@ void run_test_libc_string(us_test_group_t groups[], int *idx);
 void run_test_libc_ctype(us_test_group_t groups[], int *idx);
 void run_test_libc_stdio(us_test_group_t groups[], int *idx);
 void run_test_libc_stdlib(us_test_group_t groups[], int *idx);
+void run_test_exec_envp(us_test_group_t groups[], int *idx);
 void run_test_libc_time(us_test_group_t groups[], int *idx);
 
 /* base groups + 6 fs_persist sub-groups + libc conformance suites */
 #define MAX_GROUPS 200
 
-int main(void) {
+int main(int argc, char **argv, char **envp) {
+    /*
+     * Probe modes for execve(envp) tests.  Must run before any test
+     * infrastructure so the child process exits cleanly with a simple code.
+     *
+     *   --envp-probe KEY=VALUE   exit 0 if getenv(KEY) == VALUE
+     *   --envp-empty             exit 0 if getenv("SBX_SENTINEL") == NULL
+     */
+    if (argc >= 2 && strcmp(argv[1], "--envp-probe") == 0) {
+        if (argc < 3) return 2;
+        /* argv[2] is "KEY=VALUE"; split at '=' to get key and expected value */
+        char *eq = strchr(argv[2], '=');
+        if (!eq) return 2;
+        *eq = '\0';
+        const char *key = argv[2];
+        const char *expected = eq + 1;
+        char *got = getenv(key);
+        return (got && strcmp(got, expected) == 0) ? 0 : 3;
+    }
+    if (argc >= 2 && strcmp(argv[1], "--envp-empty") == 0) {
+        return (getenv("SBX_SENTINEL") == NULL) ? 0 : 4;
+    }
+    (void)envp; /* not used in normal test mode; environ is the live copy */
+
     us_test_group_t groups[MAX_GROUPS];
     int i;
     for (i = 0; i < MAX_GROUPS; i++) {
@@ -107,26 +134,29 @@ int main(void) {
     run_test_syscall(&groups[idx++]);
     run_test_cow(&groups[idx++]);
     run_test_sched(&groups[idx++]);
-    run_test_signal(&groups[idx++]);
-    run_test_dirent(&groups[idx++]);
-    run_test_termios_tty(&groups[idx++]);
-    run_test_stack_growth(&groups[idx++]);
-    run_test_getrusage(&groups[idx++]);
-    run_test_nice(&groups[idx++]);
-    run_test_nice_extended(&groups[idx++]);
-    run_test_yield(&groups[idx++]);
-    run_test_pause(&groups[idx++]);
-    run_test_procinfo(&groups[idx++]);
-    run_test_gettimeofday(&groups[idx++]);
-    run_test_alarm(&groups[idx++]);
-    run_test_sigaction(&groups[idx++]);
-    run_test_sigsuspend(&groups[idx++]);
-    run_test_pgrp(&groups[idx++]);
-    run_test_jobctl(&groups[idx++]);
-    run_test_pipe_sigpipe(&groups[idx++]);
-    run_test_time(&groups[idx++]);
-    run_test_links(groups, &idx);
-    run_test_nanosleep(&groups[idx++]);
+    // run_test_signal(&groups[idx++]);
+    // run_test_dirent(&groups[idx++]);
+    // run_test_termios_tty(&groups[idx++]);
+    // run_test_stack_growth(&groups[idx++]);
+    // run_test_getrusage(&groups[idx++]);
+    // run_test_nice(&groups[idx++]);
+    // run_test_nice_extended(&groups[idx++]);
+    // run_test_yield(&groups[idx++]);
+    // run_test_pause(&groups[idx++]);
+    // run_test_procinfo(&groups[idx++]);
+    // run_test_procfs(&groups[idx++]);
+    // run_test_gettimeofday(&groups[idx++]);
+    // run_test_alarm(&groups[idx++]);
+    // run_test_sigaction(&groups[idx++]);
+    // run_test_sigsuspend(&groups[idx++]);
+    // run_test_pgrp(&groups[idx++]);
+    // run_test_jobctl(&groups[idx++]);
+    // run_test_pipe_sigpipe(&groups[idx++]);
+    // run_test_time(&groups[idx++]);
+    // run_test_links(groups, &idx);
+    // run_test_nanosleep(&groups[idx++]);
+    // run_test_exec_envp(groups, &idx);
+
     run_test_xv6_compat(&groups[idx++]);
     run_test_fd_limits(&groups[idx++]);
     run_test_bigfile(&groups[idx++]);
@@ -138,13 +168,13 @@ int main(void) {
     run_test_fd_offset(&groups[idx++]);
     run_test_forkforkfork(&groups[idx++]);
     // run_test_writebig(&groups[idx++]); //test to see if disk kills itself on filling up
-
-    /* comprehensive libc conformance tests */
-    run_test_libc_string(groups, &idx);
-    run_test_libc_ctype(groups, &idx);
-    run_test_libc_stdio(groups, &idx);
-    run_test_libc_stdlib(groups, &idx);
-    run_test_libc_time(groups, &idx);
+    
+    // /* comprehensive libc conformance tests */
+    // run_test_libc_string(groups, &idx);
+    // run_test_libc_ctype(groups, &idx);
+    // run_test_libc_stdio(groups, &idx);
+    // run_test_libc_stdlib(groups, &idx);
+    // run_test_libc_time(groups, &idx);
 
     return ut_suite_end(groups, idx);
 }

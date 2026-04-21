@@ -10,6 +10,7 @@
  * can verify fork fails before NPROC and recovers after reaping.
  */
 
+#include <signal.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include "us_test_common.h"
