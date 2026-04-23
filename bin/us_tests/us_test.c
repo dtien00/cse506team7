@@ -61,6 +61,7 @@ void run_test_jobctl(us_test_group_t *group);
 void run_test_links(us_test_group_t groups[], int *idx);
 void run_test_pipe_sigpipe(us_test_group_t *group);
 void run_test_nanosleep(us_test_group_t *group);
+void run_test_uaccess(us_test_group_t *group);
 
 /* comprehensive libc conformance suites (each fills multiple groups) */
 void run_test_libc_string(us_test_group_t groups[], int *idx);
@@ -144,6 +145,7 @@ int main(int argc, char **argv, char **envp) {
     run_test_time(&groups[idx++]);
     run_test_links(groups, &idx);
     run_test_nanosleep(&groups[idx++]);
+    run_test_uaccess(&groups[idx++]);
     run_test_exec_envp(groups, &idx);
 
     /* comprehensive libc conformance tests */

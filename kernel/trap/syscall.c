@@ -1,6 +1,7 @@
 #include "trap/syscall.h"
 #include "drivers/rtc.h"
 #include "arch/riscv.h"
+#include "lib/uaccess.h"
 #include "process/process.h"
 #include "errno.h"
 #include "kernel/printk.h"
@@ -541,8 +542,10 @@ ssize_t sys_read(int fd, void *buf, size_t count) {
         return -ENOMEM;
 
     int n = file_read(fd, kbuf, count);
-    if (n > 0)
-        copy_to_user(buf, kbuf, (size_t) n);
+    if (n > 0 && copy_to_user(buf, kbuf, (size_t)n) < 0) {
+        kfree(kbuf);
+        return -EFAULT;
+    }
 
     kfree(kbuf);
     return n;
@@ -558,7 +561,10 @@ ssize_t sys_write(int fd, const void *buf, size_t count) {
     if (!kbuf)
         return -ENOMEM;
 
-    copy_from_user(kbuf, buf, count);
+    if (copy_from_user(kbuf, buf, count) < 0) {
+        kfree(kbuf);
+        return -EFAULT;
+    }
     int n = file_write(fd, kbuf, count);
 
     kfree(kbuf);
@@ -580,7 +586,7 @@ int sys_open(const char *path, int flags, mode_t mode) {
     if (!current || !path) return -EINVAL;
 
     char kpath[MAX_PATH];
-    strncpy_from_user(kpath, path, MAX_PATH - 1);
+    if (strncpy_from_user(kpath, path, MAX_PATH - 1) < 0) return -EFAULT;
     kpath[MAX_PATH - 1] = '\0';
 
     return file_open_with_flags(kpath, flags, mode);
@@ -1534,19 +1540,15 @@ int sys_stat(const char *upath, struct stat *ustat)
 {
     if (!current || !upath || !ustat) return -EINVAL;
 
-    // 1. Copy path from user
     char kpath[MAX_PATH];
-    strncpy_from_user(kpath, upath, MAX_PATH - 1);
+    if (strncpy_from_user(kpath, upath, MAX_PATH - 1) < 0) return -EFAULT;
     kpath[MAX_PATH - 1] = '\0';
 
-    // 2. Do kernel-side stat (no user memory access)
     struct stat kst;
     int ret = file_stat(kpath, &kst);
     if (ret != 0) return ret;
 
-    // 3. Copy result back to user
-    copy_to_user(ustat, &kst, sizeof(struct stat));
-
+    if (copy_to_user(ustat, &kst, sizeof(struct stat)) < 0) return -EFAULT;
     return 0;
 }
 
@@ -1555,14 +1557,14 @@ int sys_lstat(const char *upath, struct stat *ustat)
     if (!current || !upath || !ustat) return -EINVAL;
 
     char kpath[MAX_PATH];
-    strncpy_from_user(kpath, upath, MAX_PATH - 1);
+    if (strncpy_from_user(kpath, upath, MAX_PATH - 1) < 0) return -EFAULT;
     kpath[MAX_PATH - 1] = '\0';
 
     struct stat kst;
     int ret = file_lstat(kpath, &kst);
     if (ret != 0) return ret;
 
-    copy_to_user(ustat, &kst, sizeof(struct stat));
+    if (copy_to_user(ustat, &kst, sizeof(struct stat)) < 0) return -EFAULT;
     return 0;
 }
 
@@ -1570,13 +1572,11 @@ int sys_fstat(int fd, struct stat *ustat)
 {
     if (!current || !ustat) return -EINVAL;
 
-    // 1. Kernel-side stat by fd (no user memory needed)
     struct stat kst;
     int ret = file_fstat(fd, &kst);
     if (ret != 0) return ret;
 
-    // 2. Copy result to user
-    copy_to_user(ustat, &kst, sizeof(struct stat));
+    if (copy_to_user(ustat, &kst, sizeof(struct stat)) < 0) return -EFAULT;
     return 0;
 }
 
