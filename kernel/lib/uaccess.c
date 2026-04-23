@@ -1,32 +1,39 @@
 #include "lib/uaccess.h"
 #include "arch/riscv.h"
 #include "errno.h"
+#include "mm/vma.h"
 #include "mm/vmm.h"
 #include "process/process.h"
 
-/* Reject kernel/MMIO addresses that S-mode can access without faulting.
+/* Validate that [uptr, uptr+size) is a legitimate user address range.
  *
- * The rule: if the page table has a *valid* mapping for this address but
- * PTE_U is NOT set, it is a kernel or device page — reject it.  S-mode with
- * SUM=1 would silently read/write those pages, bypassing fault recovery.
- *
- * Unmapped addresses (PTE absent or PTE_V=0) are allowed through: they are
- * either demand-paged user pages (stack growth, anonymous mmap) or genuinely
- * bad pointers.  The byte loop's fault recovery handles both: the page fault
- * handler grows the stack / allocates a demand page and retries, OR it calls
- * kill_current() which (with copy_fault_recover set) redirects to &&fault. */
-static int check_user_ptr(const void *uptr) {
+ * Fast path: the range overlaps an existing VMA (already demand-paged in).
+ * Slow path: the range falls below a VMA_GROWSDOWN stack VMA's current start
+ *   but within its allowed growth floor (vma->end - USTACK_SIZE).  Those pages
+ *   haven't been faulted in yet but are valid — copy_to/from_user will trigger
+ *   demand paging via copy_fault_recover if needed. */
+static int check_user_ptr(const void *uptr, size_t size) {
     if (!current || !uptr) return -EFAULT;
-    if ((uintptr_t)uptr >= KERNBASE) return -EFAULT;
-    uint64_t *pte = vmm_walk(current->pagetable, (uintptr_t)uptr, 0);
-    if (pte && (*pte & PTE_V) && !(*pte & PTE_U)) return -EFAULT;
-    return 0;
+    uintptr_t start = (uintptr_t)uptr;
+    uintptr_t end   = start + size;
+    if (end < start || start >= KERNBASE) return -EFAULT;
+
+    if (vma_find_overlap(current->vma_list, start, end)) return 0;
+
+    /* Growsdown: start may be below the VMA's current start but within the
+     * stack's maximum growth range.  Mirror the floor check in trap.c. */
+    struct vm_area *gd = vma_find_growsdown(current->vma_list, start);
+    if (gd) {
+        if (start >= vma_stack_floor(gd) && end <= gd->end) return 0;
+    }
+
+    return -EFAULT;
 }
 
 int copy_to_user(void *dst, const void *src, size_t len) {
     if (!dst || !src) return -EFAULT;
     if (len == 0) return 0;
-    if (check_user_ptr(dst) < 0) return -EFAULT;
+    if (check_user_ptr(dst, len) < 0) return -EFAULT;
 
     current->copy_fault_recover = (uintptr_t)&&fault;
     set_csr_bit(sstatus, SSTATUS_SUM);
@@ -49,7 +56,7 @@ fault:
 int copy_from_user(void *dst, const void *src, size_t len) {
     if (!dst || !src) return -EFAULT;
     if (len == 0) return 0;
-    if (check_user_ptr(src) < 0) return -EFAULT;
+    if (check_user_ptr(src, len) < 0) return -EFAULT;
 
     current->copy_fault_recover = (uintptr_t)&&fault;
     set_csr_bit(sstatus, SSTATUS_SUM);
@@ -72,7 +79,7 @@ fault:
 ssize_t strncpy_from_user(char *dst, const char *src, size_t n) {
     if (!dst || !src) return -EFAULT;
     if (n == 0) return 0;
-    if (check_user_ptr(src) < 0) return -EFAULT;
+    if (check_user_ptr(src, n) < 0) return -EFAULT;
 
     current->copy_fault_recover = (uintptr_t)&&fault;
     set_csr_bit(sstatus, SSTATUS_SUM);

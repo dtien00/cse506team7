@@ -1,6 +1,7 @@
 #pragma once
 
 #include "kernel/types.h"
+#include "arch/riscv.h"
 
 // Virtual Memory Area (VMA) - tracks memory regions in a process's address space
 // Each VMA represents a contiguous region of virtual memory with specific properties
@@ -82,3 +83,10 @@ void vma_dump(struct vm_area *vma_list);
 // Returns the VMA if addr is below the current stack bottom, NULL otherwise.
 // The caller is responsible for enforcing maximum stack size limits.
 struct vm_area *vma_find_growsdown(struct vm_area *vma_list, uintptr_t addr);
+
+// Return the lowest address the stack is allowed to grow to.
+// Both the page fault handler and the uaccess validator use this formula;
+// keeping it here ensures they stay in sync.
+static inline uintptr_t vma_stack_floor(const struct vm_area *stack_vma) {
+    return (stack_vma->end > USTACK_SIZE) ? stack_vma->end - USTACK_SIZE : 0;
+}
