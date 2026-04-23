@@ -448,6 +448,7 @@ pid_t sys_fork(void) {
     child->signal_mask = current->signal_mask; // Fork child inherits parent's signal mask
     // POSIX: child inherits parent's signal disposition table across fork
     memcpy(child->handlers, current->handlers, sizeof(current->handlers));
+    memcpy(child->sig_flags, current->sig_flags, sizeof(current->sig_flags));
     child->priority    = current->priority;    /* POSIX: nice value is inherited across fork */
     // Child also inherits parent's process group and session IDs
     child->pgid = current->pgid;
@@ -1633,7 +1634,7 @@ int sys_sigaction(int sig, const struct sigaction *act, struct sigaction *oldact
     if (oldact != NULL) {
         oldact->sa_handler = (sighandler_t)current->handlers[sig];
         oldact->sa_mask    = 0;
-        oldact->sa_flags   = 0;
+        oldact->sa_flags   = (int)current->sig_flags[sig]; 
     }
 
     // Install new disposition — only SIG_DFL (0) and SIG_IGN (1) accepted;
@@ -1645,6 +1646,7 @@ int sys_sigaction(int sig, const struct sigaction *act, struct sigaction *oldact
             return -EINVAL;
         }
         current->handlers[sig] = (void *)h;
+        current->sig_flags[sig] = (uint32_t)act->sa_flags & SA_KNOWN_FLAGS;
     }
 
     clear_csr_bit(sstatus, SSTATUS_SUM);

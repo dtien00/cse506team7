@@ -152,7 +152,8 @@ struct proc {
     // char cwd[MAX_PATH];
 
     // Signal handlers
-    void *handlers[32];
+    void *handlers[32]; // existing SIG_DFL / SIG_IGN per signal
+    uint32_t sig_flags[32]; // sa_flags bits stored per signal
 
     // Process group and session management
     pid_t pgid;

@@ -631,6 +631,13 @@ int exec(const char *path, char *const argv[]) {
     for (int i = 0; i < 32; i++) {
         if (current->handlers[i] != (void *)SIG_IGN)
             current->handlers[i] = (void *)SIG_DFL;
+        for (int i = 1; i < 32; i++) {
+            if (current->handlers[i] != (void *)SIG_DFL &&
+                current->handlers[i] != (void *)SIG_IGN) {
+                current->handlers[i]  = (void *)SIG_DFL;
+                current->sig_flags[i] = 0;  // NEW: clear flags too
+            }
+        }
     }
     pagetable_t old_pt = current->pagetable;
     struct vm_area *old_vma_list = current->vma_list;

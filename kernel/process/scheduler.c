@@ -409,12 +409,13 @@ void proc_stop(struct proc *p) {
 
     // SIGCHLD to parent: notify that child stopped (POSIX WUNTRACED).
     // Must use p->parent (the stopped child's parent), not current->parent.
-    if (p->parent) {
-        p->parent->pending_signals |= (1u << SIGCHLD);
+    // SA_NOCLDSTOP on the parent's SIGCHLD handler suppresses this notification.
+    if (p->parent && !(p->parent->sig_flags[KERNEL_SIGCHLD] & SA_NOCLDSTOP)) {
+        p->parent->pending_signals |= (1u << KERNEL_SIGCHLD);
         // Wake parent from waitpid (sleeps on its own proc pointer)
         proc_wakeup(p->parent);
         // Also wake sigsuspend/pause channel if SIGCHLD handler is non-default
-        if (p->parent->handlers[SIGCHLD] != (void *)0 /* SIG_DFL */)
+        if (p->parent->handlers[KERNEL_SIGCHLD] != (void *)0 /* SIG_DFL */)
             proc_wakeup(&p->parent->pending_signals);
     }
 
