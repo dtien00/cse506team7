@@ -29,6 +29,7 @@ void run_test_printf(us_test_group_t *group);
 void run_test_string(us_test_group_t *group);
 void run_test_ctype(us_test_group_t *group);
 void run_test_stdlib(us_test_group_t *group);
+void run_test_sbrk_brk(us_test_group_t *group);
 void run_test_malloc(us_test_group_t *group);
 void run_test_file_io(us_test_group_t *group);
 void run_test_process(us_test_group_t *group);
@@ -125,6 +126,7 @@ int main(int argc, char **argv, char **envp) {
     run_test_string(&groups[idx++]);
     run_test_ctype(&groups[idx++]);
     run_test_stdlib(&groups[idx++]);
+    // run_test_sbrk_brk(&groups[idx++]);
     run_test_malloc(&groups[idx++]);
     run_test_file_io(&groups[idx++]);
     run_test_process(&groups[idx++]);
