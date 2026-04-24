@@ -96,7 +96,6 @@ struct proc* proc_create(const char *name) {
     struct proc *p = proc_alloc();
     if (!p) return NULL;
 
-    int idx = p - proctab;
     memset(p, 0, sizeof(*p));
 
     p->pid = next_pid++;
@@ -106,7 +105,15 @@ struct proc* proc_create(const char *name) {
     p->sid  = p->pid;
     strncpy(p->name, name, MAX_NAME - 1);
     p->state = PROC_CREATED;
-    p->context.sp = (uint64_t)&kstacks[idx][KSTACK_SIZE];
+
+    void *pages = pmm_alloc_pages(2);
+    if (!pages) return NULL;
+    p->kguard = (uint8_t *)pages;
+    p->kstack = (uint8_t *)pages + KSTACK_SIZE;
+    vmm_unmap(vmm_kernel_pagetable(), (uintptr_t)p->kguard);
+    asm volatile("sfence.vma %0, zero" :: "r"((uintptr_t)p->kguard));
+
+    p->context.sp = (uint64_t)(p->kstack + KSTACK_SIZE);
     p->context.ra = (uint64_t)proc_entry;
     p->priority = PROC_DEFAULT_PRIORITY;
     p->mlfq_level = 0;
@@ -161,6 +168,16 @@ void proc_free(struct proc *p) {
 
     // Free VMA list
     vma_free_all(p->vma_list);
+
+    if (p->kguard) {
+        vmm_map(vmm_kernel_pagetable(), (uintptr_t)p->kguard,
+                (uintptr_t)p->kguard, PTE_R | PTE_W);
+        asm volatile("sfence.vma %0, zero" :: "r"((uintptr_t)p->kguard));
+        pmm_free_page(p->kguard);
+        pmm_free_page(p->kstack);
+        p->kguard = NULL;
+        p->kstack = NULL;
+    }
 
     memset(p, 0, sizeof(*p));
     p->state = PROC_UNUSED;
@@ -374,8 +391,7 @@ void fork_ret(void) {
     trap_frame *tf = p->trapframe;
 
     // Mirror proc_start_user: kernel stack in sscratch, U-mode sstatus, switch pagetable
-    int idx = p - proctab;
-    write_csr(sscratch, (uint64_t)&kstacks[idx][KSTACK_SIZE]);
+    write_csr(sscratch, (uint64_t)(p->kstack + KSTACK_SIZE));
     write_csr(sepc, tf->sepc);
     write_csr(sstatus, (tf->sstatus & ~SSTATUS_SPP) | SSTATUS_SPIE);
     vmm_switch(p->pagetable);
@@ -428,8 +444,7 @@ void proc_start_user(struct proc *p, uint64_t entry, uint64_t user_sp) {
 
     // Point sscratch at this process's kernel stack top so the next
     // trap from U-mode can find the kernel stack.
-    int idx = p - proctab;
-    write_csr(sscratch, (uint64_t)&kstacks[idx][KSTACK_SIZE]);
+    write_csr(sscratch, (uint64_t)(p->kstack + KSTACK_SIZE));
 
     // Switch to the process's page table.
     // Kernel mappings are shared in every page table, so this is safe.
@@ -652,6 +667,31 @@ int exec(const char *path, char *const argv[], char *const envp[]) {
         if (vma_insert(&new_vma_list, seg_vma) != 0) {
             vma_free(seg_vma);
             goto fail_vma;
+        }
+    }
+
+    // 5a. Reserve kernel device regions as zero-permission VMAs.
+    // vmm_create_pagetable copies the kernel's device PTEs (no PTE_U) into every
+    // user page table for low VA addresses.  Without VMAs covering those ranges,
+    // vma_find_free_region is blind to them and can hand out addresses that overlap
+    // kernel identity mappings, causing PROT FAULTs on demand-page attempts.
+    // PROT=0 ensures any user access is caught as a protection violation.
+    {
+        static const struct { uintptr_t start; uintptr_t end; } dev_regions[] = {
+            { 0x00101000, 0x00102000 },  /* Goldfish RTC           */
+            { 0x0C000000, 0x10010000 },  /* PLIC + UART (contiguous) */
+            { 0x30000000, 0x31000000 },  /* PCIe ECAM              */
+            { 0x40000000, 0x50000000 },  /* PCI MMIO BAR window    */
+            { KERNBASE, ((uintptr_t)(KERNBASE >> 30) + 1) << 30 },  /* Full kernel L2 VA range    */
+        };
+        for (size_t di = 0; di < sizeof(dev_regions)/sizeof(dev_regions[0]); di++) {
+            struct vm_area *dv = vma_create(dev_regions[di].start, dev_regions[di].end,
+                                            0, VMA_PRIVATE, VMA_TYPE_DEVICE);
+            if (!dv) goto fail_vma;
+            if (vma_insert(&new_vma_list, dv) != 0) {
+                vma_free(dv);
+                goto fail_vma;
+            }
         }
     }
 

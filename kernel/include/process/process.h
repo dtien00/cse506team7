@@ -58,7 +58,6 @@ static inline int kernel_ctz(uint32_t x) {
 #define PROC_DEFAULT_PRIORITY 5
 
 extern struct proc *current;
-extern uint8_t kstacks[][KSTACK_SIZE];
 
 struct proc_info {
     int   pid;
@@ -131,6 +130,10 @@ struct proc {
     uint32_t signal_mask;
     struct proc *next;
 
+    // Per-process kernel stack with guard page below it
+    uint8_t *kstack;   // stack page — grows down from kstack + KSTACK_SIZE
+    uint8_t *kguard;   // guard page — unmapped; fault here = stack overflow
+
     // Kernel scheduler context (callee-saved regs, used by swtch)
     struct context context;
 
@@ -162,6 +165,8 @@ struct proc {
     uint8_t stop_unreported;
     uint8_t cont_unreported;
     uint8_t stop_signal;        // which signal caused the stop (for WSTOPSIG)
+
+    uintptr_t copy_fault_recover; // 0 when not inside a copy function; set by copy_{to,from}_user
 };
 
 extern struct proc proctab[];

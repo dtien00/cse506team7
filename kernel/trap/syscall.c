@@ -1,6 +1,7 @@
 #include "trap/syscall.h"
 #include "drivers/rtc.h"
 #include "arch/riscv.h"
+#include "lib/uaccess.h"
 #include "process/process.h"
 #include "errno.h"
 #include "kernel/printk.h"
@@ -10,7 +11,6 @@
 #include "mm/pmm.h"
 #include "mm/vmm.h"
 #include "mm/vma.h"
-#include "process/process.h"
 #include "trap/trap.h"
 #include "fs/block_cache.h"
 #include "signal.h"
@@ -19,12 +19,14 @@
 #define MAP_FAILED ((void *) -1)
 #define PROT_READ  0x1
 #define PROT_WRITE 0x2
+#define PROT_EXEC  0x4
+#define MAP_SHARED    0x01
 #define MAP_PRIVATE   0x02
 #define MAP_ANONYMOUS 0x20
 #define MAP_FIXED     0x10
 
 #define USER_HEAP_START 0x11000000UL
-#define USER_HEAP_END   0x40000000UL
+#define USER_HEAP_END   MAXVA  /* Sv39 user VA ceiling; device VMAs block kernel/MMIO ranges */
 
 #define MAX_ARGS 64
 #define KARG_MAX 256
@@ -541,8 +543,10 @@ ssize_t sys_read(int fd, void *buf, size_t count) {
         return -ENOMEM;
 
     int n = file_read(fd, kbuf, count);
-    if (n > 0)
-        copy_to_user(buf, kbuf, (size_t) n);
+    if (n > 0 && copy_to_user(buf, kbuf, (size_t)n) < 0) {
+        kfree(kbuf);
+        return -EFAULT;
+    }
 
     kfree(kbuf);
     return n;
@@ -558,7 +562,10 @@ ssize_t sys_write(int fd, const void *buf, size_t count) {
     if (!kbuf)
         return -ENOMEM;
 
-    copy_from_user(kbuf, buf, count);
+    if (copy_from_user(kbuf, buf, count) < 0) {
+        kfree(kbuf);
+        return -EFAULT;
+    }
     int n = file_write(fd, kbuf, count);
 
     kfree(kbuf);
@@ -580,7 +587,7 @@ int sys_open(const char *path, int flags, mode_t mode) {
     if (!current || !path) return -EINVAL;
 
     char kpath[MAX_PATH];
-    strncpy_from_user(kpath, path, MAX_PATH - 1);
+    if (strncpy_from_user(kpath, path, MAX_PATH - 1) < 0) return -EFAULT;
     kpath[MAX_PATH - 1] = '\0';
 
     return file_open_with_flags(kpath, flags, mode);
@@ -639,10 +646,12 @@ int sys_pipe(int pipefd[2]) {
         return -EMFILE;
     }
 
-    set_csr_bit(sstatus, SSTATUS_SUM);
-    pipefd[0] = read_fd;
-    pipefd[1] = write_fd;
-    clear_csr_bit(sstatus, SSTATUS_SUM);
+    int kfds[2] = { read_fd, write_fd };
+    if (copy_to_user(pipefd, kfds, sizeof(kfds)) < 0) {
+        fd_close(&current->fds, read_fd);
+        fd_close(&current->fds, write_fd);
+        return -EFAULT;
+    }
     return 0;
 }
 
@@ -748,11 +757,6 @@ pid_t sys_getppid(void) {
     }
     return 0;   /* POSIX: init (PID 1) has no parent → return 0 */
 }
-
-// void *sys_sbrk(intptr_t increment) {
-//     printk("sys_sbrk(%ld) not implemented\n", increment);
-//     return (void *) -1;
-// }
 
 int sys_sleep(int seconds) {
     if (seconds <= 0) return 0;
@@ -962,59 +966,34 @@ void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t off
             return MAP_FAILED;
         }
     } else {
-        if (p->sz < USER_HEAP_START) {
-            p->sz = USER_HEAP_START;
-        }
-        va = PGROUNDUP(p->sz);
-
-        if (va + alloc_size > USER_HEAP_END) {
+        /* Find a free gap in the VMA list rather than bumping p->sz.
+         * This lets munmap genuinely reclaim virtual address space: removing
+         * a VMA creates a gap that vma_find_free_region will reuse on the
+         * next mmap call.  p->sz is left to sbrk/brk exclusively. */
+        va = vma_find_free_region(p->vma_list, alloc_size,
+                                  USER_HEAP_START, USER_HEAP_START, USER_HEAP_END);
+        if (va == 0) {
             printk("sys_mmap: out of virtual address space\n");
             return MAP_FAILED;
         }
     }
 
-    uint64_t perm = PTE_U;
-    if (prot & PROT_READ) perm |= PTE_R;
-    if (prot & PROT_WRITE) perm |= PTE_W;
+    uint32_t vma_prot = 0;
+    if (prot & PROT_READ)  vma_prot |= VMA_PROT_READ;
+    if (prot & PROT_WRITE) vma_prot |= VMA_PROT_WRITE;
+    if (prot & PROT_EXEC)  vma_prot |= VMA_PROT_EXEC;
 
-    for (size_t i = 0; i < pages; i++) {
-        uintptr_t page_va = va + (i * PGSIZE);
-        void* page_pa = pmm_alloc_page();
+    uint32_t vma_flags = VMA_PRIVATE;
+    if (flags & MAP_SHARED) vma_flags = VMA_SHARED;
 
-        if (page_pa == NULL) {
-            for (size_t j = 0; j < i; j++) {
-                uintptr_t cleanup_va = va + (j * PGSIZE);
-                uint64_t *pte = vmm_walk(p->pagetable, cleanup_va, 0);
-                if (pte && (*pte & PTE_V)) {
-                    uintptr_t cleanup_pa = PTE_TO_PA(*pte);
-                    vmm_unmap(p->pagetable, cleanup_va);
-                    pmm_free_page((void*)cleanup_pa);
-                }
-            }
-            return MAP_FAILED;
-        }
+    struct vm_area *new_vma = vma_create(va, va + alloc_size,
+                                         vma_prot, vma_flags, VMA_TYPE_ANON);
+    if (!new_vma)
+        return MAP_FAILED;
 
-        for (int j = 0; j < PGSIZE; j++) {
-            ((char*)page_pa)[j] = 0;
-        }
-
-        if (vmm_map(p->pagetable, page_va, (uintptr_t)page_pa, perm) != 0) {
-            pmm_free_page(page_pa);
-            for (size_t j = 0; j < i; j++) {
-                uintptr_t cleanup_va = va + (j * PGSIZE);
-                uint64_t *pte = vmm_walk(p->pagetable, cleanup_va, 0);
-                if (pte && (*pte & PTE_V)) {
-                    uintptr_t cleanup_pa = PTE_TO_PA(*pte);
-                    vmm_unmap(p->pagetable, cleanup_va);
-                    pmm_free_page((void*)cleanup_pa);
-                }
-            }
-            return MAP_FAILED;
-        }
-    }
-
-    if (!(flags & MAP_FIXED)) {
-        p->sz = va + alloc_size;
+    if (vma_insert(&p->vma_list, new_vma) != 0) {
+        vma_free(new_vma);
+        return MAP_FAILED;
     }
 
     return (void*)va;
@@ -1031,18 +1010,29 @@ int sys_munmap(void *addr, size_t length) {
         return -1;
     }
 
-    uintptr_t va = (uintptr_t)addr;
-    size_t pages = (length + PGSIZE - 1) / PGSIZE;
+    uintptr_t unmap_start = (uintptr_t)addr;
+    uintptr_t unmap_end   = unmap_start + PGROUNDUP(length);
 
-    for (size_t i = 0; i < pages; i++) {
-        uintptr_t page_va = va + (i * PGSIZE);
-
+    /* Free any physical pages that were demand-faulted in. */
+    for (uintptr_t page_va = unmap_start; page_va < unmap_end; page_va += PGSIZE) {
         uint64_t *pte = vmm_walk(p->pagetable, page_va, 0);
-        if (pte && (*pte & PTE_V)) {
+        if (pte && (*pte & PTE_V) && (*pte & PTE_U)) {
             uintptr_t pa = PTE_TO_PA(*pte);
             vmm_unmap(p->pagetable, page_va);
             pmm_free_page((void*)pa);
         }
+    }
+
+    /* Remove VMA(s) that cover this range (skip kernel device reservations). */
+    struct vm_area *v = p->vma_list;
+    while (v) {
+        struct vm_area *next = v->next;
+        if (v->start < unmap_end && v->end > unmap_start &&
+                v->type != VMA_TYPE_DEVICE) {
+            vma_remove(&p->vma_list, v);
+            vma_free(v);
+        }
+        v = next;
     }
 
     return 0;
@@ -1071,58 +1061,52 @@ int sys_brk(void *addr) {
 
     uintptr_t old_break = p->sz;
 
+    /* Find existing heap VMA or create one on first brk growth. */
+    struct vm_area *heap_vma = NULL;
+    for (struct vm_area *v = p->vma_list; v; v = v->next) {
+        if (v->type == VMA_TYPE_HEAP) { heap_vma = v; break; }
+    }
+
     if (new_break > old_break) {
-        uintptr_t start = PGROUNDUP(old_break);
-        uintptr_t end = PGROUNDUP(new_break);
-        size_t pages = (end - start) / PGSIZE;
+        uintptr_t new_end = PGROUNDUP(new_break);
 
-        for (size_t i = 0; i < pages; i++) {
-            uintptr_t va = start + (i * PGSIZE);
-            void* pa = pmm_alloc_page();
-
-            if (pa == NULL) {
-                for (size_t j = 0; j < i; j++) {
-                    uintptr_t cleanup_va = start + (j * PGSIZE);
-                    uint64_t *pte = vmm_walk(p->pagetable, cleanup_va, 0);
-                    if (pte && (*pte & PTE_V)) {
-                        uintptr_t cleanup_pa = PTE_TO_PA(*pte);
-                        vmm_unmap(p->pagetable, cleanup_va);
-                        pmm_free_page((void*)cleanup_pa);
-                    }
-                }
-                return -1;
-            }
-
-            for (int j = 0; j < PGSIZE; j++) {
-                ((char*)pa)[j] = 0;
-            }
-
-            if (vmm_map(p->pagetable, va, (uintptr_t)pa, PTE_R | PTE_W | PTE_U) != 0) {
-                pmm_free_page(pa);
-                for (size_t j = 0; j < i; j++) {
-                    uintptr_t cleanup_va = start + (j * PGSIZE);
-                    uint64_t *pte = vmm_walk(p->pagetable, cleanup_va, 0);
-                    if (pte && (*pte & PTE_V)) {
-                        uintptr_t cleanup_pa = PTE_TO_PA(*pte);
-                        vmm_unmap(p->pagetable, cleanup_va);
-                        pmm_free_page((void*)cleanup_pa);
-                    }
-                }
+        if (heap_vma) {
+            /* Extend existing heap VMA — no physical pages allocated. */
+            if (new_end > heap_vma->end)
+                heap_vma->end = new_end;
+        } else {
+            /* First brk growth: create the heap VMA covering all touched pages.
+             * Round up to at least one page so vma_create's start < end holds. */
+            uintptr_t vma_start = PGROUNDUP(old_break);
+            uintptr_t vma_end   = (new_end > vma_start) ? new_end : vma_start + PGSIZE;
+            heap_vma = vma_create(vma_start, vma_end,
+                                  VMA_PROT_READ | VMA_PROT_WRITE,
+                                  VMA_PRIVATE, VMA_TYPE_HEAP);
+            if (!heap_vma) return -1;
+            if (vma_insert(&p->vma_list, heap_vma) != 0) {
+                vma_free(heap_vma);
                 return -1;
             }
         }
     } else if (new_break < old_break) {
-        uintptr_t start = PGROUNDUP(new_break);
-        uintptr_t end = PGROUNDUP(old_break);
-        size_t pages = (end - start) / PGSIZE;
-
-        for (size_t i = 0; i < pages; i++) {
-            uintptr_t va = start + (i * PGSIZE);
+        /* Shrink: free any physical pages in the released range. */
+        uintptr_t free_start = PGROUNDUP(new_break);
+        uintptr_t free_end   = PGROUNDUP(old_break);
+        for (uintptr_t va = free_start; va < free_end; va += PGSIZE) {
             uint64_t *pte = vmm_walk(p->pagetable, va, 0);
             if (pte && (*pte & PTE_V)) {
                 uintptr_t pa = PTE_TO_PA(*pte);
                 vmm_unmap(p->pagetable, va);
                 pmm_free_page((void*)pa);
+            }
+        }
+        if (heap_vma) {
+            uintptr_t new_end = PGROUNDUP(new_break);
+            if (new_end <= heap_vma->start) {
+                vma_remove(&p->vma_list, heap_vma);
+                vma_free(heap_vma);
+            } else {
+                heap_vma->end = new_end;
             }
         }
     }
@@ -1168,11 +1152,9 @@ off_t sys_lseek(int fd, off_t offset, int whence) {
 int sys_unlink(const char *path) {
     if (!current) return -1;
 
-    set_csr_bit(sstatus, SSTATUS_SUM);
     char kpath[MAX_PATH];
-    strncpy(kpath, path, MAX_PATH - 1);
+    if (strncpy_from_user(kpath, path, MAX_PATH - 1) < 0) return -EFAULT;
     kpath[MAX_PATH - 1] = '\0';
-    clear_csr_bit(sstatus, SSTATUS_SUM);
 
     return vfs_unlink(kpath);
 }
@@ -1184,12 +1166,10 @@ int sys_link(const char *uoldpath, const char *unewpath) {
     char *knew = kmalloc(MAX_PATH);
     if (!kold || !knew) { kfree(kold); kfree(knew); return -ENOMEM; }
 
-    set_csr_bit(sstatus, SSTATUS_SUM);
-    strncpy(kold, uoldpath, MAX_PATH - 1);
+    if (strncpy_from_user(kold, uoldpath, MAX_PATH - 1) < 0) { kfree(kold); kfree(knew); return -EFAULT; }
     kold[MAX_PATH - 1] = '\0';
-    strncpy(knew, unewpath, MAX_PATH - 1);
+    if (strncpy_from_user(knew, unewpath, MAX_PATH - 1) < 0) { kfree(kold); kfree(knew); return -EFAULT; }
     knew[MAX_PATH - 1] = '\0';
-    clear_csr_bit(sstatus, SSTATUS_SUM);
 
     if (dentry_normalize_path(current->fs->cwd, vfs_get_root(),
                               kold, kold, MAX_PATH) < 0) {
@@ -1212,12 +1192,10 @@ int sys_symlink(const char *utarget, const char *ulinkpath) {
     char *klinkpath = kmalloc(MAX_PATH);
     if (!ktarget || !klinkpath) { kfree(ktarget); kfree(klinkpath); return -ENOMEM; }
 
-    set_csr_bit(sstatus, SSTATUS_SUM);
-    strncpy(ktarget,   utarget,   MAX_PATH - 1);
+    if (strncpy_from_user(ktarget,   utarget,   MAX_PATH - 1) < 0) { kfree(ktarget); kfree(klinkpath); return -EFAULT; }
     ktarget[MAX_PATH - 1] = '\0';
-    strncpy(klinkpath, ulinkpath, MAX_PATH - 1);
+    if (strncpy_from_user(klinkpath, ulinkpath, MAX_PATH - 1) < 0) { kfree(ktarget); kfree(klinkpath); return -EFAULT; }
     klinkpath[MAX_PATH - 1] = '\0';
-    clear_csr_bit(sstatus, SSTATUS_SUM);
 
     if (dentry_normalize_path(current->fs->cwd, vfs_get_root(),
                               klinkpath, klinkpath, MAX_PATH) < 0) {
@@ -1235,10 +1213,8 @@ ssize_t sys_readlink(const char *upath, char *ubuf, size_t bufsiz) {
     char *kpath = kmalloc(MAX_PATH);
     if (!kpath) return -ENOMEM;
 
-    set_csr_bit(sstatus, SSTATUS_SUM);
-    strncpy(kpath, upath, MAX_PATH - 1);
+    if (strncpy_from_user(kpath, upath, MAX_PATH - 1) < 0) { kfree(kpath); return -EFAULT; }
     kpath[MAX_PATH - 1] = '\0';
-    clear_csr_bit(sstatus, SSTATUS_SUM);
 
     if (dentry_normalize_path(current->fs->cwd, vfs_get_root(),
                               kpath, kpath, MAX_PATH) < 0) {
@@ -1252,21 +1228,17 @@ ssize_t sys_readlink(const char *upath, char *ubuf, size_t bufsiz) {
     kfree(kpath);
     if (r < 0) { kfree(kbuf); return r; }
 
-    set_csr_bit(sstatus, SSTATUS_SUM);
-    memcpy(ubuf, kbuf, (size_t)r);
-    clear_csr_bit(sstatus, SSTATUS_SUM);
+    int rc = copy_to_user(ubuf, kbuf, (size_t)r);
     kfree(kbuf);
-    return r;
+    return (rc < 0) ? -EFAULT : r;
 }
 
 int sys_mkdir(const char *path, mode_t mode) {
     if (!current) return -1;
 
-    set_csr_bit(sstatus, SSTATUS_SUM);
     char kpath[MAX_PATH];
-    strncpy(kpath, path, MAX_PATH - 1);
+    if (strncpy_from_user(kpath, path, MAX_PATH - 1) < 0) return -EFAULT;
     kpath[MAX_PATH - 1] = '\0';
-    clear_csr_bit(sstatus, SSTATUS_SUM);
 
     /* vfs_mkdir uses vfs_find_mount() prefix matching, so it needs a
      * normalized absolute path.  dentry_normalize_path handles ".", "..",
@@ -1286,19 +1258,14 @@ int sys_sync(void) {
 int sys_sigprocmask(int how, const uint32_t *set, uint32_t *oldset) {
     if (!current) return -1;
 
-    // set and oldset are user-space pointers — must enable SUM before dereferencing.
-    set_csr_bit(sstatus, SSTATUS_SUM);
-
-    if (oldset)
-        *oldset = current->signal_mask;
-
-    uint32_t val = 0;
-    if (set)
-        val = *set;
-
-    clear_csr_bit(sstatus, SSTATUS_SUM);
+    if (oldset && copy_to_user(oldset, &current->signal_mask, sizeof(uint32_t)) < 0)
+        return -EFAULT;
 
     if (!set) return 0;
+
+    uint32_t val;
+    if (copy_from_user(&val, set, sizeof(uint32_t)) < 0) return -EFAULT;
+
     uint32_t new_mask = current->signal_mask;
 
     switch (how) {
@@ -1318,7 +1285,7 @@ int sys_chdir(const char *path) {
     if (!current || !path) return -EINVAL;
 
     char kpath[MAX_PATH];
-    strncpy_from_user(kpath, path, MAX_PATH - 1);
+    if (strncpy_from_user(kpath, path, MAX_PATH - 1) < 0) return -EFAULT;
     kpath[MAX_PATH - 1] = '\0';
 
     return vfs_chdir(kpath);   // VFS owns everything below
@@ -1403,10 +1370,7 @@ int sys_getrusage(int who, struct rusage *usage) {
     ku.ru_stime.tv_sec  = 0;
     ku.ru_stime.tv_usec = 0;
 
-    set_csr_bit(sstatus, SSTATUS_SUM);
-    *usage = ku;
-    clear_csr_bit(sstatus, SSTATUS_SUM);
-
+    if (copy_to_user(usage, &ku, sizeof(ku)) < 0) return -EFAULT;
     return 0;
 }
 
@@ -1510,20 +1474,20 @@ int sys_pause(void) {
 */
 int sys_procinfo(struct proc_info *infos, int max_count) {
     int count = 0;
-    // infos points into user space; enable SUM so S-mode can write U-bit pages.
-    set_csr_bit(sstatus, SSTATUS_SUM);
     for (int i = 0; i < MAX_PROCS && count < max_count; i++) {
         struct proc *p = &proctab[i];
         if (p->state == PROC_UNUSED) continue;
-        infos[count].pid       = p->pid;
-        infos[count].ppid      = p->parent ? p->parent->pid : 0;
-        strncpy(infos[count].name, p->name, 15);
-        infos[count].state     = (int)p->state;
-        infos[count].priority  = p->priority;
-        infos[count].cpu_ticks = p->utime_ticks;
+        struct proc_info ki;
+        ki.pid       = p->pid;
+        ki.ppid      = p->parent ? p->parent->pid : 0;
+        strncpy(ki.name, p->name, 15);
+        ki.name[15]  = '\0';
+        ki.state     = (int)p->state;
+        ki.priority  = p->priority;
+        ki.cpu_ticks = p->utime_ticks;
+        if (copy_to_user(infos + count, &ki, sizeof(ki)) < 0) return -EFAULT;
         count++;
     }
-    clear_csr_bit(sstatus, SSTATUS_SUM);
     return count;
 }
 
@@ -1534,19 +1498,15 @@ int sys_stat(const char *upath, struct stat *ustat)
 {
     if (!current || !upath || !ustat) return -EINVAL;
 
-    // 1. Copy path from user
     char kpath[MAX_PATH];
-    strncpy_from_user(kpath, upath, MAX_PATH - 1);
+    if (strncpy_from_user(kpath, upath, MAX_PATH - 1) < 0) return -EFAULT;
     kpath[MAX_PATH - 1] = '\0';
 
-    // 2. Do kernel-side stat (no user memory access)
     struct stat kst;
     int ret = file_stat(kpath, &kst);
     if (ret != 0) return ret;
 
-    // 3. Copy result back to user
-    copy_to_user(ustat, &kst, sizeof(struct stat));
-
+    if (copy_to_user(ustat, &kst, sizeof(struct stat)) < 0) return -EFAULT;
     return 0;
 }
 
@@ -1555,14 +1515,14 @@ int sys_lstat(const char *upath, struct stat *ustat)
     if (!current || !upath || !ustat) return -EINVAL;
 
     char kpath[MAX_PATH];
-    strncpy_from_user(kpath, upath, MAX_PATH - 1);
+    if (strncpy_from_user(kpath, upath, MAX_PATH - 1) < 0) return -EFAULT;
     kpath[MAX_PATH - 1] = '\0';
 
     struct stat kst;
     int ret = file_lstat(kpath, &kst);
     if (ret != 0) return ret;
 
-    copy_to_user(ustat, &kst, sizeof(struct stat));
+    if (copy_to_user(ustat, &kst, sizeof(struct stat)) < 0) return -EFAULT;
     return 0;
 }
 
@@ -1570,13 +1530,11 @@ int sys_fstat(int fd, struct stat *ustat)
 {
     if (!current || !ustat) return -EINVAL;
 
-    // 1. Kernel-side stat by fd (no user memory needed)
     struct stat kst;
     int ret = file_fstat(fd, &kst);
     if (ret != 0) return ret;
 
-    // 2. Copy result to user
-    copy_to_user(ustat, &kst, sizeof(struct stat));
+    if (copy_to_user(ustat, &kst, sizeof(struct stat)) < 0) return -EFAULT;
     return 0;
 }
 
@@ -1584,7 +1542,7 @@ int sys_chmod(const char *upath, mode_t mode) {
     if (!current || !upath) return -EINVAL;
 
     char kpath[MAX_PATH];
-    strncpy_from_user(kpath, upath, MAX_PATH - 1);
+    if (strncpy_from_user(kpath, upath, MAX_PATH - 1) < 0) return -EFAULT;
     kpath[MAX_PATH - 1] = '\0';
 
     char resolved[MAX_PATH];
@@ -1609,7 +1567,7 @@ int sys_rmdir(const char *path) {
     if (!current || !path) return -EINVAL;
 
     char kpath[MAX_PATH];
-    strncpy_from_user(kpath, path, MAX_PATH - 1);
+    if (strncpy_from_user(kpath, path, MAX_PATH - 1) < 0) return -EFAULT;
     kpath[MAX_PATH - 1] = '\0';
 
     char resolved[MAX_PATH];
@@ -1643,39 +1601,29 @@ int sys_sigaction(int sig, const struct sigaction *act, struct sigaction *oldact
     // SIGKILL and SIGSTOP cannot be caught or ignored — POSIX
     if (sig == SIGKILL || sig == SIGSTOP) return -EINVAL;
 
-    set_csr_bit(sstatus, SSTATUS_SUM);
-
-    // Return previous disposition in oldact if the caller wants it
     if (oldact != NULL) {
-        oldact->sa_handler = (sighandler_t)current->handlers[sig];
-        oldact->sa_mask    = 0;
-        oldact->sa_flags   = 0;
+        struct sigaction kold = { .sa_handler = (sighandler_t)current->handlers[sig],
+                                  .sa_mask = 0, .sa_flags = 0 };
+        if (copy_to_user(oldact, &kold, sizeof(kold)) < 0) return -EFAULT;
     }
 
     // Install new disposition — only SIG_DFL (0) and SIG_IGN (1) accepted;
-    // custom function pointers require a signal-return trampoline (BLOCKED-8).
+    // custom function pointers require a signal-return trampoline.
     if (act != NULL) {
-        sighandler_t h = act->sa_handler;
-        if (h != SIG_DFL && h != SIG_IGN) {
-            clear_csr_bit(sstatus, SSTATUS_SUM);
-            return -EINVAL;
-        }
-        current->handlers[sig] = (void *)h;
+        struct sigaction kact;
+        if (copy_from_user(&kact, act, sizeof(kact)) < 0) return -EFAULT;
+        if (kact.sa_handler != SIG_DFL && kact.sa_handler != SIG_IGN) return -EINVAL;
+        current->handlers[sig] = (void *)kact.sa_handler;
     }
 
-    clear_csr_bit(sstatus, SSTATUS_SUM);
     return 0;
 }
 
 int sys_sigpending(uint32_t *set) {
     if (!current || !set) return -EINVAL;
 
-    // set is a userspace pointer — enable SUM so the kernel can write to it,
-    // matching the same pattern used by sys_sigprocmask.
-    set_csr_bit(sstatus, SSTATUS_SUM);
-    *set = current->pending_signals & current->signal_mask;
-    clear_csr_bit(sstatus, SSTATUS_SUM);
-
+    uint32_t pending = current->pending_signals & current->signal_mask;
+    if (copy_to_user(set, &pending, sizeof(uint32_t)) < 0) return -EFAULT;
     return 0;
 }
 
@@ -1702,10 +1650,8 @@ int sys_sigpending(uint32_t *set) {
 int sys_sigsuspend(const uint32_t *mask) {
     if (!current || !mask) return -EINVAL;
 
-    /* Read new mask from userspace (SUM needed for U-bit page access). */
-    set_csr_bit(sstatus, SSTATUS_SUM);
-    uint32_t new_mask = *mask;
-    clear_csr_bit(sstatus, SSTATUS_SUM);
+    uint32_t new_mask;
+    if (copy_from_user(&new_mask, mask, sizeof(uint32_t)) < 0) return -EINVAL;
 
     /* Atomically install new mask; save old mask for restoration on return. */
     uint32_t old_mask = current->signal_mask;

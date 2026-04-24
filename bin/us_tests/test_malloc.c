@@ -1,6 +1,8 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+#include <sys/wait.h>
 #include "us_test_common.h"
 
 static int bytes_match(const char *buf, char value, size_t count) {
@@ -165,6 +167,68 @@ void run_test_malloc(us_test_group_t *group) {
     free(p);
     free(q);
     free(r);
+
+    /* ── Lazy allocation / demand-paging stress test ────────────────────────
+     *
+     * Allocate a single page, then fork NCHILDREN children.  Every child writes
+     * to buf[0] (the same page) and exits.
+     *
+     * With EAGER allocation sys_brk immediately backs the page with a physical
+     * frame.  Each child's write triggers a COW fault that needs a fresh frame;
+     * with limited RAM, later children run out.
+     *
+     * With LAZY allocation the parent holds no physical frame for the page.
+     * Each child demand-faults its own private copy on first write, costing
+     * exactly 1 frame per child — no upfront cost in the parent at all.
+     *
+     * Success criterion: all children exit 0.
+     */
+#define LAZY_NCHILDREN 16
+    {
+        char *buf = (char *)malloc(4096*4096*50);
+        // char *buf2 = (char *)(4096*4096*50);
+        // (void) buf2;
+        buf[0] = 'b'; // for fun
+        TEST(group, "lazy-alloc: malloc one page returns non-null", buf != 0);
+        if (buf != 0) {
+            pid_t pids[LAZY_NCHILDREN];
+            int fork_ok = 1;
+
+            for (int ci = 0; ci < LAZY_NCHILDREN; ci++) {
+                pids[ci] = fork();
+                if (pids[ci] < 0) {
+                    fork_ok = 0;
+                    for (int j = ci + 1; j < LAZY_NCHILDREN; j++)
+                        pids[j] = -1;
+                    break;
+                }
+                if (pids[ci] == 0) {
+                    /* Every child writes the same page and checks its own value. */
+                    buf[0] = (char)(ci + 1);
+                    _exit(buf[0] == (char)(ci + 1) ? 0 : 1);
+                }
+            }
+
+            TEST(group, "lazy-alloc: all forks succeeded", fork_ok);
+
+            int all_ok = 1;
+            for (int ci = 0; ci < LAZY_NCHILDREN; ci++) {
+                if (pids[ci] <= 0) continue;
+                int status = 0;
+                waitpid(pids[ci], &status, 0);
+                if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+                    all_ok = 0;
+            }
+            TEST(group, "lazy-alloc: each child wrote its COW copy without OOM", all_ok);
+
+            /* Parent never wrote buf, so it should still be b. */
+            TEST(group, "lazy-alloc: parent buffer unchanged after children wrote",
+                 buf[0] == 'b');
+
+            free(buf);
+        }
+    }
+#undef LAZY_NCHILDREN
 
     ut_group_end(group);
 }

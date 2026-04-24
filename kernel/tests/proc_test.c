@@ -280,7 +280,59 @@ void proc_test_run(void) {
     printk("\n========================================\n");
     printk("  Results: %d passed, %d failed\n", passed, failed);
     printk("========================================\n");
+}
 
+static void __attribute__((noinline)) recursive_overflow(int depth) {
+    volatile uint8_t buf[256];
+    buf[0] = (uint8_t)depth;
+    if (depth < 10000)
+        recursive_overflow(depth + 1);
+    buf[0]++;  // use buf after recursive call — forces frame to survive, blocks tail-call opt
+}
+
+static void __attribute__((noreturn)) overflow_entry(void) {
+    recursive_overflow(0);
+    while (1) asm volatile("wfi");
+}
+
+void kstack_overflow_test_run(void) {
+    printk("\n========================================\n");
+    printk("  Kernel Stack Overflow Test (DESTRUCTIVE)\n");
+    printk("  Expected: KERNEL STACK OVERFLOW panic\n");
+    printk("========================================\n");
+
+    struct proc *p = proc_create("kstack_ovf");
+    if (!p) {
+        printk("  [SKIP] could not create overflow process\n");
+        return;
+    }
+
+    current = p;
+    p->state = PROC_RUNNING;
+    // Give p a pagetable so vmm_translate doesn't crash in page_fault_handler.
+    // The kernel pt has the guard page unmapped, so the lookup returns 0 as expected.
+    // proc_free is never called for this process — the test panics.
+    p->pagetable = vmm_kernel_pagetable();
+
+    uint64_t kstack_top = (uint64_t)(p->kstack + KSTACK_SIZE);
+
+    // sscratch must be non-zero when the guard page fault fires in S-mode.
+    // trap_entry swaps sp ↔ sscratch on entry; with sscratch=0 it would restore
+    // the already-overflowed sp and then fault again trying to allocate the trap
+    // frame — a silent nested-fault loop. Pointing sscratch at the kstack top
+    // gives the trap handler a valid stack to save the frame, while SPP=1 in
+    // the saved sstatus still correctly identifies this as an S-mode fault.
+    write_csr(sscratch, kstack_top);
+
+    // Switch sp directly to p's kstack and jump to overflow_entry.
+    // Bypassing the scheduler avoids sscratch races with the init process.
+    asm volatile(
+        "mv sp, %0\n"
+        "jr %1\n"
+        :: "r"(kstack_top), "r"((uint64_t)overflow_entry)
+        : "memory"
+    );
+    __builtin_unreachable();
 }
 
 // Tests for the extended proc_waitpid() POSIX compliance:
