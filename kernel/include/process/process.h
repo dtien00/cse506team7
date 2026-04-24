@@ -26,6 +26,7 @@
 #define KERNEL_SIGPIPE  13
 #define KERNEL_SIGALRM  14
 #define KERNEL_SIGTERM  15
+#define KERNEL_SIGCHLD  17
 #define KERNEL_SIGCONT  18
 #define KERNEL_SIGSTOP  19
 #define KERNEL_SIGTSTP  20
@@ -51,7 +52,6 @@
 // Signals whose POSIX default action is "ignore" (not "terminate").
 // When handler == SIG_DFL, these are silently discarded — identical to SIG_IGN.
 // SIGCHLD (17): child stopped/continued/exited.  POSIX says default = ignore.
-#define KERNEL_SIGCHLD   17
 #define KERNEL_DFL_IGNORE_SIGS (1U << KERNEL_SIGCHLD)
 
 /* kernel_ctz — count trailing zeros in a non-zero 32-bit signal bitmask.

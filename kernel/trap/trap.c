@@ -382,6 +382,10 @@ static void kill_current(trap_frame *frame, const char *reason) {
 
     if (current) {
         current->pending_signals |= (1U << KERNEL_SIGSEGV);
+        // Bypass the pending_signals delivery filter: proc_exit is called directly.
+        // Real page faults cannot be masked by sigprocmask — this is intentional.
+        // kill(pid, SIGSEGV) goes through pending_signals and respects signal_mask;
+        // this path does not. See test AH in test_signal_faults.c.
         proc_exit(-KERNEL_SIGSEGV);   // does not return — switches to scheduler
     }
 

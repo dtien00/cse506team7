@@ -179,5 +179,26 @@ void run_test_signal_faults(us_test_group_t *group) {
         }
     }
 
+    // Extend Test A to verify WTERMSIG returns the correct signal number
+    {
+        pid_t pid = fork();
+        if (pid == 0) {
+            volatile int *p = (int *)0;
+            *p = 42;    // null deref → SIGSEGV
+            _exit(0);   // unreachable
+        }
+        int status;
+        waitpid(pid, &status, 0);
+        if (!WIFSIGNALED(status)) {
+            printf("FAIL: child exited normally, expected signal death\n");
+            return;
+        }
+        int sig = WTERMSIG(status);
+        if (sig == SIGSEGV)
+            printf("PASS: WTERMSIG == SIGSEGV (%d)\n", sig);
+        else
+            printf("FAIL: WTERMSIG == %d (expected SIGSEGV=%d)\n", sig, SIGSEGV);
+    }
+
     ut_group_end(group);
 }

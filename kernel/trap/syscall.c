@@ -1292,7 +1292,7 @@ int sys_sigprocmask(int how, const uint32_t *set, uint32_t *oldset) {
     }
 
     // SIGKILL (9) and SIGSTOP (19) can never be masked — POSIX requirement
-    new_mask &= ~((1U << KERNEL_SIGKILL) | (1U << KERNEL_SIGSTOP));
+    new_mask &= ~((1U << KERNEL_SIGKILL) | (1U << KERNEL_SIGSTOP) | (1U << KERNEL_SIGILL));
     current->signal_mask = new_mask;
     return 0;
 }
