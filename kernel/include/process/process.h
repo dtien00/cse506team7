@@ -58,6 +58,7 @@ static inline int kernel_ctz(uint32_t x) {
 #define PROC_DEFAULT_PRIORITY 5
 
 extern struct proc *current;
+extern int scheduler_live; // 1 after schedule() has been entered; scheduler_context is valid
 
 struct proc_info {
     int   pid;

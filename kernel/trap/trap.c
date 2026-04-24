@@ -171,6 +171,9 @@ void page_fault_handler(trap_frame *);
 void handle_exception(trap_frame *frame) {
     // Handle U-mode syscalls silently — they are normal, not errors.
     if (frame->scause == SCAUSE_ECALL_FROM_U) {
+        // RISC-V clears SIE on trap entry. Re-enable here so blocking
+        // syscalls (e.g. read/write via virtio) can sleep on IRQs.
+        interrupts_on();
         uint64_t old_sepc = frame->sepc;
         syscall_handler(frame);
         // Most syscalls resume at the instruction after ecall.
@@ -445,11 +448,13 @@ void page_fault_handler(trap_frame *frame) {
 
     /* ── 3. Look up the VMA for demand paging and protection checks ─────── */
     struct vm_area *vma = vma_find(current->vma_list, faulting_va);
-    // printk("[PF] pid=%d scause=%lu va=0x%p existing_pa=0x%p vma=%p\n",
-    //        current->pid, scause, faulting_va, existing_pa, (uintptr_t)vma);
-    // if (vma)
-    //     printk("[PF] vma=[0x%p,0x%p) prot=%u type=%u\n",
-    //            vma->start, vma->end, vma->prot, vma->type);
+    if (existing_pa != 0) {
+        printk("[PF-PRE] pid=%d scause=%lu va=0x%p existing_pa=0x%p vma=%p sz=0x%p\n",
+               current->pid, scause, faulting_va, existing_pa, (uintptr_t)vma, current->sz);
+        if (vma)
+            printk("[PF-PRE] vma=[0x%p,0x%p) prot=%u type=%u\n",
+                   vma->start, vma->end, vma->prot, vma->type);
+    }
     if (!vma) {
         /* ── 3a. GROWSDOWN: transparent stack expansion ──────────────────
          *
@@ -509,9 +514,17 @@ void page_fault_handler(trap_frame *frame) {
     /* ── 5. Already mapped but not COW — real protection fault ──────────── */
     if (existing_pa != 0) {
         uint64_t *pte_ptr2 = vmm_walk(current->pagetable, page_va, 0);
+        uint64_t raw_pte = pte_ptr2 ? *pte_ptr2 : 0;
         printk("[PF] PROT FAULT: va=0x%p pa=0x%p pte=0x%p scause=%lu\n",
-               page_va, existing_pa,
-               pte_ptr2 ? *pte_ptr2 : 0, scause);
+               page_va, existing_pa, raw_pte, scause);
+        printk("[PF] PROT FAULT: pid=%d sz=0x%p vma=[0x%p,0x%p) prot=%u type=%u\n",
+               current->pid, current->sz,
+               vma->start, vma->end, vma->prot, vma->type);
+        /* Diagnose: is this a kernel MMIO page leaked into user PT (no PTE_U)? */
+        if (raw_pte && !(raw_pte & PTE_U))
+            printk("[PF] DIAGNOSIS: PTE missing PTE_U — kernel/MMIO page in user PT at va=0x%p (PA=VA identity map = %s)\n",
+                   page_va, (existing_pa == page_va) ? "YES" : "NO");
+        vma_dump(current->vma_list);
         kill_current(frame, "protection fault on already-mapped page");
         return;
     }
@@ -544,6 +557,10 @@ uint64_t timer_ticks = 0;
 void timer_handler(void) {
     timer_ticks++;
     sbi_set_timer(read_csr(time) + TIMER_INTERVAL);
+
+    // Poll virtio for missed completions (IRQ may be lost if SIE was off
+    // when the device completed a write request).
+    virtio_blk_poll();
 
     // Scan proctab: if any process has a pending alarm that has expired, deliver SIGALRM.
     for (int i = 0; i < MAX_PROCS; i++) {

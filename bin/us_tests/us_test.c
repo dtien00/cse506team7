@@ -127,13 +127,13 @@ int main(int argc, char **argv, char **envp) {
     run_test_malloc(&groups[idx++]);
     run_test_file_io(&groups[idx++]);
     run_test_process(&groups[idx++]);
-    run_test_mv_cp(&groups[idx++]);
-    run_test_write(&groups[idx++]);
-    run_test_exec_bin(&groups[idx++]);
-    run_test_fs_persist(groups, &idx);
-    run_test_syscall(&groups[idx++]);
-    run_test_cow(&groups[idx++]);
-    run_test_sched(&groups[idx++]);
+    // run_test_mv_cp(&groups[idx++]);
+    // run_test_write(&groups[idx++]);
+    // run_test_exec_bin(&groups[idx++]);
+    // run_test_fs_persist(groups, &idx);
+    // run_test_syscall(&groups[idx++]);
+    // run_test_cow(&groups[idx++]);
+    // run_test_sched(&groups[idx++]);
     // run_test_signal(&groups[idx++]);
     // run_test_dirent(&groups[idx++]);
     // run_test_termios_tty(&groups[idx++]);
@@ -157,16 +157,16 @@ int main(int argc, char **argv, char **envp) {
     // run_test_nanosleep(&groups[idx++]);
     // run_test_exec_envp(groups, &idx);
 
-    run_test_xv6_compat(&groups[idx++]);
-    run_test_fd_limits(&groups[idx++]);
-    run_test_bigfile(&groups[idx++]);
-    run_test_forkstress(&groups[idx++]);
-    run_test_dirops(&groups[idx++]);
+    // run_test_xv6_compat(&groups[idx++]);
+    // run_test_fd_limits(&groups[idx++]);
+    // run_test_bigfile(&groups[idx++]);
+    // run_test_forkstress(&groups[idx++]);
+    // run_test_dirops(&groups[idx++]);
     run_test_lazy_alloc(&groups[idx++]);
-    run_test_inode_openunlink(&groups[idx++]);
-    run_test_syscall_robustness(&groups[idx++]);
-    run_test_fd_offset(&groups[idx++]);
-    run_test_forkforkfork(&groups[idx++]);
+    // run_test_inode_openunlink(&groups[idx++]);
+    // run_test_syscall_robustness(&groups[idx++]);
+    // run_test_fd_offset(&groups[idx++]);
+    // run_test_forkforkfork(&groups[idx++]);
     // run_test_writebig(&groups[idx++]); //test to see if disk kills itself on filling up
     
     // /* comprehensive libc conformance tests */

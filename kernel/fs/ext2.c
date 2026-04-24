@@ -16,7 +16,9 @@ static void ext2_write_superblock(ext2_mount_data_t *mnt) {
     if (!sb_buf) return;
     memset(sb_buf, 0, 1024);
     memcpy(sb_buf, mnt->sb, sizeof(ext2_superblock_t));
+    printk("ext2: write_superblock enter\n");
     virtio_blk_write(2, sb_buf, 2);
+    printk("ext2: write_superblock done\n");
     kfree(sb_buf);
 }
 

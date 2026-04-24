@@ -150,6 +150,7 @@ typedef struct virtio_blk_device {
     uint16_t last_used_idx;        // Last processed used index
     uint64_t capacity;             // Device capacity in sectors
     uint32_t block_size;           // Block size (usually 512)
+    int busy;                      // 1 while a request is in flight
 } virtio_blk_dev_t;
 
 // Function declarations
@@ -159,3 +160,4 @@ int virtio_blk_write(uint64_t sector, const void *buf, size_t count);
 int virtio_blk_flush(void);
 uint64_t virtio_blk_get_capacity(void);
 void virtio_blk_irq(void);  // called by trap handler on virtio IRQ
+void virtio_blk_poll(void); // called from timer to catch missed IRQs

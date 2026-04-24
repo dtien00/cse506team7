@@ -26,7 +26,7 @@
 #define MAP_FIXED     0x10
 
 #define USER_HEAP_START 0x11000000UL
-#define USER_HEAP_END   0x70000000UL
+#define USER_HEAP_END   0x40000000UL  /* PCI MMIO at 0x40000000, stay below it */
 
 #define MAX_ARGS 64
 #define KARG_MAX 256
@@ -964,12 +964,10 @@ void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t off
             return MAP_FAILED;
         }
     } else {
-        if (p->sz < USER_HEAP_START) {
-            p->sz = USER_HEAP_START;
-        }
-        va = PGROUNDUP(p->sz);
-
-        if (va + alloc_size > USER_HEAP_END) {
+        uintptr_t hint = (p->sz >= USER_HEAP_START) ? PGROUNDUP(p->sz) : USER_HEAP_START;
+        va = vma_find_free_region(p->vma_list, alloc_size, hint,
+                                  USER_HEAP_START, USER_HEAP_END);
+        if (va == 0) {
             printk("sys_mmap: out of virtual address space\n");
             return MAP_FAILED;
         }
@@ -994,7 +992,8 @@ void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t off
     }
 
     if (!(flags & MAP_FIXED)) {
-        p->sz = va + alloc_size;
+        if (va + alloc_size > p->sz)
+            p->sz = va + alloc_size;
     }
 
     return (void*)va;

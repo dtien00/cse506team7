@@ -193,15 +193,30 @@ static int virtio_blk_rw(uint64_t sector, void *buf, size_t count, int write) {
         return -1;
     }
 
+    if (scheduler_live && current) {
+        while (blk_dev.busy)
+            proc_sleep(&blk_dev.busy);
+        blk_dev.busy = 1;
+    }
+
     virtio_blk_req_t *req = (virtio_blk_req_t *)kmalloc(sizeof(virtio_blk_req_t));
-    if (!req) return -1;
+    if (!req) {
+        blk_dev.busy = 0;
+        proc_wakeup(&blk_dev.busy);
+        return -1;
+    }
 
     req->type     = write ? VIRTIO_BLK_T_OUT : VIRTIO_BLK_T_IN;
     req->reserved = 0;
     req->sector   = sector;
 
     uint8_t *status = (uint8_t *)kmalloc(1);
-    if (!status) { kfree(req); return -1; }
+    if (!status) {
+        kfree(req);
+        blk_dev.busy = 0;
+        proc_wakeup(&blk_dev.busy);
+        return -1;
+    }
     *status = 0xFF;
     // Descriptor 0: request header (device reads)
     blk_dev.desc[0].addr  = (uintptr_t)req;
@@ -221,6 +236,9 @@ static int virtio_blk_rw(uint64_t sector, void *buf, size_t count, int write) {
     blk_dev.desc[2].flags = VIRTQ_DESC_F_WRITE;
     blk_dev.desc[2].next  = 0;
 
+    // expected_used_idx is the used->idx value we expect after this request completes.
+    uint16_t expected_used_idx = (uint16_t)(blk_dev.used->idx + 1);
+
     uint16_t avail_idx = blk_dev.avail->idx;
     blk_dev.avail->ring[avail_idx % VIRTIO_RING_SIZE] = 0;
     __sync_synchronize();
@@ -230,22 +248,48 @@ static int virtio_blk_rw(uint64_t sector, void *buf, size_t count, int write) {
     // Notify device: write queue index 0 to the notify address
     *(volatile uint32_t *)blk_dev.notify_addr = 0;
 
-    // If a process is running, sleep and let the IRQ wake us.
-    // Before the scheduler starts (current == NULL), spin-poll instead.
-    // if (current) { // likely want to do later
-    if (0){
-        proc_sleep(&blk_dev);
+    if (scheduler_live && current) {
+        // printk("virtio_blk: sleeping for %s sector=%llu expected_idx=%u current_idx=%u sstatus=%lx sie=%lx\n",
+        //        write ? "write" : "read", (unsigned long long)sector,
+        //        expected_used_idx, blk_dev.used->idx,
+        //        read_csr(sstatus), read_csr(sie));
+        // proc_sleep handles the interrupts_off/on internally.
+        int sleep_count = 0;
+        while (blk_dev.used->idx != expected_used_idx) {
+            proc_sleep(&blk_dev);
+            sleep_count++;
+            if (sleep_count > 50) { // this shoudl not really happen
+                printk("virtio_blk: STUCK! %s sector=%llu used->idx=%u expected=%u sstatus=%lx sie=%lx\n",
+                       write ? "write" : "read", (unsigned long long)sector,
+                       blk_dev.used->idx, expected_used_idx, read_csr(sstatus), read_csr(sie));
+                // Fall back to spin-wait
+                interrupts_on();
+                int timeout = 400000000;
+                while (blk_dev.used->idx != expected_used_idx && timeout-- > 0) {}
+                printk("virtio_blk: spin-wait done, used->idx=%u timeout=%d\n",
+                       blk_dev.used->idx, timeout);
+                break;
+            }
+        }
+        blk_dev.last_used_idx = blk_dev.used->idx;
+        // printk("virtio_blk: woke up for %s sector=%llu\n",
+        //        write ? "write" : "read", (unsigned long long)sector);
     } else {
         int timeout = 400000000;
-        while (blk_dev.last_used_idx == blk_dev.used->idx && timeout-- > 0) {}
+        while (blk_dev.used->idx != expected_used_idx && timeout-- > 0) {}
         if (timeout <= 0) {
             printk("virtio_blk: request timeout\n");
             kfree(req);
             kfree(status);
+            blk_dev.busy = 0;
+            proc_wakeup(&blk_dev.busy);
             return -1;
         }
-        blk_dev.last_used_idx++;
+        blk_dev.last_used_idx = blk_dev.used->idx;
     }
+
+    blk_dev.busy = 0;
+    proc_wakeup(&blk_dev.busy);
 
     if (*status != VIRTIO_BLK_S_OK) {
         printk("virtio_blk: request failed with status %d\n", *status);
@@ -291,6 +335,8 @@ int virtio_blk_flush(void) {
     blk_dev.desc[1].flags = VIRTQ_DESC_F_WRITE;
     blk_dev.desc[1].next  = 0;
 
+    uint16_t expected_used_idx = (uint16_t)(blk_dev.used->idx + 1);
+
     uint16_t avail_idx = blk_dev.avail->idx;
     blk_dev.avail->ring[avail_idx % VIRTIO_RING_SIZE] = 0;
     __sync_synchronize();
@@ -299,18 +345,21 @@ int virtio_blk_flush(void) {
 
     *(volatile uint32_t *)blk_dev.notify_addr = 0;
 
-    if (current) {
-        proc_sleep(&blk_dev);
+    if (scheduler_live && current) {
+        while (blk_dev.used->idx != expected_used_idx) {
+            proc_sleep(&blk_dev);
+        }
+        blk_dev.last_used_idx = blk_dev.used->idx;
     } else {
         int timeout = 10000000;
-        while (blk_dev.last_used_idx == blk_dev.used->idx && timeout-- > 0) {}
+        while (blk_dev.used->idx != expected_used_idx && timeout-- > 0) {}
         if (timeout <= 0) {
             printk("virtio_blk: flush timeout\n");
             kfree(req);
             kfree(status);
             return -1;
         }
-        blk_dev.last_used_idx++;
+        blk_dev.last_used_idx = blk_dev.used->idx;
     }
 
     int ret = (*status == VIRTIO_BLK_S_OK) ? 0 : -1;
@@ -323,6 +372,18 @@ uint64_t virtio_blk_get_capacity(void) {
     return initialized ? blk_dev.capacity : 0;
 }
 
+// Polled from timer_handler: if device completed a request but IRQ was missed,
+// advance last_used_idx and wake any blocked waiters.
+void virtio_blk_poll(void) {
+    if (!initialized) return;
+    if (blk_dev.last_used_idx == blk_dev.used->idx) return;
+    printk("virtio_blk: POLL detected missed completion last_used=%u used->idx=%u\n",
+           blk_dev.last_used_idx, blk_dev.used->idx);
+    while (blk_dev.last_used_idx != blk_dev.used->idx)
+        blk_dev.last_used_idx++;
+    proc_wakeup(&blk_dev);
+}
+
 // Called from the external interrupt handler when the virtio IRQ fires.
 // Advances last_used_idx and wakes whoever is sleeping on &blk_dev.
 void virtio_blk_irq(void) {
@@ -333,6 +394,8 @@ void virtio_blk_irq(void) {
     if (blk_dev.isr_addr)
         (void)*blk_dev.isr_addr;
 
+    printk("virtio_blk: IRQ fired last_used=%u used->idx=%u sstatus=%lx\n",
+           blk_dev.last_used_idx, blk_dev.used->idx, read_csr(sstatus));
     while (blk_dev.last_used_idx != blk_dev.used->idx) {
         blk_dev.last_used_idx++;
     }

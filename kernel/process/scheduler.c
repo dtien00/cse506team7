@@ -12,6 +12,7 @@ struct proc proctab[MAX_PROCS];
 struct proc *mlfq[MLFQ_LEVELS];
 struct proc *blocked_queue = NULL;
 struct proc *current = NULL;
+int scheduler_live = 0;
 // Idle must have enough stack for a full trap frame + nested C calls.
 static uint8_t idle_stack[KSTACK_SIZE] __attribute__((aligned(16)));
 static struct context idle_context;
@@ -51,6 +52,7 @@ void scheduler_init(void) {
 //     → swtch saves scheduler_context, restores next->context
 //     → next process resumes
 void schedule(void) {
+    scheduler_live = 1;
     while (1) {
         // Keep scheduler bookkeeping + context handoff atomic w.r.t. timer IRQs.
         interrupts_off();
@@ -300,16 +302,22 @@ void proc_unblock(struct proc *p) {
 
 // block current process and inactivates it; switches to scheduler context
 void proc_sleep(void *chan) {
+    // Interrupts off while we set chan + block to avoid a race where the IRQ
+    // fires and calls proc_wakeup() between setting chan and proc_block().
     interrupts_off();
     current->chan = chan;
     proc_block(current);
+    // Re-enable interrupts BEFORE switching to the scheduler.  swtch() does
+    // not save/restore sstatus, so leaving interrupts disabled here would
+    // keep them off globally while the scheduler runs — the virtio IRQ (or
+    // any other IRQ) would never fire, deadlocking any process waiting on I/O.
+    interrupts_on();
     // Hand control back to the scheduler.
     // When we're woken, swtch restores our context and we return here.
     struct proc *prev = current;
     current = NULL;
     swtch(&prev->context, &scheduler_context);
     prev->chan = NULL; // After wakeup, clear channel for the resumed proc
-    interrupts_on();
 
     // After wakeup: if a fatal signal is pending, terminate this process.
     // proc_exit() does not return — it calls proc_yield() which switches
