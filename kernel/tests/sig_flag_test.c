@@ -200,7 +200,6 @@ void sig_flag_test_run(void) {
             parent->sig_flags[KERNEL_SIGCHLD] = SA_NOCLDSTOP;
 
             child->parent        = parent;
-            child->state         = PROC_READY;
             child->signal_mask   = 0;
             child->pending_signals = 0;
             child->stop_unreported = 0;
@@ -238,7 +237,6 @@ void sig_flag_test_run(void) {
             parent->sig_flags[KERNEL_SIGCHLD] = 0;  /* no SA_NOCLDSTOP */
 
             child->parent        = parent;
-            child->state         = PROC_READY;
             child->signal_mask   = 0;
             child->pending_signals = 0;
             child->stop_unreported = 0;
@@ -289,8 +287,9 @@ void sig_flag_test_run(void) {
                  child->cont_unreported == 1);
         }
 
+        /* proc_unstop added child to the MLFQ; remove it before freeing. */
+        if (child)  { proc_stop(child); proc_free(child); }
         if (parent) proc_free(parent);
-        if (child)  proc_free(child);
         current = saved_current;
     }
 
