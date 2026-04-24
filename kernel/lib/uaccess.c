@@ -5,35 +5,18 @@
 #include "mm/vmm.h"
 #include "process/process.h"
 
-/* Validate that [uptr, uptr+size) is a legitimate user address range.
- *
- * Fast path: the range overlaps an existing VMA (already demand-paged in).
- * Slow path: the range falls below a VMA_GROWSDOWN stack VMA's current start
- *   but within its allowed growth floor (vma->end - USTACK_SIZE).  Those pages
- *   haven't been faulted in yet but are valid — copy_to/from_user will trigger
- *   demand paging via copy_fault_recover if needed. */
-static int check_user_ptr(const void *uptr, size_t size) {
+static int check_user_ptr(const void *uptr, size_t size, uint32_t required_prot) {
     if (!current || !uptr) return -EFAULT;
     uintptr_t start = (uintptr_t)uptr;
     uintptr_t end   = start + size;
-    if (end < start || start >= KERNBASE) return -EFAULT;
-
-    if (vma_find_overlap(current->vma_list, start, end)) return 0;
-
-    /* Growsdown: start may be below the VMA's current start but within the
-     * stack's maximum growth range.  Mirror the floor check in trap.c. */
-    struct vm_area *gd = vma_find_growsdown(current->vma_list, start);
-    if (gd) {
-        if (start >= vma_stack_floor(gd) && end <= gd->end) return 0;
-    }
-
-    return -EFAULT;
+    if (end < start || end > MAXVA) return -EFAULT;
+    return vma_range_accessible(current->vma_list, start, size, required_prot) ? 0 : -EFAULT;
 }
 
 int copy_to_user(void *dst, const void *src, size_t len) {
     if (!dst || !src) return -EFAULT;
     if (len == 0) return 0;
-    if (check_user_ptr(dst, len) < 0) return -EFAULT;
+    if (check_user_ptr(dst, len, VMA_PROT_WRITE) < 0) return -EFAULT;
 
     current->copy_fault_recover = (uintptr_t)&&fault;
     set_csr_bit(sstatus, SSTATUS_SUM);
@@ -56,7 +39,7 @@ fault:
 int copy_from_user(void *dst, const void *src, size_t len) {
     if (!dst || !src) return -EFAULT;
     if (len == 0) return 0;
-    if (check_user_ptr(src, len) < 0) return -EFAULT;
+    if (check_user_ptr(src, len, VMA_PROT_READ) < 0) return -EFAULT;
 
     current->copy_fault_recover = (uintptr_t)&&fault;
     set_csr_bit(sstatus, SSTATUS_SUM);
@@ -79,7 +62,6 @@ fault:
 ssize_t strncpy_from_user(char *dst, const char *src, size_t n) {
     if (!dst || !src) return -EFAULT;
     if (n == 0) return 0;
-    if (check_user_ptr(src, n) < 0) return -EFAULT;
 
     current->copy_fault_recover = (uintptr_t)&&fault;
     set_csr_bit(sstatus, SSTATUS_SUM);
@@ -87,6 +69,10 @@ ssize_t strncpy_from_user(char *dst, const char *src, size_t n) {
     const volatile char *s = (const volatile char *)src;
     size_t i;
     for (i = 0; i < n; i++) {
+        // Validate incrementally so short strings near the top of the user
+        // stack do not fail just because the full 'n' range crosses KERNBASE.
+        if (check_user_ptr((const void *)(src + i), 1, VMA_PROT_READ) < 0)
+            goto fault;
         char c = s[i];
         dst[i] = c;
         if (c == '\0') break;

@@ -11,7 +11,6 @@
 #include "mm/pmm.h"
 #include "mm/vmm.h"
 #include "mm/vma.h"
-#include "process/process.h"
 #include "trap/trap.h"
 #include "fs/block_cache.h"
 #include "signal.h"
@@ -27,7 +26,7 @@
 #define MAP_FIXED     0x10
 
 #define USER_HEAP_START 0x11000000UL
-#define USER_HEAP_END   0x70000000UL
+#define USER_HEAP_END   MAXVA  /* Sv39 user VA ceiling; device VMAs block kernel/MMIO ranges */
 
 #define MAX_ARGS 64
 #define KARG_MAX 256
@@ -759,11 +758,6 @@ pid_t sys_getppid(void) {
     return 0;   /* POSIX: init (PID 1) has no parent → return 0 */
 }
 
-// void *sys_sbrk(intptr_t increment) {
-//     printk("sys_sbrk(%ld) not implemented\n", increment);
-//     return (void *) -1;
-// }
-
 int sys_sleep(int seconds) {
     if (seconds <= 0) return 0;
     uint64_t wake_at = timer_ticks + (uint64_t)seconds * TICKS_PER_SEC;
@@ -972,12 +966,13 @@ void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t off
             return MAP_FAILED;
         }
     } else {
-        if (p->sz < USER_HEAP_START) {
-            p->sz = USER_HEAP_START;
-        }
-        va = PGROUNDUP(p->sz);
-
-        if (va + alloc_size > USER_HEAP_END) {
+        /* Find a free gap in the VMA list rather than bumping p->sz.
+         * This lets munmap genuinely reclaim virtual address space: removing
+         * a VMA creates a gap that vma_find_free_region will reuse on the
+         * next mmap call.  p->sz is left to sbrk/brk exclusively. */
+        va = vma_find_free_region(p->vma_list, alloc_size,
+                                  USER_HEAP_START, USER_HEAP_START, USER_HEAP_END);
+        if (va == 0) {
             printk("sys_mmap: out of virtual address space\n");
             return MAP_FAILED;
         }
@@ -999,10 +994,6 @@ void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t off
     if (vma_insert(&p->vma_list, new_vma) != 0) {
         vma_free(new_vma);
         return MAP_FAILED;
-    }
-
-    if (!(flags & MAP_FIXED)) {
-        p->sz = va + alloc_size;
     }
 
     return (void*)va;
@@ -1032,11 +1023,12 @@ int sys_munmap(void *addr, size_t length) {
         }
     }
 
-    /* Remove VMA(s) that cover this range. */
+    /* Remove VMA(s) that cover this range (skip kernel device reservations). */
     struct vm_area *v = p->vma_list;
     while (v) {
         struct vm_area *next = v->next;
-        if (v->start < unmap_end && v->end > unmap_start) {
+        if (v->start < unmap_end && v->end > unmap_start &&
+                v->type != VMA_TYPE_DEVICE) {
             vma_remove(&p->vma_list, v);
             vma_free(v);
         }

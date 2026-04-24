@@ -148,34 +148,39 @@ static void test_mmap_fork_halves(us_test_group_t *group) {
 /* ── 5. sbrk then fork: COW demand-pages in child ───────────────────────── */
 
 static void test_sbrk_fork_cow(us_test_group_t *group) {
-    int n = 128; /* 512 KB */
-    char *base = sbrk(n * PAGE);
-    if (base == (void *)-1) {
-        TEST(group, "lazy-sbrk-fork-cow: sbrk succeeded", 0);
-        return;
-    }
-    TEST(group, "lazy-sbrk-fork-cow: sbrk succeeded", 1);
+    /* Outer fork: isolate sbrk from the test-runner's VMA state. */
+    pid_t outer = fork();
+    if (outer == 0) {
+        int n = 128; /* 512 KB */
+        char *base = sbrk(n * PAGE);
+        if (base == (void *)-1) _exit(10);
 
-    /* parent writes sentinel to first page */
-    base[0] = 0x55;
+        /* Write sentinel before forking so the inner child gets a COW copy. */
+        base[0] = 0x55;
 
-    pid_t pid = fork();
-    if (pid == 0) {
-        /* child: demand-page all pages by touching them */
-        for (int i = 0; i < n; i++)
-            base[i * PAGE] = (char)(i & 0xFF);
-        /* first page should have been demand-paged as COW copy of 0x55 */
-        /* child wrote i=0 → (0 & 0xFF) = 0 over the COW copy */
-        if (base[0] != 0) _exit(1);
+        pid_t inner = fork();
+        if (inner == 0) {
+            /* Grandchild: touch every page, triggering COW faults. */
+            for (int i = 0; i < n; i++)
+                base[i * PAGE] = (char)(i & 0xFF);
+            /* Page 0 COW copy had 0x55; we overwrote it with (0 & 0xFF) = 0. */
+            if (base[0] != 0) _exit(1);
+            _exit(0);
+        }
+        int st = 0;
+        waitpid(inner, &st, 0);
+        if (!WIFEXITED(st) || WEXITSTATUS(st) != 0) _exit(1); /* COW failed */
+        if ((unsigned char)base[0] != 0x55) _exit(2);          /* sentinel corrupted */
         _exit(0);
     }
     int status = 0;
-    waitpid(pid, &status, 0);
-    TEST(group, "lazy-sbrk-fork-cow: child demand-paged all 128 pages",
-         WIFEXITED(status) && WEXITSTATUS(status) == 0);
-    /* parent sentinel preserved */
+    waitpid(outer, &status, 0);
+    /* code==0: both pass; code==1: COW failed; code==2: sentinel corrupted; other: sbrk/setup failed */
+    int code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+    TEST(group, "lazy-sbrk-fork-cow: child demand-paged all 128 pages via COW",
+         code == 0 || code == 2);
     TEST(group, "lazy-sbrk-fork-cow: parent sbrk page unchanged after child COW",
-         (unsigned char)base[0] == 0x55);
+         code == 0 || code == 1);
 }
 
 /* ── 6. sequential byte walk across 1 MB sbrk ───────────────────────────── */

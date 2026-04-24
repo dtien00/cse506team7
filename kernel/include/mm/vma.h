@@ -11,6 +11,7 @@
 #define VMA_TYPE_FILE    0x02  // File-backed mapping
 #define VMA_TYPE_STACK   0x04  // Stack region
 #define VMA_TYPE_HEAP    0x08  // Heap region (brk)
+#define VMA_TYPE_DEVICE  0x10  // Kernel device reservation (PROT=0, blocks user allocation)
 
 // VMA flags (match mmap flags)
 #define VMA_PROT_READ    0x01  // Pages may be read
@@ -79,6 +80,10 @@ int vma_copy_all(struct vm_area **dest_list, struct vm_area *src_list);
 // Debug: print all VMAs
 void vma_dump(struct vm_area *vma_list);
 
+// Returns 1 if [start, start+size) is fully covered by non-device VMAs each
+// having at least required_prot set (GROWSDOWN floor treated as reserved), 0 otherwise.
+int vma_range_accessible(struct vm_area *vma_list, uintptr_t start, size_t size, uint32_t required_prot);
+
 // Find a GROWSDOWN VMA whose current start is strictly above addr.
 // Returns the VMA if addr is below the current stack bottom, NULL otherwise.
 // The caller is responsible for enforcing maximum stack size limits.
@@ -87,6 +92,9 @@ struct vm_area *vma_find_growsdown(struct vm_area *vma_list, uintptr_t addr);
 // Return the lowest address the stack is allowed to grow to.
 // Both the page fault handler and the uaccess validator use this formula;
 // keeping it here ensures they stay in sync.
+// USTACK_SIZE is a byte count (256 * PGSIZE = 1 MB); end is also in bytes.
+// Guard against underflow: if end <= USTACK_SIZE the stack is at a pathologically
+// low address, so fall back to start (don't claim growth below the current bottom).
 static inline uintptr_t vma_stack_floor(const struct vm_area *stack_vma) {
-    return (stack_vma->end > USTACK_SIZE) ? stack_vma->end - USTACK_SIZE : 0;
+    return (stack_vma->end > USTACK_SIZE) ? stack_vma->end - USTACK_SIZE : stack_vma->start;
 }

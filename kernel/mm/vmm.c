@@ -293,16 +293,20 @@ void vmm_init(void) {
 }
 
 // Recursively copy user-space mappings from parent to child pagetable
-static int vmm_copy_pagetable_recursive(pagetable_t child, pagetable_t parent, int level, uintptr_t va_base) {
+static int vmm_copy_pagetable_recursive(
+    pagetable_t child,
+    pagetable_t parent,
+    pagetable_t kernel_root,
+    int level,
+    uintptr_t va_base) {
   for (int i = 0; i < 512; i++) {
     uint64_t pte = parent[i];
     if (!(pte & PTE_V)) continue;
 
-    // At the top level (L2), skip kernel-range entries — vmm_create_pagetable()
-    // already installed the correct shared/private kernel mappings.  Recursing
-    // into them here would allocate new, empty L1 tables that replace the
-    // working kernel mappings, leaving the child with no kernel VA coverage.
-    if (level == 2 && i >= (int)(KERNBASE >> 30))
+    // At the top level (L2), skip only entries that are truly shared with the
+    // kernel root page table. This avoids skipping high-VA user mappings that
+    // happen to live above KERNBASE but are not kernel-shared entries.
+    if (level == 2 && kernel_root && pte == kernel_root[i])
         continue;
 
     if ((pte & (PTE_R | PTE_W | PTE_X)) == 0) {
@@ -314,7 +318,12 @@ static int vmm_copy_pagetable_recursive(pagetable_t child, pagetable_t parent, i
       // Set child PTE
       child[i] = PA_TO_PTE((uintptr_t)child_next) | PTE_V;
       // Recurse
-      if (vmm_copy_pagetable_recursive(child_next, parent_next, level - 1, va_base | ((uintptr_t)i << (level * 9 + 12))) < 0)
+      if (vmm_copy_pagetable_recursive(
+              child_next,
+              parent_next,
+              kernel_root,
+              level - 1,
+              va_base | ((uintptr_t)i << (level * 9 + 12))) < 0)
         return -1;
     } else {
       // Leaf PTE: user page or kernel/device mapping.
@@ -350,7 +359,7 @@ pagetable_t vmm_copy_pagetable(pagetable_t parent) {
   pagetable_t child = vmm_create_pagetable();
   if (!child) return NULL;
   // Recursively copy user mappings (levels 2, 1, 0)
-  if (vmm_copy_pagetable_recursive(child, parent, 2, 0) < 0) {
+  if (vmm_copy_pagetable_recursive(child, parent, vmm_kernel_pagetable(), 2, 0) < 0) {
     vmm_free_pagetable(child);
     return NULL;
   }
