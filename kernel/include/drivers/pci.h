@@ -17,6 +17,7 @@
 #define PCI_BAR4            0x20
 #define PCI_BAR5            0x24
 #define PCI_CAP_PTR         0x34
+#define PCI_INTERRUPT_LINE  0x3C
 
 // PCI command register bits
 #define PCI_CMD_BUS_MASTER  (1 << 2)

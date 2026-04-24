@@ -151,7 +151,7 @@ static void handle_interrupt(trap_frame *frame) {
             uint32_t irq = plic_claim();
             if (irq == PLIC_UART_IRQ) {
                 uart_handle_interrupt();
-            } else if (irq == PLIC_VIRTIO_IRQ) {
+            } else if (irq == virtio_blk_get_irq()) {
                 virtio_blk_irq();
             }
             if (irq != 0) {

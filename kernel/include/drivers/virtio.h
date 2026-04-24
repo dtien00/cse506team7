@@ -151,6 +151,7 @@ typedef struct virtio_blk_device {
     uint64_t capacity;             // Device capacity in sectors
     uint32_t block_size;           // Block size (usually 512)
     int busy;                      // 1 while a request is in flight
+    uint32_t irq;                  // PLIC IRQ number (read from PCI interrupt_line)
 } virtio_blk_dev_t;
 
 // Function declarations
@@ -159,5 +160,6 @@ int virtio_blk_read(uint64_t sector, void *buf, size_t count);
 int virtio_blk_write(uint64_t sector, const void *buf, size_t count);
 int virtio_blk_flush(void);
 uint64_t virtio_blk_get_capacity(void);
-void virtio_blk_irq(void);  // called by trap handler on virtio IRQ
-void virtio_blk_poll(void); // called from timer to catch missed IRQs
+void virtio_blk_irq(void);      // called by trap handler on virtio IRQ
+void virtio_blk_poll(void);     // called from timer to catch missed IRQs
+uint32_t virtio_blk_get_irq(void); // return PLIC IRQ number for trap handler

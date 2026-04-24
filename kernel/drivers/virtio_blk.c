@@ -170,7 +170,13 @@ int virtio_blk_init(void) {
            (long)blk_dev.capacity, (long)((blk_dev.capacity * 512) / (1024 * 1024)));
 
     initialized = 1;
-    plic_enable_irq(PLIC_VIRTIO_IRQ);
+    blk_dev.irq = pci_read8(pci.bus, pci.dev, pci.fn, PCI_INTERRUPT_LINE);
+    printk("virtio_blk: PCI interrupt_line = %u\n", blk_dev.irq);
+    if (blk_dev.irq == 0 || blk_dev.irq == 0xFF) {
+        printk("virtio_blk: WARNING: invalid interrupt_line, falling back to IRQ 1\n");
+        blk_dev.irq = 1;
+    }
+    plic_enable_irq(blk_dev.irq);
     #undef CFG_R8
     #undef CFG_R16
     #undef CFG_R32
@@ -249,20 +255,22 @@ static int virtio_blk_rw(uint64_t sector, void *buf, size_t count, int write) {
     *(volatile uint32_t *)blk_dev.notify_addr = 0;
 
     if (scheduler_live && current) {
-        // printk("virtio_blk: sleeping for %s sector=%llu expected_idx=%u current_idx=%u sstatus=%lx sie=%lx\n",
-        //        write ? "write" : "read", (unsigned long long)sector,
-        //        expected_used_idx, blk_dev.used->idx,
-        //        read_csr(sstatus), read_csr(sie));
-        // proc_sleep handles the interrupts_off/on internally.
+        // Check condition with interrupts disabled to close the race where the
+        // device completes and IRQ fires proc_wakeup() BEFORE proc_sleep() blocks.
+        // Without this, wakeup is lost and we stall until the timer poll fires.
+        interrupts_off();
         int sleep_count = 0;
         while (blk_dev.used->idx != expected_used_idx) {
+            // proc_sleep: interrupts_off (no-op, already off) → set chan →
+            // interrupts_on → swtch → returns with interrupts ON.
+            // Re-disable after return before re-checking the condition.
             proc_sleep(&blk_dev);
+            interrupts_off();
             sleep_count++;
-            if (sleep_count > 50) { // this shoudl not really happen
+            if (sleep_count > 50) {
                 printk("virtio_blk: STUCK! %s sector=%llu used->idx=%u expected=%u sstatus=%lx sie=%lx\n",
                        write ? "write" : "read", (unsigned long long)sector,
                        blk_dev.used->idx, expected_used_idx, read_csr(sstatus), read_csr(sie));
-                // Fall back to spin-wait
                 interrupts_on();
                 int timeout = 400000000;
                 while (blk_dev.used->idx != expected_used_idx && timeout-- > 0) {}
@@ -271,6 +279,7 @@ static int virtio_blk_rw(uint64_t sector, void *buf, size_t count, int write) {
                 break;
             }
         }
+        interrupts_on();
         blk_dev.last_used_idx = blk_dev.used->idx;
         // printk("virtio_blk: woke up for %s sector=%llu\n",
         //        write ? "write" : "read", (unsigned long long)sector);
@@ -346,9 +355,12 @@ int virtio_blk_flush(void) {
     *(volatile uint32_t *)blk_dev.notify_addr = 0;
 
     if (scheduler_live && current) {
+        interrupts_off();
         while (blk_dev.used->idx != expected_used_idx) {
             proc_sleep(&blk_dev);
+            interrupts_off();
         }
+        interrupts_on();
         blk_dev.last_used_idx = blk_dev.used->idx;
     } else {
         int timeout = 10000000;
@@ -377,15 +389,18 @@ uint64_t virtio_blk_get_capacity(void) {
 void virtio_blk_poll(void) {
     if (!initialized) return;
     if (blk_dev.last_used_idx == blk_dev.used->idx) return;
-    printk("virtio_blk: POLL detected missed completion last_used=%u used->idx=%u\n",
-           blk_dev.last_used_idx, blk_dev.used->idx);
     while (blk_dev.last_used_idx != blk_dev.used->idx)
         blk_dev.last_used_idx++;
     proc_wakeup(&blk_dev);
 }
 
+uint32_t virtio_blk_get_irq(void) {
+    return blk_dev.irq;
+}
+
 // Called from the external interrupt handler when the virtio IRQ fires.
 // Advances last_used_idx and wakes whoever is sleeping on &blk_dev.
+// for some reason this does not seem to get called
 void virtio_blk_irq(void) {
     // Read ISR status to acknowledge the interrupt at the device level.
     // For VirtIO PCI legacy interrupts, reading the ISR register deasserts

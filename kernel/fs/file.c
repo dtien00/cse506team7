@@ -251,6 +251,8 @@ static void file_release(file_t *f) {
 
     // Release resources based on type
     if (f->type == FILE_VNODE && f->dentry) {
+        if (f->flags & O_WRONLY || f->flags & O_RDWR)
+            block_cache_flush();
         dentry_put(f->dentry); // the only type that owns a dentry ref
         f->dentry = NULL;
         f->vnode = NULL;
@@ -340,10 +342,8 @@ int file_write(int fd, const void *buf, size_t len) {
             if (f->flags & O_APPEND)
                 f->offset = f->vnode->size;
             int n = f->vnode->mount->fs_type->ops.write(f->vnode, buf, f->offset, len);
-            if (n > 0) {
+            if (n > 0)
                 f->offset += (size_t) n;
-                block_cache_flush();
-            }
             return n;
         }
 

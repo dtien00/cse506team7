@@ -157,12 +157,12 @@ int main(int argc, char **argv, char **envp) {
     // run_test_nanosleep(&groups[idx++]);
     // run_test_exec_envp(groups, &idx);
 
-    // run_test_xv6_compat(&groups[idx++]);
+    run_test_xv6_compat(&groups[idx++]);
     // run_test_fd_limits(&groups[idx++]);
     // run_test_bigfile(&groups[idx++]);
     // run_test_forkstress(&groups[idx++]);
     // run_test_dirops(&groups[idx++]);
-    run_test_lazy_alloc(&groups[idx++]);
+    // run_test_lazy_alloc(&groups[idx++]);
     // run_test_inode_openunlink(&groups[idx++]);
     // run_test_syscall_robustness(&groups[idx++]);
     // run_test_fd_offset(&groups[idx++]);
