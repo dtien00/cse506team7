@@ -11,26 +11,38 @@
 #define KSTACK_SIZE 4096
 #define MAX_HANDLERS 32
 
-// Kernel-internal signal numbers (mirrors libc/include/signal.h)
+// Kernel-internal signal numbers (mirrors libc/include/signal.h).
+// These are POSIX signal numbers (1-31), NOT RISC-V exception cause codes.
+// SCAUSE values (frame->scause) and signal numbers (pending_signals bitmask) are
+// completely separate integer spaces and are never compared against each other.
+// Numeric overlaps (e.g., SCAUSE_ILLEGAL_INST=2 and KERNEL_SIGINT=2,
+// SCAUSE_ECALL_FROM_S=9 and KERNEL_SIGKILL=9) are expected and universal —
+// Linux, xv6, and BSD all have the same overlap.
 #define KERNEL_SIGINT    2
+#define KERNEL_SIGQUIT   3
+#define KERNEL_SIGILL    4
 #define KERNEL_SIGKILL   9
+#define KERNEL_SIGSEGV  11
 #define KERNEL_SIGPIPE  13
 #define KERNEL_SIGALRM  14
 #define KERNEL_SIGTERM  15
 #define KERNEL_SIGCONT  18
 #define KERNEL_SIGSTOP  19
-#define KERNEL_SIGTSTP   20
-#define KERNEL_SIGTTIN   21
-#define KERNEL_SIGTTOU   22
-// Bitmask of signals that unconditionally terminate the process
-// Signals whose kernel action is proc_exit()
+#define KERNEL_SIGTSTP  20
+#define KERNEL_SIGTTIN  21
+#define KERNEL_SIGTTOU  22
+// Bitmask of signals whose POSIX SIG_DFL action is "terminate the process".
 // SIGPIPE is here so when pipes deliver it, action is automatic.
 // SIGINT is here so when the terminal driver delivers it, action is automatic.
 // SIGALRM is here because its POSIX default action is "terminate"; when
-// sigaction() is implemented (Section 1 item 2) this will be gated by SIG_DFL.
-#define KERNEL_FATAL_SIGS ((1U << KERNEL_SIGKILL) | (1U << KERNEL_SIGTERM) | \
-                           (1U << KERNEL_SIGINT)  | (1U << KERNEL_SIGPIPE) | \
-                           (1U << KERNEL_SIGALRM))
+// sigaction() is implemented this will be gated by SIG_DFL.
+// SIGQUIT terminates without core dump (core dump requires VFS write support).
+// SIGILL/SIGSEGV are SIG_DFL=terminate sentinels; remove from this mask once
+// user-mode signal frame dispatch (sigaction custom handlers) is implemented.
+#define KERNEL_FATAL_SIGS ((1U << KERNEL_SIGKILL) | (1U << KERNEL_SIGTERM)  | \
+                           (1U << KERNEL_SIGINT)  | (1U << KERNEL_SIGPIPE)  | \
+                           (1U << KERNEL_SIGALRM) | (1U << KERNEL_SIGQUIT)  | \
+                           (1U << KERNEL_SIGILL)  | (1U << KERNEL_SIGSEGV))
 
 // SIGSTOP, SIGSTP, SIGTTIN, SIGTTOU cannot be masked or ignored (POSIX)
 #define KERNEL_STOP_SIGS ((1U << KERNEL_SIGSTOP) | (1U << KERNEL_SIGTSTP) | \

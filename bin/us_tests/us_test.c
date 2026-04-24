@@ -39,6 +39,7 @@ void run_test_syscall(us_test_group_t *group);
 void run_test_cow(us_test_group_t *group);
 void run_test_sched(us_test_group_t *group);
 void run_test_signal(us_test_group_t *group);
+void run_test_signal_faults(us_test_group_t *group);
 void run_test_stack_growth(us_test_group_t *group);
 void run_test_dirent(us_test_group_t *group);
 void run_test_getrusage(us_test_group_t *group);
@@ -97,6 +98,7 @@ int main(void) {
     run_test_cow(&groups[idx++]);
     run_test_sched(&groups[idx++]);
     run_test_signal(&groups[idx++]);
+    run_test_signal_faults(&groups[idx++]);
     run_test_dirent(&groups[idx++]);
     run_test_termios_tty(&groups[idx++]);
     run_test_stack_growth(&groups[idx++]);

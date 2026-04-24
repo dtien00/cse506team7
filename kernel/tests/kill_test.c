@@ -234,6 +234,106 @@ void kill_test_run(void) {
         proc_free(parent);
     }
 
+        // Test: kill(pid, SIGQUIT) sets bit 3 in pending_signals
+    {
+        struct proc *p = proc_alloc();
+        p->pid = 300; p->state = PROC_READY; p->signal_mask = 0; p->pending_signals = 0;
+        proc_ready(p);
+        int r = sys_kill(p->pid, SIGQUIT);
+        TEST("SIGQUIT: sys_kill returns 0", r == 0);
+        TEST("SIGQUIT: bit 3 set in pending_signals", p->pending_signals & (1U << 3));
+        // Clean up
+        struct proc *drain; do { drain = proc_next_ready(); } while (drain && drain != p);
+        proc_free(p);
+    }
+
+    // Test: kill(pid, SIGILL) sets bit 4 in pending_signals
+    {
+        struct proc *p = proc_alloc();
+        p->pid = 301; p->state = PROC_READY; p->signal_mask = 0; p->pending_signals = 0;
+        proc_ready(p);
+        sys_kill(p->pid, SIGILL);
+        TEST("SIGILL: bit 4 set in pending_signals", p->pending_signals & (1U << 4));
+        struct proc *drain; do { drain = proc_next_ready(); } while (drain && drain != p);
+        proc_free(p);
+    }
+
+    // Test: kill(pid, SIGSEGV) sets bit 11 in pending_signals
+    {
+        struct proc *p = proc_alloc();
+        p->pid = 302; p->state = PROC_READY; p->signal_mask = 0; p->pending_signals = 0;
+        proc_ready(p);
+        sys_kill(p->pid, SIGSEGV);
+        TEST("SIGSEGV: bit 11 set in pending_signals", p->pending_signals & (1U << 11));
+        struct proc *drain; do { drain = proc_next_ready(); } while (drain && drain != p);
+        proc_free(p);
+    }
+
+    // Test: KERNEL_FATAL_SIGS macro includes all three new signals
+    {
+        TEST("KERNEL_FATAL_SIGS includes SIGQUIT(3)",
+            KERNEL_FATAL_SIGS & (1U << 3));
+        TEST("KERNEL_FATAL_SIGS includes SIGILL(4)",
+            KERNEL_FATAL_SIGS & (1U << 4));
+        TEST("KERNEL_FATAL_SIGS includes SIGSEGV(11)",
+            KERNEL_FATAL_SIGS & (1U << 11));
+    }
+
+    // Test: KERNEL_FATAL_SIGS still includes all original signals
+    {
+        TEST("KERNEL_FATAL_SIGS: SIGKILL(9) still present",  KERNEL_FATAL_SIGS & (1U << 9));
+        TEST("KERNEL_FATAL_SIGS: SIGTERM(15) still present", KERNEL_FATAL_SIGS & (1U << 15));
+        TEST("KERNEL_FATAL_SIGS: SIGINT(2) still present",   KERNEL_FATAL_SIGS & (1U << 2));
+        TEST("KERNEL_FATAL_SIGS: SIGPIPE(13) still present", KERNEL_FATAL_SIGS & (1U << 13));
+        TEST("KERNEL_FATAL_SIGS: SIGALRM(14) still present", KERNEL_FATAL_SIGS & (1U << 14));
+    }
+
+    // Test: signal_mask blocks SIGQUIT — pending bit still set, delivery filtered
+    {
+        struct proc *p = proc_alloc();
+        p->pid = 303; p->state = PROC_READY;
+        p->signal_mask = (1U << 3);   // mask SIGQUIT
+        p->pending_signals = 0;
+        proc_ready(p);
+        sys_kill(p->pid, SIGQUIT);
+        TEST("sigprocmask: SIGQUIT pending bit IS set (masked)",
+            p->pending_signals & (1U << 3));
+        uint32_t unmasked = p->pending_signals & ~p->signal_mask;
+        TEST("sigprocmask: SIGQUIT filtered at delivery",
+            !(unmasked & (1U << 3)));
+        struct proc *drain; do { drain = proc_next_ready(); } while (drain && drain != p);
+        proc_free(p);
+    }
+
+    // Test: signal_mask does NOT block SIGSEGV in KERNEL_FATAL_SIGS path for unmasked case
+    {
+        struct proc *p = proc_alloc();
+        p->pid = 304; p->state = PROC_READY;
+        p->signal_mask = 0;
+        p->pending_signals = 0;
+        proc_ready(p);
+        sys_kill(p->pid, SIGSEGV);
+        uint32_t unmasked = p->pending_signals & ~p->signal_mask;
+        TEST("SIGSEGV unmasked: passes delivery filter",
+            unmasked & KERNEL_FATAL_SIGS & (1U << 11));
+        struct proc *drain; do { drain = proc_next_ready(); } while (drain && drain != p);
+        proc_free(p);
+    }
+
+    // Test: SIGILL on a PROC_BLOCKED process — bit set, proc_unblock called → PROC_READY
+    {
+        struct proc *p = proc_alloc();
+        p->pid = 305; p->state = PROC_CREATED; p->signal_mask = 0;
+        p->pending_signals = 0; p->chan = p;
+        proc_block(p);   // → PROC_BLOCKED
+        sys_kill(p->pid, SIGILL);
+        TEST("SIGILL to BLOCKED: bit 4 set", p->pending_signals & (1U << 4));
+        // sys_kill general path calls proc_unblock for PROC_BLOCKED targets
+        TEST("SIGILL to BLOCKED: state becomes PROC_READY", p->state == PROC_READY);
+        struct proc *drain; do { drain = proc_next_ready(); } while (drain && drain != p);
+        proc_free(p);
+    }
+
     printk("\n========================================\n");
     printk("  Results: %d passed, %d failed\n", passed, failed);
     printk("========================================\n\n");
