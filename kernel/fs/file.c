@@ -151,6 +151,18 @@ static int normalize_path(const char *input, char *out, size_t size) {
                                  input, out, size);
 }
 
+static int file_required_perms_for_open(int flags) {
+    switch (flags & 0x3) {
+        case O_WRONLY:
+            return VFS_PERM_WRITE;
+        case O_RDWR:
+            return VFS_PERM_READ | VFS_PERM_WRITE;
+        case O_RDONLY:
+        default:
+            return VFS_PERM_READ;
+    }
+}
+
 int file_open(const char *path) {
     return file_open_with_flags(path, O_RDONLY, 0);
 }
@@ -189,6 +201,17 @@ int file_open_with_flags(const char *path, int flags, mode_t mode) {
     if ((flags & O_DIRECTORY) && d->d_vnode && d->d_vnode->type != VNODE_DIR) {
         dentry_put(d);
         return -ENOTDIR;
+    }
+
+    int perm_err = vfs_may_access(d->d_vnode, file_required_perms_for_open(flags));
+    if (perm_err) {
+        dentry_put(d);
+        return perm_err;
+    }
+
+    if ((flags & (O_TRUNC | O_APPEND)) && !(file_required_perms_for_open(flags) & VFS_PERM_WRITE)) {
+        dentry_put(d);
+        return -EACCES;
     }
 
     // 2. Allocate the file_t wrapper

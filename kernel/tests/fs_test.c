@@ -354,6 +354,46 @@ void tmpfs_test(void) {
         TEST("single open returns a valid fd", rc >= 0);
         if (rc >= 0) file_close(rc);
     }
+
+    // 23. chmod persists on tmpfs and blocks reopen for denied modes
+    ret = vfs_create("/tmp/perm_enforced.txt", 0644);
+    TEST("created /tmp/perm_enforced.txt", ret == 0);
+    if (ret == 0) {
+        ret = vfs_chmod("/tmp/perm_enforced.txt", 0000);
+        TEST("chmod tmpfs file to 0000 succeeds", ret == 0);
+
+        struct stat st = {0};
+        ret = file_stat("/tmp/perm_enforced.txt", &st);
+        TEST("stat after chmod on tmpfs succeeds", ret == 0);
+        TEST("stat reflects tmpfs chmod", ret == 0 && (st.st_mode & 0777) == 0);
+
+        int denied = file_open("/tmp/perm_enforced.txt");
+        TEST("read open denied after chmod 0000", denied == -EACCES);
+        if (denied >= 0) file_close(denied);
+
+        ret = vfs_chmod("/tmp/perm_enforced.txt", 0600);
+        TEST("chmod tmpfs file back to 0600 succeeds", ret == 0);
+        int allowed = file_open("/tmp/perm_enforced.txt");
+        TEST("read open allowed after chmod 0600", allowed >= 0);
+        if (allowed >= 0) file_close(allowed);
+    }
+
+    // 24. directory execute bit gates traversal / creation
+    ret = vfs_mkdir("/tmp/no_search", 0755);
+    TEST("created /tmp/no_search", ret == 0);
+    if (ret == 0) {
+        ret = vfs_chmod("/tmp/no_search", 0666);
+        TEST("chmod dir to remove execute bit succeeds", ret == 0);
+
+        ret = vfs_create("/tmp/no_search/file.txt", 0644);
+        TEST("create in non-searchable dir is denied", ret == -EACCES);
+
+        ret = vfs_chmod("/tmp/no_search", 0777);
+        TEST("chmod dir to restore execute bit succeeds", ret == 0);
+
+        ret = vfs_create("/tmp/no_search/file.txt", 0644);
+        TEST("create in searchable dir succeeds", ret == 0);
+    }
 }
 
 void dentry_test(void) {

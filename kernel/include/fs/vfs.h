@@ -16,6 +16,10 @@ typedef enum {
     VNODE_LNK  // symbolic link
 } vnode_type_t;
 
+#define VFS_PERM_EXEC  0x1
+#define VFS_PERM_WRITE 0x2
+#define VFS_PERM_READ  0x4
+
 #define PIPE_CAPACITY 4096
 #define PIPE_END_READ 0x1
 #define PIPE_END_WRITE 0x2
@@ -102,6 +106,7 @@ void vnode_put(vnode_t *vn);
 dentry_t *vfs_get_root(void);
 int vfs_lookup_from(dentry_t *start, const char *path, dentry_t **out);
 int vfs_lookup(const char *path, dentry_t **out);
+int vfs_may_access(vnode_t *vn, int perms);
 int vfs_create(const char *path, uint32_t mode);
 int vfs_unlink(const char *path);
 int vfs_mkdir(const char *path, uint32_t mode);

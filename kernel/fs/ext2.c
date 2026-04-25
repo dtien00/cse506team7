@@ -431,7 +431,7 @@ vnode_t *ext2_mount(mount_t *mnt, const char *source) {
     }
 
     root_vnode->ino = EXT2_ROOT_INO;
-    root_vnode->mode = root_inode->i_mode;
+    root_vnode->mode = root_inode->i_mode & 0x0FFF;
     root_vnode->size = root_inode->i_size;
     root_vnode->type = ((root_inode->i_mode & 0xF000) == EXT2_S_IFDIR) ? VNODE_DIR : VNODE_REG;
     root_vnode->ref_count = 0;
@@ -537,7 +537,7 @@ vnode_t *ext2_lookup(mount_t *mnt, const char *path) {
         }
         
         vnode->ino = ino;
-        vnode->mode = inode->i_mode;
+        vnode->mode = inode->i_mode & 0x0FFF;
         vnode->size = inode->i_size;
         vnode->ref_count = 0;
         vnode->mount = mnt;
@@ -617,7 +617,7 @@ vnode_t *ext2_lookup(mount_t *mnt, const char *path) {
     }
     
     vnode->ino = ino;
-    vnode->mode = current_inode->i_mode;
+    vnode->mode = current_inode->i_mode & 0x0FFF;
     vnode->size = current_inode->i_size;
     vnode->nlink = current_inode->i_links_count;
     vnode->ref_count = 0;

@@ -584,6 +584,15 @@ static int build_user_stack(pagetable_t pt, uintptr_t stack_top,
 }
 
 int exec(const char *path, char *const argv[], char *const envp[]) {
+    dentry_t *exec_dentry = NULL;
+    int lookup_rc = vfs_lookup_from(current->fs->cwd, path, &exec_dentry);
+    if (lookup_rc < 0)
+        return -1;
+    int exec_perm_rc = vfs_may_access(exec_dentry->d_vnode, VFS_PERM_EXEC | VFS_PERM_READ);
+    dentry_put(exec_dentry);
+    if (exec_perm_rc < 0)
+        return -1;
+
     // 1. Open the binary
     int fd = file_open(path);
     if (fd < 0) return -1;
