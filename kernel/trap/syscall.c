@@ -14,6 +14,7 @@
 #include "trap/trap.h"
 #include "fs/block_cache.h"
 #include "signal.h"
+#include "tty/term.h"
 
 
 #define MAP_FAILED ((void *) -1)
@@ -403,9 +404,28 @@ void syscall_handler(trap_frame *frame) {
                                 (struct itimerval_k *)arg2);
             break;
 
+        /* Single-user kernel: all processes run as UID/GID 0 (root). */
+        case SYS_getuid:
+            ret = 0;
+            break;
+
+        case SYS_getgid:
+            ret = 0;
+            break;
+
         default:
-            printk("Unknown system call: %d\n", syscall_num);
-            ret = -1;
+            // Unknown syscall number from user space will be recognized as delivering SIGSYS (Bad system call)
+            // Set a0 = -ENOSYS so masked SIGSYS callers see a defined return value.
+            // If SIGSYS is unmasked (it is maskable), trap_handler fires proc_exit(-31)
+            // before this function returns to user mode.
+            if (current) {
+                current->pending_signals |= (1U << KERNEL_SIGSYS);
+                ret = -ENOSYS;
+            }
+            else {
+                printk("Unknown system call: %d (no current process)\n", syscall_num);
+                ret = -1;
+            }
             break;
     }
 
@@ -1291,8 +1311,13 @@ int sys_sigprocmask(int how, const uint32_t *set, uint32_t *oldset) {
         default: return -1;
     }
 
-    // SIGKILL (9) and SIGSTOP (19) can never be masked — POSIX requirement
-    new_mask &= ~((1U << KERNEL_SIGKILL) | (1U << KERNEL_SIGSTOP) | (1U << KERNEL_SIGILL));
+    // SIGKILL (9), SIGSTOP (19), SIGILL (4), SIGABRT (6), SIGTRAP (5) can never be masked.
+    // SIGABRT: abort() must terminate; a masked SIGABRT would leave the process alive.
+    // SIGTRAP: EBREAK fires repeatedly if SIGTRAP is masked — same loop as Bug 1 in SIGS.md.
+    // SIGHUP, SIGUSR1, SIGUSR2, SIGSYS are software-only; masking them is legal.
+    new_mask &= ~((1U << KERNEL_SIGKILL)  | (1U << KERNEL_SIGSTOP)  |
+                (1U << KERNEL_SIGILL)   | (1U << KERNEL_SIGABRT)  |
+                (1U << KERNEL_SIGTRAP));
     current->signal_mask = new_mask;
     return 0;
 }
@@ -1824,8 +1849,14 @@ pid_t sys_setsid(void) {
     /* POSIX: process group leader cannot call setsid */
     if (current->pgid == current->pid)
         return -EPERM;
-    current->sid  = current->pid;
-    current->pgid = current->pid;
+    current->sid              = current->pid;
+    current->pgid             = current->pid;
+    current->is_session_leader = 1;
+    /* POSIX: setsid() creates a new session with NO controlling terminal.
+     * Do NOT set console_term.session_leader here — that would make every
+     * short-lived child that calls setsid() (e.g. test helpers) appear to
+     * own the console, causing proc_exit() to deliver spurious SIGHUP to
+     * the foreground process group when the child exits. */
     return current->sid;
 }
 

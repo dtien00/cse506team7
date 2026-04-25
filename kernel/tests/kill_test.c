@@ -334,6 +334,370 @@ void kill_test_run(void) {
         proc_free(p);
     }
 
+    // ── Group A: SIGUSR1 / SIGUSR2 basic dispatch ────────────────────────────────
+    printk("=== Group A: SIGUSR1 / SIGUSR2 / SIGABRT / SIGTRAP / SIGHUP / SIGSYS basic dispatch ===\n");
+
+    // Test: kill(pid, SIGUSR1) sets bit 10 in pending_signals
+    {
+        struct proc *p = proc_alloc();
+        p->pid = 500; p->state = PROC_READY; p->signal_mask = 0; p->pending_signals = 0;
+        proc_ready(p);
+        int r = sys_kill(p->pid, SIGUSR1);
+        TEST("SIGUSR1: sys_kill returns 0", r == 0);
+        TEST("SIGUSR1: bit 10 set in pending_signals", p->pending_signals & (1U << 10));
+        struct proc *drain; do { drain = proc_next_ready(); } while (drain && drain != p);
+        proc_free(p);
+    }
+
+    // Test: kill(pid, SIGUSR2) sets bit 12 in pending_signals
+    {
+        struct proc *p = proc_alloc();
+        p->pid = 501; p->state = PROC_READY; p->signal_mask = 0; p->pending_signals = 0;
+        proc_ready(p);
+        sys_kill(p->pid, SIGUSR2);
+        TEST("SIGUSR2: bit 12 set in pending_signals", p->pending_signals & (1U << 12));
+        struct proc *drain; do { drain = proc_next_ready(); } while (drain && drain != p);
+        proc_free(p);
+    }
+
+    // Test: kill(pid, SIGABRT) sets bit 6 in pending_signals
+    {
+        struct proc *p = proc_alloc();
+        p->pid = 502; p->state = PROC_READY; p->signal_mask = 0; p->pending_signals = 0;
+        proc_ready(p);
+        sys_kill(p->pid, SIGABRT);
+        TEST("SIGABRT: bit 6 set in pending_signals", p->pending_signals & (1U << 6));
+        struct proc *drain; do { drain = proc_next_ready(); } while (drain && drain != p);
+        proc_free(p);
+    }
+
+    // Test: kill(pid, SIGTRAP) sets bit 5 in pending_signals
+    {
+        struct proc *p = proc_alloc();
+        p->pid = 503; p->state = PROC_READY; p->signal_mask = 0; p->pending_signals = 0;
+        proc_ready(p);
+        sys_kill(p->pid, SIGTRAP);
+        TEST("SIGTRAP: bit 5 set in pending_signals", p->pending_signals & (1U << 5));
+        struct proc *drain; do { drain = proc_next_ready(); } while (drain && drain != p);
+        proc_free(p);
+    }
+
+    // Test: kill(pid, SIGHUP) sets bit 1 in pending_signals
+    {
+        struct proc *p = proc_alloc();
+        p->pid = 504; p->state = PROC_READY; p->signal_mask = 0; p->pending_signals = 0;
+        proc_ready(p);
+        sys_kill(p->pid, SIGHUP);
+        TEST("SIGHUP: bit 1 set in pending_signals", p->pending_signals & (1U << 1));
+        struct proc *drain; do { drain = proc_next_ready(); } while (drain && drain != p);
+        proc_free(p);
+    }
+
+    // Test: kill(pid, SIGSYS) sets bit 31 in pending_signals
+    {
+        struct proc *p = proc_alloc();
+        p->pid = 505; p->state = PROC_READY; p->signal_mask = 0; p->pending_signals = 0;
+        proc_ready(p);
+        sys_kill(p->pid, SIGSYS);
+        TEST("SIGSYS: bit 31 set in pending_signals",
+            p->pending_signals & (1U << 31));
+        struct proc *drain; do { drain = proc_next_ready(); } while (drain && drain != p);
+        proc_free(p);
+    }
+
+    // ── Group B: KERNEL_FATAL_SIGS macro includes all new signals ────────────────
+    printk("=== Group B: KERNEL_FATAL_SIGS includes all new signals ===\n");
+
+    TEST("KERNEL_FATAL_SIGS includes SIGHUP(1)",   KERNEL_FATAL_SIGS & (1U << 1));
+    TEST("KERNEL_FATAL_SIGS includes SIGTRAP(5)",  KERNEL_FATAL_SIGS & (1U << 5));
+    TEST("KERNEL_FATAL_SIGS includes SIGABRT(6)",  KERNEL_FATAL_SIGS & (1U << 6));
+    TEST("KERNEL_FATAL_SIGS includes SIGUSR1(10)", KERNEL_FATAL_SIGS & (1U << 10));
+    TEST("KERNEL_FATAL_SIGS includes SIGUSR2(12)", KERNEL_FATAL_SIGS & (1U << 12));
+    TEST("KERNEL_FATAL_SIGS includes SIGSYS(31)",  KERNEL_FATAL_SIGS & (1U << 31));
+
+    // ── Group C: KERNEL_FATAL_SIGS regression — original 8 signals intact ───────
+    printk("=== Group C: KERNEL_FATAL_SIGS regression — original 8 signals intact ===\n");
+
+    TEST("KERNEL_FATAL_SIGS: SIGKILL(9) still present",  KERNEL_FATAL_SIGS & (1U << 9));
+    TEST("KERNEL_FATAL_SIGS: SIGTERM(15) still present", KERNEL_FATAL_SIGS & (1U << 15));
+    TEST("KERNEL_FATAL_SIGS: SIGINT(2) still present",   KERNEL_FATAL_SIGS & (1U << 2));
+    TEST("KERNEL_FATAL_SIGS: SIGQUIT(3) still present",  KERNEL_FATAL_SIGS & (1U << 3));
+    TEST("KERNEL_FATAL_SIGS: SIGILL(4) still present",   KERNEL_FATAL_SIGS & (1U << 4));
+    TEST("KERNEL_FATAL_SIGS: SIGPIPE(13) still present", KERNEL_FATAL_SIGS & (1U << 13));
+    TEST("KERNEL_FATAL_SIGS: SIGALRM(14) still present", KERNEL_FATAL_SIGS & (1U << 14));
+    TEST("KERNEL_FATAL_SIGS: SIGSEGV(11) still present", KERNEL_FATAL_SIGS & (1U << 11));
+
+    // ── Group D: KERNEL_STOP_SIGS and KERNEL_DFL_IGNORE_SIGS not affected ───────
+    printk("=== Group D: KERNEL_STOP_SIGS and KERNEL_DFL_IGNORE_SIGS not affected ===\n");
+
+    TEST("KERNEL_STOP_SIGS: no new signals added",
+        !(KERNEL_STOP_SIGS & ((1U << 1) | (1U << 5) | (1U << 6) |
+                                (1U << 10) | (1U << 12) | (1U << 31))));
+    TEST("KERNEL_DFL_IGNORE_SIGS unchanged",
+        KERNEL_DFL_IGNORE_SIGS == (1U << 17));  // SIGCHLD only
+
+    // ── Group E: FATAL_SIGS & STOP_SIGS disjoint after expansion ────────────────
+    printk("=== Group E: FATAL_SIGS & STOP_SIGS disjoint after expansion ===\n");
+
+    TEST("FATAL_SIGS & STOP_SIGS == 0 after expansion",
+        (KERNEL_FATAL_SIGS & KERNEL_STOP_SIGS) == 0);
+
+    // ── Group F: signal_mask blocks new signals — pending bit set, filtered ──────
+    printk("=== Group F: signal_mask blocks new signals — pending bit set, filtered ===\n");
+
+    {
+        struct proc *p = proc_alloc();
+        p->pid = 510; p->state = PROC_READY;
+        p->signal_mask = (1U << 10) | (1U << 12);  // block SIGUSR1, SIGUSR2
+        p->pending_signals = 0;
+        proc_ready(p);
+        sys_kill(p->pid, SIGUSR1);
+        sys_kill(p->pid, SIGUSR2);
+        TEST("masked SIGUSR1: pending bit set",   p->pending_signals & (1U << 10));
+        TEST("masked SIGUSR2: pending bit set",   p->pending_signals & (1U << 12));
+        uint32_t unmasked = p->pending_signals & ~p->signal_mask;
+        TEST("masked SIGUSR1: filtered at delivery", !(unmasked & (1U << 10)));
+        TEST("masked SIGUSR2: filtered at delivery", !(unmasked & (1U << 12)));
+        struct proc *drain; do { drain = proc_next_ready(); } while (drain && drain != p);
+        proc_free(p);
+    }
+
+    // ── Group G: SIGABRT cannot be masked (unmaskable strip) ─────────────────────
+    printk("=== Group G: SIGABRT / SIGTRAP cannot be masked (unmaskable strip) ===\n");
+
+    {
+        // Simulate what sys_sigprocmask does: try to set SIGABRT in signal_mask.
+        // After the strip, SIGABRT bit must be 0.
+        uint32_t proposed_mask = (1U << KERNEL_SIGABRT);
+        // Apply the same strip as sys_sigprocmask:
+        proposed_mask &= ~((1U << KERNEL_SIGKILL)  | (1U << KERNEL_SIGSTOP)  |
+                        (1U << KERNEL_SIGILL)   | (1U << KERNEL_SIGABRT)  |
+                        (1U << KERNEL_SIGTRAP));
+        TEST("SIGABRT stripped from new_mask by sigprocmask logic",
+            !(proposed_mask & (1U << KERNEL_SIGABRT)));
+        TEST("SIGTRAP stripped from new_mask by sigprocmask logic",
+            !(proposed_mask & (1U << KERNEL_SIGTRAP)));
+    }
+
+    // ── Group H: blocked process wakeup for new unmasked fatal signals ───────────
+    printk("=== Group H: blocked process wakeup for new unmasked fatal signals ===\n");
+
+    {
+        struct proc *p = proc_alloc();
+        p->pid = 515; p->state = PROC_CREATED; p->signal_mask = 0;
+        p->pending_signals = 0; p->chan = p;
+        proc_block(p);
+        sys_kill(p->pid, SIGUSR1);
+        TEST("SIGUSR1 to BLOCKED: bit 10 set", p->pending_signals & (1U << 10));
+        TEST("SIGUSR1 to BLOCKED: state PROC_READY", p->state == PROC_READY);
+        struct proc *drain; do { drain = proc_next_ready(); } while (drain && drain != p);
+        proc_free(p);
+    }
+
+    // ── Group I: SIGSYS bit 31 is the high bit of uint32_t — verify sign safety ──
+    printk("=== Group I: SIGSYS bit 31 sign-safety and kernel_ctz ordering ===\n");
+
+    {
+        uint32_t fatal = KERNEL_FATAL_SIGS;
+        // Ensure bit 31 participates correctly in unsigned arithmetic:
+        TEST("SIGSYS(31): bit 31 set in KERNEL_FATAL_SIGS (uint32_t)",
+            (fatal & (1U << 31)) != 0);
+        // Verify kernel_ctz returns 1 when only bit 1 is set (SIGHUP wins over SIGSYS):
+        uint32_t both = (1U << 1) | (1U << 31);
+        TEST("kernel_ctz: SIGHUP(1) fires before SIGSYS(31)",
+            kernel_ctz(both) == 1);
+    }
+
+    // ── Group J: SIGSYS to ZOMBIE returns -1 ────────────────────────────────────
+    printk("=== Group J: SIGSYS to ZOMBIE returns -1 ===\n");
+
+    {
+        struct proc *p = proc_alloc();
+        p->pid = 520; p->state = PROC_ZOMBIE; p->pending_signals = 0;
+        int r = sys_kill(p->pid, SIGSYS);
+        TEST("SIGSYS to ZOMBIE: returns -1", r == -1);
+        proc_free(p);
+    }
+
+    // ── Group K: SIGUSR1 / SIGUSR2 edge cases ───────────────────────────────────
+
+    printk("=== K1. SIGUSR1 to ZOMBIE → returns -1 ===\n");
+    {
+        struct proc *p = proc_alloc();
+        p->pid = 600; p->state = PROC_ZOMBIE; p->pending_signals = 0;
+        int r = sys_kill(p->pid, SIGUSR1);
+        TEST("K1: SIGUSR1 to ZOMBIE: returns -1", r == -1);
+        TEST("K1: SIGUSR1 to ZOMBIE: state unchanged", p->state == PROC_ZOMBIE);
+        proc_free(p);
+    }
+
+    printk("=== K2. SIGUSR2 to BLOCKED → bit set, proc_unblock fires ===\n");
+    {
+        struct proc *p = proc_alloc();
+        p->pid = 601; p->state = PROC_CREATED; p->signal_mask = 0;
+        p->pending_signals = 0; p->chan = p;
+        proc_block(p);
+        sys_kill(p->pid, SIGUSR2);
+        TEST("K2: SIGUSR2 to BLOCKED: bit 12 set", p->pending_signals & (1U << 12));
+        TEST("K2: SIGUSR2 to BLOCKED: state PROC_READY", p->state == PROC_READY);
+        struct proc *drain601; do { drain601 = proc_next_ready(); } while (drain601 && drain601 != p);
+        proc_free(p);
+    }
+
+    printk("=== K3. SIGUSR1 to STOPPED → bit set, state unchanged ===\n");
+    {
+        struct proc *p = proc_alloc();
+        p->pid = 602; p->state = PROC_READY; p->signal_mask = 0; p->pending_signals = 0;
+        proc_ready(p);
+        sys_kill(p->pid, SIGSTOP);
+        sys_kill(p->pid, SIGUSR1);
+        TEST("K3: SIGUSR1 to STOPPED: bit 10 set", p->pending_signals & (1U << 10));
+        TEST("K3: SIGUSR1 to STOPPED: state still PROC_STOPPED", p->state == PROC_STOPPED);
+        proc_free(p);
+    }
+
+    printk("=== K4. SIGUSR1 and SIGUSR2 both pending — SIGUSR1 fires first ===\n");
+    {
+        struct proc *p = proc_alloc();
+        p->pid = 603; p->state = PROC_READY; p->signal_mask = 0; p->pending_signals = 0;
+        proc_ready(p);
+        sys_kill(p->pid, SIGUSR2);   // bit 12
+        sys_kill(p->pid, SIGUSR1);   // bit 10
+        uint32_t fatal603 = (p->pending_signals & ~p->signal_mask) & KERNEL_FATAL_SIGS;
+        TEST("K4: SIGUSR1(10) fires before SIGUSR2(12)", kernel_ctz(fatal603) == 10);
+        struct proc *drain603; do { drain603 = proc_next_ready(); } while (drain603 && drain603 != p);
+        proc_free(p);
+    }
+
+    printk("=== K5. Masked SIGUSR1 to BLOCKED: bit set, proc stays BLOCKED ===\n");
+    {
+        struct proc *p = proc_alloc();
+        p->pid = 604; p->state = PROC_CREATED;
+        p->signal_mask = (1U << 10);   // mask SIGUSR1
+        p->pending_signals = 0; p->chan = p;
+        proc_block(p);
+        sys_kill(p->pid, SIGUSR1);
+        TEST("K5: masked SIGUSR1 to BLOCKED: bit still set", p->pending_signals & (1U << 10));
+        TEST("K5: masked SIGUSR1 to BLOCKED: state stays BLOCKED", p->state == PROC_BLOCKED);
+        proc_free(p);
+    }
+
+    // ── Group L: SIGABRT edge cases ──────────────────────────────────────────────
+
+    printk("=== L1. SIGABRT bit 6 in KERNEL_FATAL_SIGS ===\n");
+    TEST("L1: bit 6 in KERNEL_FATAL_SIGS", KERNEL_FATAL_SIGS & (1U << 6));
+    TEST("L1: KERNEL_SIGABRT constant is 6", KERNEL_SIGABRT == 6);
+
+    printk("=== L2. SIGABRT to ZOMBIE → returns -1 ===\n");
+    {
+        struct proc *p = proc_alloc();
+        p->pid = 610; p->state = PROC_ZOMBIE; p->pending_signals = 0;
+        int r = sys_kill(p->pid, SIGABRT);
+        TEST("L2: SIGABRT to ZOMBIE: returns -1", r == -1);
+        proc_free(p);
+    }
+
+    printk("=== L3. SIGABRT(6) fires before SIGUSR2(12) ===\n");
+    {
+        struct proc *p = proc_alloc();
+        p->pid = 611; p->state = PROC_READY; p->signal_mask = 0; p->pending_signals = 0;
+        proc_ready(p);
+        sys_kill(p->pid, SIGUSR2);   // bit 12
+        sys_kill(p->pid, SIGABRT);   // bit 6
+        uint32_t fatal611 = (p->pending_signals & ~p->signal_mask) & KERNEL_FATAL_SIGS;
+        TEST("L3: SIGABRT(6) fires before SIGUSR2(12)", kernel_ctz(fatal611) == 6);
+        struct proc *drain611; do { drain611 = proc_next_ready(); } while (drain611 && drain611 != p);
+        proc_free(p);
+    }
+
+    // ── Group M: SIGTRAP edge cases ──────────────────────────────────────────────
+
+    printk("=== M1. SIGTRAP bit 5 in KERNEL_FATAL_SIGS ===\n");
+    TEST("M1: bit 5 in KERNEL_FATAL_SIGS", KERNEL_FATAL_SIGS & (1U << 5));
+    TEST("M1: KERNEL_SIGTRAP constant is 5", KERNEL_SIGTRAP == 5);
+
+    printk("=== M2. SIGTRAP(5) fires before SIGABRT(6) — lower bit wins ===\n");
+    {
+        struct proc *p = proc_alloc();
+        p->pid = 620; p->state = PROC_READY; p->signal_mask = 0; p->pending_signals = 0;
+        proc_ready(p);
+        sys_kill(p->pid, SIGABRT);   // bit 6
+        sys_kill(p->pid, SIGTRAP);   // bit 5
+        uint32_t fatal620 = (p->pending_signals & ~p->signal_mask) & KERNEL_FATAL_SIGS;
+        TEST("M2: SIGTRAP(5) fires before SIGABRT(6)", kernel_ctz(fatal620) == 5);
+        struct proc *drain620; do { drain620 = proc_next_ready(); } while (drain620 && drain620 != p);
+        proc_free(p);
+    }
+
+    printk("=== M3. SIGTRAP not in KERNEL_STOP_SIGS ===\n");
+    TEST("M3: SIGTRAP(5) not in KERNEL_STOP_SIGS", !(KERNEL_STOP_SIGS & (1U << 5)));
+
+    // ── Group N: SIGHUP edge cases ───────────────────────────────────────────────
+
+    printk("=== N1. SIGHUP(1) fires first when all 6 new signals pending ===\n");
+    {
+        struct proc *p = proc_alloc();
+        p->pid = 630; p->state = PROC_READY; p->signal_mask = 0; p->pending_signals = 0;
+        proc_ready(p);
+        sys_kill(p->pid, SIGSYS);
+        sys_kill(p->pid, SIGUSR2);
+        sys_kill(p->pid, SIGUSR1);
+        sys_kill(p->pid, SIGABRT);
+        sys_kill(p->pid, SIGTRAP);
+        sys_kill(p->pid, SIGHUP);
+        uint32_t fatal630 = (p->pending_signals & ~p->signal_mask) & KERNEL_FATAL_SIGS;
+        TEST("N1: SIGHUP(1) fires first when all new signals pending", kernel_ctz(fatal630) == 1);
+        struct proc *drain630; do { drain630 = proc_next_ready(); } while (drain630 && drain630 != p);
+        proc_free(p);
+    }
+
+    printk("=== N2. SIGHUP(1) fires before SIGINT(2) — new signal beats existing ===\n");
+    {
+        struct proc *p = proc_alloc();
+        p->pid = 631; p->state = PROC_READY; p->signal_mask = 0; p->pending_signals = 0;
+        proc_ready(p);
+        sys_kill(p->pid, SIGINT);   // bit 2
+        sys_kill(p->pid, SIGHUP);   // bit 1
+        uint32_t fatal631 = (p->pending_signals & ~p->signal_mask) & KERNEL_FATAL_SIGS;
+        TEST("N2: SIGHUP(1) fires before SIGINT(2)", kernel_ctz(fatal631) == 1);
+        struct proc *drain631; do { drain631 = proc_next_ready(); } while (drain631 && drain631 != p);
+        proc_free(p);
+    }
+
+    // ── Group O: SIGSYS edge cases ───────────────────────────────────────────────
+
+    printk("=== O1. SIGSYS bit 31 in KERNEL_FATAL_SIGS (high bit, uint32_t) ===\n");
+    TEST("O1: bit 31 in KERNEL_FATAL_SIGS (uint32_t)", (KERNEL_FATAL_SIGS & (1U << 31)) != 0);
+    TEST("O1: KERNEL_SIGSYS constant is 31", KERNEL_SIGSYS == 31);
+
+    printk("=== O2. SIGSYS loses to SIGTERM — highest bit fires last ===\n");
+    {
+        struct proc *p = proc_alloc();
+        p->pid = 640; p->state = PROC_READY; p->signal_mask = 0; p->pending_signals = 0;
+        proc_ready(p);
+        sys_kill(p->pid, SIGSYS);    // bit 31
+        sys_kill(p->pid, SIGTERM);   // bit 15
+        uint32_t fatal640 = (p->pending_signals & ~p->signal_mask) & KERNEL_FATAL_SIGS;
+        TEST("O2: SIGTERM(15) fires before SIGSYS(31)", kernel_ctz(fatal640) == 15);
+        struct proc *drain640; do { drain640 = proc_next_ready(); } while (drain640 && drain640 != p);
+        proc_free(p);
+    }
+
+    printk("=== O3. Masked SIGSYS: bit set but filtered at delivery ===\n");
+    {
+        struct proc *p = proc_alloc();
+        p->pid = 641; p->state = PROC_READY;
+        p->signal_mask = (1U << 31);   // mask SIGSYS (legal — not in unmaskable strip)
+        p->pending_signals = 0;
+        proc_ready(p);
+        sys_kill(p->pid, SIGSYS);
+        TEST("O3: masked SIGSYS: bit 31 set", p->pending_signals & (1U << 31));
+        uint32_t unmasked641 = p->pending_signals & ~p->signal_mask;
+        TEST("O3: masked SIGSYS: filtered at delivery", !(unmasked641 & (1U << 31)));
+        struct proc *drain641; do { drain641 = proc_next_ready(); } while (drain641 && drain641 != p);
+        proc_free(p);
+    }
+
     printk("\n========================================\n");
     printk("  Results: %d passed, %d failed\n", passed, failed);
     printk("========================================\n\n");

@@ -195,6 +195,14 @@ void handle_exception(trap_frame *frame) {
                 // Invalid / reserved opcode executed by user process.
                 current->pending_signals |= (1U << KERNEL_SIGILL);
                 return;
+            case SCAUSE_BREAKPOINT:
+                // EBREAK / C.EBREAK executed by user process.
+                // Standard RISC-V EBREAK is 4 bytes; compressed C.EBREAK is 2 bytes.
+                // We do not advance sepc: the process is killed via KERNEL_FATAL_SIGS.
+                // sepc advancement is only relevant if a signal handler could resume
+                // execution past EBREAK, which requires sigaction frame dispatch.
+                current->pending_signals |= (1U << KERNEL_SIGTRAP);
+                return;
             case SCAUSE_INST_ACCESS_FAULT:
                 // User process tried to fetch an instruction from an inaccessible address.
                 // Maps to SIGSEGV (cannot execute at that address), not SIGILL.

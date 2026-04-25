@@ -30,6 +30,7 @@ void ut_check(us_test_group_t *group, int cond, const char *name, const char *fi
     if (cond) {
         group->passed++;
         g_total_passed++;
+        printf("  [PASS] %s\n", name);
     } else {
         group->failed++;
         g_total_failed++;

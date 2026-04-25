@@ -18,11 +18,16 @@
 // Numeric overlaps (e.g., SCAUSE_ILLEGAL_INST=2 and KERNEL_SIGINT=2,
 // SCAUSE_ECALL_FROM_S=9 and KERNEL_SIGKILL=9) are expected and universal —
 // Linux, xv6, and BSD all have the same overlap.
+#define KERNEL_SIGHUP    1
 #define KERNEL_SIGINT    2
 #define KERNEL_SIGQUIT   3
 #define KERNEL_SIGILL    4
+#define KERNEL_SIGTRAP   5
+#define KERNEL_SIGABRT   6
 #define KERNEL_SIGKILL   9
+#define KERNEL_SIGUSR1  10
 #define KERNEL_SIGSEGV  11
+#define KERNEL_SIGUSR2  12
 #define KERNEL_SIGPIPE  13
 #define KERNEL_SIGALRM  14
 #define KERNEL_SIGTERM  15
@@ -32,18 +37,21 @@
 #define KERNEL_SIGTSTP  20
 #define KERNEL_SIGTTIN  21
 #define KERNEL_SIGTTOU  22
-// Bitmask of signals whose POSIX SIG_DFL action is "terminate the process".
-// SIGPIPE is here so when pipes deliver it, action is automatic.
-// SIGINT is here so when the terminal driver delivers it, action is automatic.
-// SIGALRM is here because its POSIX default action is "terminate"; when
-// sigaction() is implemented this will be gated by SIG_DFL.
-// SIGQUIT terminates without core dump (core dump requires VFS write support).
-// SIGILL/SIGSEGV are SIG_DFL=terminate sentinels; remove from this mask once
-// user-mode signal frame dispatch (sigaction custom handlers) is implemented.
-#define KERNEL_FATAL_SIGS ((1U << KERNEL_SIGKILL) | (1U << KERNEL_SIGTERM)  | \
-                           (1U << KERNEL_SIGINT)  | (1U << KERNEL_SIGPIPE)  | \
-                           (1U << KERNEL_SIGALRM) | (1U << KERNEL_SIGQUIT)  | \
-                           (1U << KERNEL_SIGILL)  | (1U << KERNEL_SIGSEGV))
+#define KERNEL_SIGSYS   31
+
+// Bitmask of signals whose POSIX SIG_DFL action is "terminate the process."
+// Original set: SIGKILL, SIGTERM, SIGINT, SIGPIPE, SIGALRM, SIGQUIT, SIGILL, SIGSEGV.
+// Extended (SIGS_2): SIGHUP, SIGTRAP, SIGABRT, SIGUSR1, SIGUSR2, SIGSYS.
+// SIGABRT is also unmaskable (sys_sigprocmask strips it): abort() must always terminate.
+// SIGTRAP is also unmaskable: masking it causes an infinite EBREAK re-fault loop.
+// SIGILL/SIGSEGV remain here until user-mode sigaction frame dispatch is implemented.
+#define KERNEL_FATAL_SIGS ((1U << KERNEL_SIGKILL)  | (1U << KERNEL_SIGTERM)  | \
+                           (1U << KERNEL_SIGINT)   | (1U << KERNEL_SIGPIPE)  | \
+                           (1U << KERNEL_SIGALRM)  | (1U << KERNEL_SIGQUIT)  | \
+                           (1U << KERNEL_SIGILL)   | (1U << KERNEL_SIGSEGV)  | \
+                           (1U << KERNEL_SIGHUP)   | (1U << KERNEL_SIGTRAP)  | \
+                           (1U << KERNEL_SIGABRT)  | (1U << KERNEL_SIGUSR1)  | \
+                           (1U << KERNEL_SIGUSR2)  | (1U << KERNEL_SIGSYS))
 
 // SIGSTOP, SIGSTP, SIGTTIN, SIGTTOU cannot be masked or ignored (POSIX)
 #define KERNEL_STOP_SIGS ((1U << KERNEL_SIGSTOP) | (1U << KERNEL_SIGTSTP) | \
@@ -169,7 +177,8 @@ struct proc {
 
     // Process group and session management
     pid_t pgid;
-    pid_t sid; 
+    pid_t sid;
+    uint8_t is_session_leader;
 
     // Background/Foreground process
     uint8_t stop_unreported;

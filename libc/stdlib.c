@@ -9,6 +9,8 @@ void _Exit(int status) {
 
 void abort(void) {
     raise(SIGABRT);
+    // Unreachable: SIGABRT is in KERNEL_FATAL_SIGS and unmaskable (sys_sigprocmask strips it).
+    // _Exit(134) was the pre-SIGS_2 fallback (128 + SIGABRT shell convention).
     _Exit(134);
 }
 

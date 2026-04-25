@@ -102,9 +102,9 @@ void run_test_signal(us_test_group_t *group) {
      * "The set of signals pending for the child shall be initialized to the
      * empty set." — POSIX.1-2017 fork()
      *
-     * Note: SIGTERM must be used here (not SIGUSR1) because only signals in
-     * KERNEL_FATAL_SIGS actually kill the process — SIGUSR1 is not fatal in
-     * this kernel and would not detect the regression.
+     * SIGTERM is used here because it was already pending+blocked from test 2,
+     * making this a zero-cost reuse.  SIGUSR1 is now also in KERNEL_FATAL_SIGS
+     * (added in SIGS_2), so either signal would detect the regression.
      */
     {
         sigset_t term_set;

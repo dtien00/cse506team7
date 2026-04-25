@@ -8,13 +8,15 @@
  *   T3  Already-pending fatal signal: SIGTERM is pending (blocked by sigprocmask)
  *       before sigsuspend is called; sigsuspend must not block forever — it must
  *       deliver the signal immediately and terminate the child.
- *   T4  Already-pending non-fatal signal: SIGUSR1 is pending before sigsuspend;
+ *   T4  Already-pending non-fatal signal: SIGURG is pending before sigsuspend;
  *       sigsuspend returns EINTR without hanging, and the child survives.
  *   T5  Mask restoration: the original signal mask is reinstated after sigsuspend
  *       returns so that a previously-unblocked signal can still kill the process.
  *
  * Signal numbers used (kernel/include/process/process.h):
- *   SIGUSR1 = 10, SIGUSR2 = 12 — not in KERNEL_FATAL_SIGS; do not kill process.
+ *   SIGURG  = 23 — not in KERNEL_FATAL_SIGS, KERNEL_STOP_SIGS, or
+ *                  KERNEL_DFL_IGNORE_SIGS; wakes sigsuspend without killing.
+ *   SIGUSR1 = 10, SIGUSR2 = 12 — IN KERNEL_FATAL_SIGS (added in SIGS_2); fatal.
  *   SIGTERM = 15, SIGKILL = 9  — in KERNEL_FATAL_SIGS; terminate the process.
  *
  * Timer resolution is 0.1 s (TICKS_PER_SEC = 10).  sleep(1) is the minimum
@@ -161,14 +163,17 @@ void run_test_sigsuspend(us_test_group_t *group) {
     }
 
     /* ------------------------------------------------------------------
-     * T4: Already-pending non-fatal signal (SIGUSR1 = 10).
+     * T4: Already-pending non-fatal signal (SIGURG = 23).
      *
-     * SIGUSR1 is not in KERNEL_FATAL_SIGS, so delivering it does not
-     * terminate the process.  sigsuspend must return (EINTR) instead of
-     * blocking forever.
+     * SIGURG is not in KERNEL_FATAL_SIGS, KERNEL_STOP_SIGS, or
+     * KERNEL_DFL_IGNORE_SIGS, so delivering it does not terminate or stop
+     * the process.  sigsuspend must return (EINTR) instead of blocking.
      *
-     * Child:  (a) block SIGUSR1,
-     *         (b) send SIGUSR1 to self (pending, blocked),
+     * SIGUSR1/SIGUSR2 were moved to KERNEL_FATAL_SIGS in SIGS_2 and are
+     * therefore unsuitable as "non-fatal" wake signals here.
+     *
+     * Child:  (a) block SIGURG,
+     *         (b) send SIGURG to self (pending, blocked),
      *         (c) call sigsuspend with empty mask.
      * Expect: sigsuspend returns (child survives), exits 0 → WIFEXITED.
      * ------------------------------------------------------------------ */
@@ -180,20 +185,20 @@ void run_test_sigsuspend(us_test_group_t *group) {
             TEST(group, "sigsuspend/pending_nonfatal: fork", 1);
         }
         if (pid == 0) {
-            /* (a) Block SIGUSR1 */
-            sigset_t block_usr1;
-            sigemptyset(&block_usr1);
-            sigaddset(&block_usr1, SIGUSR1);
-            sigprocmask(SIG_BLOCK, &block_usr1, NULL);
+            /* (a) Block SIGURG */
+            sigset_t block_urg;
+            sigemptyset(&block_urg);
+            sigaddset(&block_urg, SIGURG);
+            sigprocmask(SIG_BLOCK, &block_urg, NULL);
 
-            /* (b) Send SIGUSR1 to self */
-            kill(getpid(), SIGUSR1);
+            /* (b) Send SIGURG to self */
+            kill(getpid(), SIGURG);
 
-            /* (c) sigsuspend with empty mask — unblocks SIGUSR1 */
+            /* (c) sigsuspend with empty mask — unblocks SIGURG */
             sigset_t empty;
             sigemptyset(&empty);
             sigsuspend(&empty);
-            /* Must return here because SIGUSR1 is not fatal */
+            /* Must return here because SIGURG is not fatal */
 
             _exit(0); /* success */
         } else if (pid > 0) {
@@ -213,15 +218,17 @@ void run_test_sigsuspend(us_test_group_t *group) {
      *
      * Child's original mask: empty (nothing blocked).
      * sigsuspend mask:        blocks SIGTERM (so SIGTERM won't wake us).
-     * Wakeup signal:          SIGUSR2 (non-fatal, not blocked by sigsuspend mask).
+     * Wakeup signal:          SIGURG (non-fatal, not blocked by sigsuspend mask).
+     *                         SIGUSR2 was moved to KERNEL_FATAL_SIGS in SIGS_2
+     *                         so it would kill rather than wake.
      * After sigsuspend returns, the original mask (empty) is restored.
      * We then verify that SIGTERM is unblocked again by sending it:
      *   the child must die from SIGTERM, not survive.
      *
      * Timeline:
      *   t=0  child enters sigsuspend(block_term)
-     *   t=1  parent sends SIGUSR2  →  sigsuspend wakes, restores empty mask, returns
-     *   t=2  parent sends SIGTERM  →  child's restored mask allows it; child dies
+     *   t=1  parent sends SIGURG  →  sigsuspend wakes, restores empty mask, returns
+     *   t=2  parent sends SIGTERM →  child's restored mask allows it; child dies
      * ------------------------------------------------------------------ */
     {
         pid_t pid = fork();
@@ -236,12 +243,12 @@ void run_test_sigsuspend(us_test_group_t *group) {
             sigemptyset(&empty);
             sigprocmask(SIG_SETMASK, &empty, NULL);
 
-            /* sigsuspend: block SIGTERM, accept SIGUSR2 and everything else */
+            /* sigsuspend: block SIGTERM, accept SIGURG and everything else */
             sigset_t block_term;
             sigemptyset(&block_term);
             sigaddset(&block_term, SIGTERM);
             sigsuspend(&block_term);
-            /* Returns here after SIGUSR2 wakes us; original mask (empty) restored */
+            /* Returns here after SIGURG wakes us; original mask (empty) restored */
 
             /* Stay alive long enough for the parent to send SIGTERM */
             sleep(5);
@@ -249,7 +256,7 @@ void run_test_sigsuspend(us_test_group_t *group) {
         } else if (pid > 0) {
             sleep(1);
             /* Wake sigsuspend with a non-fatal, unblocked signal */
-            kill(pid, SIGUSR2);
+            kill(pid, SIGURG);
 
             sleep(1);
             /* Now send SIGTERM — must kill the child because the original

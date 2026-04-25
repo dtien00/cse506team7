@@ -65,6 +65,7 @@ void run_all_tests(void) {
     rtc_test_run();
     jobctl_test_run();
     sig_flag_test_run();
+    
 
     // printk("%d passed, %d failed\n", passed, failed);
 }
