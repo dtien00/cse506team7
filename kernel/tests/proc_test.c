@@ -137,13 +137,12 @@ void proc_test_run(void) {
 
     current = fork_saved;
     printk("=== End of Fork() Tests ===\n\n");
-        // === exec() setup test ===
+    // === exec() Tests ===
     printk("=== exec() Tests ===\n");
     /*
-     * Use proc_create() rather than proc_alloc() so that ep->fs, ep->vma_list,
-     * ep->priority, and ep->mlfq_level are fully initialized — the same state
-     * a real process has before calling exec().  proc_alloc() only memstes the
-     * struct to zero and does not run any of the per-process setup code.
+     * Use proc_create() so ep->fs, ep->vma_list, ep->priority, and
+     * ep->mlfq_level are fully initialized — the same state a real process
+     * has before exec().
      */
     struct proc *ep = proc_create("exec_test");
     TEST("exec: proc_create for exec test", ep != NULL);
@@ -159,28 +158,75 @@ void proc_test_run(void) {
         current = ep;
 
         char *eargv[] = { "echo", "hello", NULL };
-        int r = exec("/bin/echo", eargv);
-        TEST("exec: returns 0 for valid binary", r == 0);
-        TEST("exec: entry point set (pc != 0)", ep->pc != 0);
+        char *eenvp[] = { "TEST=1", "PATH=/bin", NULL };
+        int r = exec("/bin/echo", eargv, eenvp);
+        TEST("exec: returns 0 for valid binary",  r == 0);
+        TEST("exec: entry point set (pc != 0)",   ep->pc != 0);
         TEST("exec: stack pointer set (sp != 0)", ep->sp != 0);
-        TEST("exec: argc in regs[10]", ep->regs[10] == 2);
-        TEST("exec: argv ptr in regs[11]", ep->regs[11] != 0);
-        TEST("exec: pagetable allocated", ep->pagetable != NULL);
+        TEST("exec: sp is 16-byte aligned",       (ep->sp & 0xF) == 0);
+        TEST("exec: argc in regs[10]",            ep->regs[10] == 2);
+        TEST("exec: argv ptr in regs[11]",        ep->regs[11] != 0);
+        TEST("exec: envp ptr in regs[12]",        ep->regs[12] != 0);
+        TEST("exec: pagetable allocated",         ep->pagetable != NULL);
+
+        /* Verify stack layout via physical address translation */
+
+        /* *(sp + 0) must equal argc (2) */
+        {
+            uintptr_t argc_pa = vmm_translate(ep->pagetable, ep->sp);
+            TEST("exec: argc word on stack == 2",
+                 argc_pa != 0 && *(uintptr_t *)argc_pa == 2);
+        }
+
+        /* *(sp + 8) is argv[0] VA; translating it gives the string "echo" */
+        {
+            uintptr_t argv0_slot_pa = vmm_translate(ep->pagetable, ep->sp + 8);
+            int ok = 0;
+            if (argv0_slot_pa) {
+                uintptr_t argv0_va = *(uintptr_t *)argv0_slot_pa;
+                uintptr_t argv0_pa = vmm_translate(ep->pagetable, argv0_va);
+                ok = (argv0_pa != 0) && (strcmp((char *)argv0_pa, "echo") == 0);
+            }
+            TEST("exec: argv[0] string == 'echo'", ok);
+        }
+
+        /* argv[argc] (NULL terminator) must be 0: at sp+8 + argc*8 = sp+24 */
+        {
+            uintptr_t argv_null_pa = vmm_translate(ep->pagetable,
+                                                   ep->sp + 8 + 2 * sizeof(uintptr_t));
+            TEST("exec: argv NULL terminator == 0",
+                 argv_null_pa != 0 && *(uintptr_t *)argv_null_pa == 0);
+        }
+
+        /* regs[12] points to envp[0] VA slot; translating gives "TEST=1" */
+        {
+            uintptr_t envp0_slot_pa = vmm_translate(ep->pagetable, ep->regs[12]);
+            int ok = 0;
+            if (envp0_slot_pa) {
+                uintptr_t envp0_va = *(uintptr_t *)envp0_slot_pa;
+                uintptr_t envp0_pa = vmm_translate(ep->pagetable, envp0_va);
+                ok = (envp0_pa != 0) && (strcmp((char *)envp0_pa, "TEST=1") == 0);
+            }
+            TEST("exec: envp[0] string == 'TEST=1'", ok);
+        }
+
+        /* envp NULL terminator: at regs[12] + envc*8 = regs[12] + 16 */
+        {
+            uintptr_t envp_null_pa = vmm_translate(ep->pagetable,
+                                                   ep->regs[12] + 2 * sizeof(uintptr_t));
+            TEST("exec: envp NULL terminator == 0",
+                 envp_null_pa != 0 && *(uintptr_t *)envp_null_pa == 0);
+        }
 
         current = saved;
-        // exec() called vmm_switch() internally; restore SATP before
-        // freeing ep's page table, otherwise SATP points to freed memory.
-        // When saved is NULL (current was NULL before this test) fall back
-        // to the kernel page table so kernel code keeps working.
+        /* exec() called vmm_switch() internally; restore SATP before freeing
+         * ep's page table, otherwise SATP points to freed memory.           */
         {
             pagetable_t restore_pt = (saved && saved->pagetable)
                                      ? saved->pagetable
                                      : vmm_kernel_pagetable();
             vmm_switch(restore_pt);
         }
-        // Free the pagetable and fs_struct (don't schedule the process).
-        // proc_free only handles vma_list; fs must be released separately
-        // since proc_destroy is not declared in the public process.h header.
         vmm_free_pagetable(ep->pagetable);
         ep->pagetable = NULL;
         if (ep->fs) {
@@ -234,7 +280,59 @@ void proc_test_run(void) {
     printk("\n========================================\n");
     printk("  Results: %d passed, %d failed\n", passed, failed);
     printk("========================================\n");
+}
 
+static void __attribute__((noinline)) recursive_overflow(int depth) {
+    volatile uint8_t buf[256];
+    buf[0] = (uint8_t)depth;
+    if (depth < 10000)
+        recursive_overflow(depth + 1);
+    buf[0]++;  // use buf after recursive call — forces frame to survive, blocks tail-call opt
+}
+
+static void __attribute__((noreturn)) overflow_entry(void) {
+    recursive_overflow(0);
+    while (1) asm volatile("wfi");
+}
+
+void kstack_overflow_test_run(void) {
+    printk("\n========================================\n");
+    printk("  Kernel Stack Overflow Test (DESTRUCTIVE)\n");
+    printk("  Expected: KERNEL STACK OVERFLOW panic\n");
+    printk("========================================\n");
+
+    struct proc *p = proc_create("kstack_ovf");
+    if (!p) {
+        printk("  [SKIP] could not create overflow process\n");
+        return;
+    }
+
+    current = p;
+    p->state = PROC_RUNNING;
+    // Give p a pagetable so vmm_translate doesn't crash in page_fault_handler.
+    // The kernel pt has the guard page unmapped, so the lookup returns 0 as expected.
+    // proc_free is never called for this process — the test panics.
+    p->pagetable = vmm_kernel_pagetable();
+
+    uint64_t kstack_top = (uint64_t)(p->kstack + KSTACK_SIZE);
+
+    // sscratch must be non-zero when the guard page fault fires in S-mode.
+    // trap_entry swaps sp ↔ sscratch on entry; with sscratch=0 it would restore
+    // the already-overflowed sp and then fault again trying to allocate the trap
+    // frame — a silent nested-fault loop. Pointing sscratch at the kstack top
+    // gives the trap handler a valid stack to save the frame, while SPP=1 in
+    // the saved sstatus still correctly identifies this as an S-mode fault.
+    write_csr(sscratch, kstack_top);
+
+    // Switch sp directly to p's kstack and jump to overflow_entry.
+    // Bypassing the scheduler avoids sscratch races with the init process.
+    asm volatile(
+        "mv sp, %0\n"
+        "jr %1\n"
+        :: "r"(kstack_top), "r"((uint64_t)overflow_entry)
+        : "memory"
+    );
+    __builtin_unreachable();
 }
 
 // Tests for the extended proc_waitpid() POSIX compliance:

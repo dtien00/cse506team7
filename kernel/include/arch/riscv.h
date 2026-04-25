@@ -182,34 +182,3 @@ static inline uint64_t r_tp(void) {
         stmts clear_csr_bit(sstatus, SSTATUS_SUM);                                                                     \
     } while (0)
 
-/*
- * copy_from_user(dst_kbuf, src_uptr, len)
- * copy_to_user(dst_uptr, src_kbuf, len)
- *
- * Both return 0 on success.
- * Add bounds checking here later if you want fault isolation.
- */
-#define copy_from_user(dst, src, len)                                                                                  \
-    ({                                                                                                                 \
-        set_csr_bit(sstatus, SSTATUS_SUM);                                                                             \
-        memcpy((dst), (src), (len));                                                                                   \
-        clear_csr_bit(sstatus, SSTATUS_SUM);                                                                           \
-        0;                                                                                                             \
-    })
-
-#define copy_to_user(dst, src, len)                                                                                    \
-    ({                                                                                                                 \
-        set_csr_bit(sstatus, SSTATUS_SUM);                                                                             \
-        memcpy((dst), (src), (len));                                                                                   \
-        clear_csr_bit(sstatus, SSTATUS_SUM);                                                                           \
-        0;                                                                                                             \
-    })
-
-// Specialised string copy from user (like Linux strncpy_from_user)
-#define strncpy_from_user(dst, src, n)                                                                                 \
-    ({                                                                                                                 \
-        set_csr_bit(sstatus, SSTATUS_SUM);                                                                             \
-        strncpy((dst), (src), (n));                                                                                    \
-        clear_csr_bit(sstatus, SSTATUS_SUM);                                                                           \
-        0;                                                                                                             \
-    })

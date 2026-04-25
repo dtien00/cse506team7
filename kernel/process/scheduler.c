@@ -12,8 +12,6 @@ struct proc proctab[MAX_PROCS];
 struct proc *mlfq[MLFQ_LEVELS];
 struct proc *blocked_queue = NULL;
 struct proc *current = NULL;
-uint8_t kstacks[MAX_PROCS][KSTACK_SIZE] __attribute__((aligned(16)));
-
 // Idle must have enough stack for a full trap frame + nested C calls.
 static uint8_t idle_stack[KSTACK_SIZE] __attribute__((aligned(16)));
 static struct context idle_context;

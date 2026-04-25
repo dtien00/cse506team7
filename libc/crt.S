@@ -8,8 +8,12 @@ _start:
     la gp, __global_pointer$
     .option pop
 
-    # a0 = argc, a1 = argv — placed here by the kernel via exec().
-    # Call main(argc, argv); the return value lands in a0.
+    # a0 = argc, a1 = argv, a2 = envp — placed here by the kernel via exec().
+    # Publish envp to the POSIX 'environ' global before calling main so that
+    # getenv() can see the kernel-provided environment from the first instruction.
+    la   t0, environ
+    sd   a2, 0(t0)
+    # Call main(argc, argv, envp); a0/a1/a2 are already in the right registers.
     call main
     # Pass main's return value to exit().
     call exit

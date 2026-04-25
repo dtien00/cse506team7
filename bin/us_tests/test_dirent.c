@@ -31,14 +31,19 @@ static int valid_dtype(unsigned char t) {
 void run_test_dirent(us_test_group_t *group) {
     ut_group_begin(group, "dirent");
 
+    printf("a");
+
     /* ── opendir ─────────────────────────────────────────────────────── */
 
     DIR *root = opendir("/");
     TEST(group, "opendir(\"/\"): returns non-NULL", root != NULL);
 
+    printf("b");
+
     DIR *bad = opendir("/no_such_path_xyz");
     TEST(group, "opendir(nonexistent): returns NULL", bad == NULL);
     if (bad) closedir(bad);   /* shouldn't happen, but don't leak */
+
 
     /* ── readdir: NULL guard ─────────────────────────────────────────── */
 
