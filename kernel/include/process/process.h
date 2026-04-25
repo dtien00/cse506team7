@@ -166,6 +166,8 @@ struct proc {
     uint8_t stop_unreported;
     uint8_t cont_unreported;
     uint8_t stop_signal;        // which signal caused the stop (for WSTOPSIG)
+
+    uintptr_t copy_fault_recover; // 0 when not inside a copy function; set by copy_{to,from}_user
 };
 
 extern struct proc proctab[];

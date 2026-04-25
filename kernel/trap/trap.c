@@ -351,8 +351,13 @@ static int find_guard_owner(uintptr_t va) {
 
 /* ── kill current process on unrecoverable fault ─────────────────────────*/
 static void kill_current(trap_frame *frame, const char *reason) {
-    // If the fault came from S-mode, panic.
+    // If the fault came from S-mode, check for copy_fault_recover before panicking.
     if (frame->sstatus & SSTATUS_SPP) {
+        if (current && current->copy_fault_recover) {
+            frame->sepc = current->copy_fault_recover;
+            current->copy_fault_recover = 0;
+            return;
+        }
         int oi = find_guard_owner(frame->stval);
         if (oi >= 0) {
             printk("\nKERNEL STACK OVERFLOW: pid=%d name=%s\n",
@@ -467,12 +472,7 @@ void page_fault_handler(trap_frame *frame) {
         struct vm_area *stack_vma =
             vma_find_growsdown(current->vma_list, faulting_va);
         if (stack_vma) {
-            /* Enforce maximum stack size: the stack top (stack_vma->end) is
-             * the anchor.  The floor is end - USTACK_SIZE.  Faults below the
-             * floor are a genuine stack overflow — kill the process. */
-            uintptr_t stack_floor = (stack_vma->end > USTACK_SIZE)
-                                    ? stack_vma->end - USTACK_SIZE : 0;
-            if (faulting_va < stack_floor) {
+            if (faulting_va < vma_stack_floor(stack_vma)) {
                 kill_current(frame, "stack overflow: exceeded maximum stack size");
                 return;
             }
@@ -496,10 +496,13 @@ void page_fault_handler(trap_frame *frame) {
             return;   /* retry the faulting instruction */
         }
 
-        /* No GROWSDOWN VMA matched — genuine bad access */
-        printk("  Faulting VA=0x%p  sp=0x%p  sepc=0x%p\n",
-               faulting_va, frame->sp, frame->sepc);
-        vma_dump(current->vma_list);
+        /* No GROWSDOWN VMA matched — genuine bad access.
+         * Suppress diagnostics if a copy function is about to recover. */
+        if (!(current && current->copy_fault_recover)) {
+            printk("  Faulting VA=0x%p  sp=0x%p  sepc=0x%p\n",
+                   faulting_va, frame->sp, frame->sepc);
+            vma_dump(current->vma_list);
+        }
         kill_current(frame, "address not in any VMA");
         return;
     }

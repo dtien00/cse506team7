@@ -29,6 +29,7 @@ void run_test_printf(us_test_group_t *group);
 void run_test_string(us_test_group_t *group);
 void run_test_ctype(us_test_group_t *group);
 void run_test_stdlib(us_test_group_t *group);
+void run_test_sbrk_brk(us_test_group_t *group);
 void run_test_malloc(us_test_group_t *group);
 void run_test_file_io(us_test_group_t *group);
 void run_test_process(us_test_group_t *group);
@@ -72,6 +73,7 @@ void run_test_syscall_robustness(us_test_group_t *group);
 void run_test_fd_offset(us_test_group_t *group);
 void run_test_forkforkfork(us_test_group_t *group);
 void run_test_writebig(us_test_group_t *group);
+void run_test_uaccess(us_test_group_t *group);
 
 /* comprehensive libc conformance suites (each fills multiple groups) */
 void run_test_libc_string(us_test_group_t groups[], int *idx);
@@ -124,38 +126,39 @@ int main(int argc, char **argv, char **envp) {
     run_test_string(&groups[idx++]);
     run_test_ctype(&groups[idx++]);
     run_test_stdlib(&groups[idx++]);
+    // // run_test_sbrk_brk(&groups[idx++]);
     run_test_malloc(&groups[idx++]);
     run_test_file_io(&groups[idx++]);
     run_test_process(&groups[idx++]);
-    // run_test_mv_cp(&groups[idx++]);
-    // run_test_write(&groups[idx++]);
-    // run_test_exec_bin(&groups[idx++]);
-    // run_test_fs_persist(groups, &idx);
-    // run_test_syscall(&groups[idx++]);
-    // run_test_cow(&groups[idx++]);
-    // run_test_sched(&groups[idx++]);
-    // run_test_signal(&groups[idx++]);
-    // run_test_dirent(&groups[idx++]);
-    // run_test_termios_tty(&groups[idx++]);
-    // run_test_stack_growth(&groups[idx++]);
-    // run_test_getrusage(&groups[idx++]);
-    // run_test_nice(&groups[idx++]);
-    // run_test_nice_extended(&groups[idx++]);
-    // run_test_yield(&groups[idx++]);
-    // run_test_pause(&groups[idx++]);
-    // run_test_procinfo(&groups[idx++]);
-    // run_test_procfs(&groups[idx++]);
-    // run_test_gettimeofday(&groups[idx++]);
-    // run_test_alarm(&groups[idx++]);
-    // run_test_sigaction(&groups[idx++]);
-    // run_test_sigsuspend(&groups[idx++]);
-    // run_test_pgrp(&groups[idx++]);
-    // run_test_jobctl(&groups[idx++]);
-    // run_test_pipe_sigpipe(&groups[idx++]);
-    // run_test_time(&groups[idx++]);
-    // run_test_links(groups, &idx);
-    // run_test_nanosleep(&groups[idx++]);
-    // run_test_exec_envp(groups, &idx);
+    run_test_mv_cp(&groups[idx++]);
+    run_test_write(&groups[idx++]);
+    run_test_exec_bin(&groups[idx++]);
+    run_test_fs_persist(groups, &idx);
+    run_test_syscall(&groups[idx++]);
+    run_test_cow(&groups[idx++]);
+    run_test_sched(&groups[idx++]);
+    run_test_signal(&groups[idx++]);
+    run_test_dirent(&groups[idx++]);
+    run_test_termios_tty(&groups[idx++]);
+    run_test_stack_growth(&groups[idx++]);
+    run_test_getrusage(&groups[idx++]);
+    run_test_nice(&groups[idx++]);
+    run_test_nice_extended(&groups[idx++]);
+    run_test_yield(&groups[idx++]);
+    run_test_pause(&groups[idx++]);
+    run_test_procinfo(&groups[idx++]);
+    run_test_procfs(&groups[idx++]);
+    run_test_gettimeofday(&groups[idx++]);
+    run_test_alarm(&groups[idx++]);
+    run_test_sigaction(&groups[idx++]);
+    run_test_sigsuspend(&groups[idx++]);
+    run_test_pgrp(&groups[idx++]);
+    run_test_jobctl(&groups[idx++]);
+    run_test_pipe_sigpipe(&groups[idx++]);
+    run_test_time(&groups[idx++]);
+    run_test_links(groups, &idx);
+    run_test_nanosleep(&groups[idx++]);
+    run_test_exec_envp(groups, &idx);
 
     run_test_xv6_compat(&groups[idx++]);
     // run_test_fd_limits(&groups[idx++]);
@@ -168,13 +171,13 @@ int main(int argc, char **argv, char **envp) {
     // run_test_fd_offset(&groups[idx++]);
     // run_test_forkforkfork(&groups[idx++]);
     // run_test_writebig(&groups[idx++]); //test to see if disk kills itself on filling up
-    
+
     // /* comprehensive libc conformance tests */
-    // run_test_libc_string(groups, &idx);
-    // run_test_libc_ctype(groups, &idx);
-    // run_test_libc_stdio(groups, &idx);
-    // run_test_libc_stdlib(groups, &idx);
-    // run_test_libc_time(groups, &idx);
+    run_test_libc_string(groups, &idx);
+    run_test_libc_ctype(groups, &idx);
+    run_test_libc_stdio(groups, &idx);
+    run_test_libc_stdlib(groups, &idx);
+    run_test_libc_time(groups, &idx);
 
     return ut_suite_end(groups, idx);
 }

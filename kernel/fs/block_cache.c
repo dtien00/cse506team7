@@ -205,6 +205,6 @@ int block_cache_flush(void) {
         }
     }
 
-    printk("block_cache: flushed %d dirty blocks\n", flushed);
+    // printk("block_cache: flushed %d dirty blocks\n", flushed);
     return 0;
 }

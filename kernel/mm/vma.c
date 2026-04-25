@@ -134,12 +134,15 @@ uintptr_t vma_find_free_region(struct vm_area *vma_list, size_t size, uintptr_t 
     struct vm_area *vma = vma_list;
 
     while (vma) {
-        // Check if we can fit before this VMA
-        if (candidate + size <= vma->start) {
+        // GROWSDOWN VMAs reserve [vma_stack_floor(vma), vma->end) for stack growth.
+        uintptr_t effective_start = (vma->flags & VMA_GROWSDOWN) ? vma_stack_floor(vma) : vma->start;
+
+        // Check if we can fit before this VMA's effective start
+        if (candidate + size <= effective_start) {
             return candidate;
         }
 
-        // Move candidate to after this VMA
+        // Move candidate past this VMA
         if (vma->end > candidate) {
             candidate = vma->end;
         }
@@ -304,4 +307,26 @@ struct vm_area *vma_find_growsdown(struct vm_area *vma_list, uintptr_t addr) {
             return v;
     }
     return NULL;
+}
+
+// vma_range_accessible - check that [start, start+size) is fully covered by
+// user-accessible VMAs, each having at least the bits in required_prot set.
+int vma_range_accessible(struct vm_area *vma_list, uintptr_t start, size_t size, uint32_t required_prot) {
+    if (size == 0) return 1;
+    uintptr_t end = start + size;
+    if (end < start) return 0;  // overflow
+
+    uintptr_t cursor = start;
+    for (struct vm_area *v = vma_list; v && cursor < end; v = v->next) {
+        if (v->end <= cursor) continue;  // VMA entirely before our range
+        // GROWSDOWN VMAs logically cover [vma_stack_floor(v), v->end): pages below
+        // v->start are reserved for stack growth and demand-allocated on access.
+        uintptr_t effective_start = (v->flags & VMA_GROWSDOWN) ? vma_stack_floor(v) : v->start;
+        if (effective_start > cursor) return 0;  // gap — range not fully covered
+        if (v->type & VMA_TYPE_DEVICE) return 0;
+        if ((v->prot & required_prot) != required_prot) return 0;
+        cursor = v->end;
+    }
+
+    return cursor >= end;
 }

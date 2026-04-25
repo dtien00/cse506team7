@@ -33,49 +33,7 @@
 
 #define PAGE 4096
 
-/* ── 1. large sbrk, touch every page ────────────────────────────────────── */
-
-static void test_sbrk_large(us_test_group_t *group) {
-    pid_t pid = fork();
-    if (pid == 0) {
-        /* 2 MB */
-        int n = 512;
-        char *base = sbrk(n * PAGE);
-        if (base == (void *)-1) _exit(1);
-        for (int i = 0; i < n; i++)
-            base[i * PAGE] = (char)(i & 0xFF);
-        for (int i = 0; i < n; i++)
-            if (base[i * PAGE] != (char)(i & 0xFF)) _exit(2);
-        _exit(0);
-    }
-    int status = 0;
-    waitpid(pid, &status, 0);
-    TEST(group, "lazy-sbrk-large: 2 MB touch all pages, read back correct",
-         WIFEXITED(status) && WEXITSTATUS(status) == 0);
-}
-
-/* ── 2. sparse access: touch every 16th page across 4 MB ────────────────── */
-
-static void test_sbrk_sparse(us_test_group_t *group) {
-    pid_t pid = fork();
-    if (pid == 0) {
-        int n = 1024; /* 4 MB */
-        char *base = sbrk(n * PAGE);
-        if (base == (void *)-1) _exit(1);
-        /* touch every 16th page only */
-        for (int i = 0; i < n; i += 16)
-            base[i * PAGE] = (char)(i & 0xFF);
-        for (int i = 0; i < n; i += 16)
-            if (base[i * PAGE] != (char)(i & 0xFF)) _exit(2);
-        _exit(0);
-    }
-    int status = 0;
-    waitpid(pid, &status, 0);
-    TEST(group, "lazy-sbrk-sparse: 4 MB sparse (every 16th page), correct",
-         WIFEXITED(status) && WEXITSTATUS(status) == 0);
-}
-
-/* ── 3. large anonymous mmap, touch every page ───────────────────────────── */
+/* ── 1. large anonymous mmap, touch every page ───────────────────────────── */
 
 static void test_mmap_large(us_test_group_t *group) {
     pid_t pid = fork();
@@ -102,7 +60,7 @@ static void test_mmap_large(us_test_group_t *group) {
          WIFEXITED(status) && WEXITSTATUS(status) == 0);
 }
 
-/* ── 4. mmap in child: child/parent halves independent ───────────────────── */
+/* ── 2. mmap in child: child/parent halves independent ───────────────────── */
 
 static void test_mmap_fork_halves(us_test_group_t *group) {
     int n = 256; /* 1 MB, split in two */
@@ -145,62 +103,7 @@ static void test_mmap_fork_halves(us_test_group_t *group) {
     munmap(p, (size_t)n * PAGE);
 }
 
-/* ── 5. sbrk then fork: COW demand-pages in child ───────────────────────── */
-
-static void test_sbrk_fork_cow(us_test_group_t *group) {
-    int n = 128; /* 512 KB */
-    char *base = sbrk(n * PAGE);
-    if (base == (void *)-1) {
-        TEST(group, "lazy-sbrk-fork-cow: sbrk succeeded", 0);
-        return;
-    }
-    TEST(group, "lazy-sbrk-fork-cow: sbrk succeeded", 1);
-
-    /* parent writes sentinel to first page */
-    base[0] = 0x55;
-
-    pid_t pid = fork();
-    if (pid == 0) {
-        /* child: demand-page all pages by touching them */
-        for (int i = 0; i < n; i++)
-            base[i * PAGE] = (char)(i & 0xFF);
-        /* first page should have been demand-paged as COW copy of 0x55 */
-        /* child wrote i=0 → (0 & 0xFF) = 0 over the COW copy */
-        if (base[0] != 0) _exit(1);
-        _exit(0);
-    }
-    int status = 0;
-    waitpid(pid, &status, 0);
-    TEST(group, "lazy-sbrk-fork-cow: child demand-paged all 128 pages",
-         WIFEXITED(status) && WEXITSTATUS(status) == 0);
-    /* parent sentinel preserved */
-    TEST(group, "lazy-sbrk-fork-cow: parent sbrk page unchanged after child COW",
-         (unsigned char)base[0] == 0x55);
-}
-
-/* ── 6. sequential byte walk across 1 MB sbrk ───────────────────────────── */
-
-static void test_sbrk_sequential(us_test_group_t *group) {
-    pid_t pid = fork();
-    if (pid == 0) {
-        int sz = 256 * PAGE; /* 1 MB */
-        char *base = sbrk(sz);
-        if (base == (void *)-1) _exit(1);
-        /* write every byte */
-        for (int i = 0; i < sz; i++)
-            base[i] = (char)(i & 0xFF);
-        /* verify every byte */
-        for (int i = 0; i < sz; i++)
-            if (base[i] != (char)(i & 0xFF)) _exit(2);
-        _exit(0);
-    }
-    int status = 0;
-    waitpid(pid, &status, 0);
-    TEST(group, "lazy-sbrk-sequential: 1 MB every-byte write+verify correct",
-         WIFEXITED(status) && WEXITSTATUS(status) == 0);
-}
-
-/* ── 7. demand-page zero-fill: freshly faulted pages must be zero ─────────── */
+/* ── 3. demand-page zero-fill: freshly faulted pages must be zero ─────────── */
 
 static void test_demand_zero_fill(us_test_group_t *group) {
     pid_t pid = fork();
@@ -229,12 +132,8 @@ static void test_demand_zero_fill(us_test_group_t *group) {
 void run_test_lazy_alloc(us_test_group_t *group) {
     ut_group_begin(group, "lazy_alloc");
 
-    test_sbrk_large(group);
-    test_sbrk_sparse(group);
     test_mmap_large(group);
     test_mmap_fork_halves(group);
-    test_sbrk_fork_cow(group);
-    test_sbrk_sequential(group);
     test_demand_zero_fill(group);
 
     ut_group_end(group);

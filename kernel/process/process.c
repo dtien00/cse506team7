@@ -670,6 +670,31 @@ int exec(const char *path, char *const argv[], char *const envp[]) {
         }
     }
 
+    // 5a. Reserve kernel device regions as zero-permission VMAs.
+    // vmm_create_pagetable copies the kernel's device PTEs (no PTE_U) into every
+    // user page table for low VA addresses.  Without VMAs covering those ranges,
+    // vma_find_free_region is blind to them and can hand out addresses that overlap
+    // kernel identity mappings, causing PROT FAULTs on demand-page attempts.
+    // PROT=0 ensures any user access is caught as a protection violation.
+    {
+        static const struct { uintptr_t start; uintptr_t end; } dev_regions[] = {
+            { 0x00101000, 0x00102000 },  /* Goldfish RTC           */
+            { 0x0C000000, 0x10010000 },  /* PLIC + UART (contiguous) */
+            { 0x30000000, 0x31000000 },  /* PCIe ECAM              */
+            { 0x40000000, 0x50000000 },  /* PCI MMIO BAR window    */
+            { KERNBASE, ((uintptr_t)(KERNBASE >> 30) + 1) << 30 },  /* Full kernel L2 VA range    */
+        };
+        for (size_t di = 0; di < sizeof(dev_regions)/sizeof(dev_regions[0]); di++) {
+            struct vm_area *dv = vma_create(dev_regions[di].start, dev_regions[di].end,
+                                            0, VMA_PRIVATE, VMA_TYPE_DEVICE);
+            if (!dv) goto fail_vma;
+            if (vma_insert(&new_vma_list, dv) != 0) {
+                vma_free(dv);
+                goto fail_vma;
+            }
+        }
+    }
+
     // 5. Allocate and map user stack (just below KERNBASE)
     // Only pre-allocate the topmost page (where argv strings are placed).
     // Deeper stack frames are demand-allocated by the page fault handler
