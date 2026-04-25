@@ -130,8 +130,11 @@ void accounting_test_run(void) {
     TEST("accounting [Bug1]: time_slice=0 → total_time stays 0",
          p->total_time  == 0);
 
-    /* ── 10. Preemptible process: total_time resets but utime_ticks persists */
+    /* ── 10. Preemptible process: total_time resets but utime_ticks persists
+     * Interrupts disabled: p is PROC_RUNNING with time_slice > 0, so the real
+     * timer_handler would call proc_yield() and hang the test suite. */
     printk("=== utime_ticks persists across preemption boundary ===\n");
+    interrupts_off();
     p->utime_ticks = 0;
     p->total_time  = 0;
     p->time_slice  = 3;
@@ -179,6 +182,7 @@ void accounting_test_run(void) {
     p->state       = PROC_RUNNING;
     simulate_tick(p); simulate_tick(p);
     TEST("accounting: mlfq_level demoted after full slice", p->mlfq_level == 1);
+    interrupts_on();
 
     current = saved_current;
     proc_free(p);

@@ -189,6 +189,41 @@ void handle_exception(trap_frame *frame) {
         page_fault_handler(frame);
         return;
     }
+    if (!(frame->sstatus & SSTATUS_SPP) && current) {
+        switch (frame->scause) {
+            case SCAUSE_ILLEGAL_INST:
+                // Invalid / reserved opcode executed by user process.
+                current->pending_signals |= (1U << KERNEL_SIGILL);
+                return;
+            case SCAUSE_BREAKPOINT:
+                // EBREAK / C.EBREAK executed by user process.
+                // Standard RISC-V EBREAK is 4 bytes; compressed C.EBREAK is 2 bytes.
+                // We do not advance sepc: the process is killed via KERNEL_FATAL_SIGS.
+                // sepc advancement is only relevant if a signal handler could resume
+                // execution past EBREAK, which requires sigaction frame dispatch.
+                current->pending_signals |= (1U << KERNEL_SIGTRAP);
+                return;
+            case SCAUSE_INST_ACCESS_FAULT:
+                // User process tried to fetch an instruction from an inaccessible address.
+                // Maps to SIGSEGV (cannot execute at that address), not SIGILL.
+                current->pending_signals |= (1U << KERNEL_SIGSEGV);
+                return;
+            case SCAUSE_LOAD_ACCESS_FAULT:
+            case SCAUSE_STORE_ACCESS_FAULT:
+                // PMP-level access denial on load or store — region exists but is forbidden.
+                // Maps to SIGSEGV (access violation).
+                current->pending_signals |= (1U << KERNEL_SIGSEGV);
+                return;
+            
+            // SCAUSE_INST_MISALIGNED / LOAD_MISALIGNED / STORE_MISALIGNED:
+            // These map to SIGBUS (7) on Linux. SIGBUS is not yet implemented.
+            // Fall through to panic for now; add here when SIGBUS is wired up.
+
+            default:
+                break; // S-mode or unknown cause; fall through to panic below
+        }
+    }
+    // S-mode exceptions (or unrecognized U-mode exceptions) fall through to panic:
 
     printk("\nEXCEPTION: scause=0x%p stval=0x%p sepc=0x%p\n", frame->scause, frame->stval, frame->sepc);
     dump_exception_diagnostics(frame);
@@ -372,12 +407,20 @@ static void kill_current(trap_frame *frame, const char *reason) {
         while (1) asm volatile("wfi");
     }
 
+    // U-mode fatal fault: deliver SIGSEGV via pending_signals before exiting.
+    // Setting the bit ensures consistent signal accounting and correct exit encoding.
+    // proc_exit(-KERNEL_SIGSEGV) encodes signal 11 so waitpid(WTERMSIG) returns 11.
     printk("SEGFAULT: pid=%d %s sepc=0x%p stval=0x%p\n",
            current ? current->pid : -1, reason,
            frame->sepc, frame->stval);
 
     if (current) {
-        proc_exit(1);   // does not return — switches to scheduler
+        current->pending_signals |= (1U << KERNEL_SIGSEGV);
+        // Bypass the pending_signals delivery filter: proc_exit is called directly.
+        // Real page faults cannot be masked by sigprocmask — this is intentional.
+        // kill(pid, SIGSEGV) goes through pending_signals and respects signal_mask;
+        // this path does not. See test AH in test_signal_faults.c.
+        proc_exit(-KERNEL_SIGSEGV);   // does not return — switches to scheduler
     }
 
     /* No current process (fault in kernel context) — panic. */

@@ -13,6 +13,7 @@
 #include "elf/elf.h"
 #include "fs/file.h"
 #include "process/wait.h"
+#include "tty/term.h"
 
 #ifndef SEEK_SET
 #define SEEK_SET 0
@@ -103,6 +104,7 @@ struct proc* proc_create(const char *name) {
      * sys_fork() overwrites these with the parent's pgid/sid. */
     p->pgid = p->pid;
     p->sid  = p->pid;
+    p->is_session_leader = 1;
     strncpy(p->name, name, MAX_NAME - 1);
     p->state = PROC_CREATED;
 
@@ -217,6 +219,31 @@ void proc_exit(int code) {
         // This prevents spurious wakeups of pause()/sigsuspend().
         if (current->parent->handlers[SIGCHLD] != (void *)0 /* SIG_DFL */)
             proc_wakeup(&current->parent->pending_signals);
+    }
+
+    // SIGHUP to foreground process group: deliver when the session leader exits.
+    // POSIX: when the controlling terminal's session leader terminates, SIGHUP is
+    // sent to each process in the terminal's foreground process group.
+    // Simplified model: iterate all terminals; if terminal->session_leader == current->pid,
+    // deliver SIGHUP to all processes whose pgid == terminal->foreground_pgid.
+    //
+    // Prerequisite: proc struct must have a 'sid' (session ID) field and terminals
+    // must track their session_leader pid. If those fields do not exist, add them.
+    if (current->is_session_leader) {
+        terminal_t *t = &console_term;
+        if (t->session_leader == current->pid && t->foreground_pgid > 0) {
+            for (int i = 0; i < MAX_PROCS; i++) {
+                struct proc *p = &proctab[i];
+                if (p->state == PROC_UNUSED || p->state == PROC_ZOMBIE) continue;
+                if (p == current) continue;
+                if (p->pgid == t->foreground_pgid) {
+                    p->pending_signals |= (1U << KERNEL_SIGHUP);
+                    if (p->state == PROC_BLOCKED &&
+                        !(p->signal_mask & (1U << KERNEL_SIGHUP)))
+                        proc_unblock(p);
+                }
+            }
+        }
     }
 
     // Switch back via the normal yield path so the current process context
@@ -744,6 +771,13 @@ int exec(const char *path, char *const argv[], char *const envp[]) {
     for (int i = 0; i < 32; i++) {
         if (current->handlers[i] != (void *)SIG_IGN)
             current->handlers[i] = (void *)SIG_DFL;
+        for (int i = 1; i < 32; i++) {
+            if (current->handlers[i] != (void *)SIG_DFL &&
+                current->handlers[i] != (void *)SIG_IGN) {
+                current->handlers[i]  = (void *)SIG_DFL;
+                current->sig_flags[i] = 0;  // NEW: clear flags too
+            }
+        }
     }
     pagetable_t old_pt = current->pagetable;
     struct vm_area *old_vma_list = current->vma_list;

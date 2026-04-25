@@ -42,6 +42,8 @@ void run_test_syscall(us_test_group_t *group);
 void run_test_cow(us_test_group_t *group);
 void run_test_sched(us_test_group_t *group);
 void run_test_signal(us_test_group_t *group);
+void run_test_signal_faults(us_test_group_t *group);
+void run_test_signals2(us_test_group_t *group);
 void run_test_stack_growth(us_test_group_t *group);
 void run_test_dirent(us_test_group_t *group);
 void run_test_getrusage(us_test_group_t *group);
@@ -84,7 +86,25 @@ void run_test_exec_envp(us_test_group_t groups[], int *idx);
 void run_test_libc_time(us_test_group_t groups[], int *idx);
 
 /* base groups + 6 fs_persist sub-groups + libc conformance suites */
-#define MAX_GROUPS 200
+#define MAX_GROUPS 250
+
+/*
+ * ── Physical-memory / fork-pressure toggles ──────────────────────────────────
+ *
+ * Set either flag to 0 to skip the corresponding class of tests.  Useful when
+ * other tests under development also allocate heavily and exhaust physical pages
+ * before the test of interest is reached.
+ *
+ * RUN_FORK_HEAVY  – tests that spawn many child processes (each fork duplicates
+ *                   COW page-table entries and can trigger page allocation):
+ *                   cow, process, exec_bin, exec_envp, sched, signal,
+ *                   signal_faults, signals2, getrusage, pgrp, jobctl
+ *
+ * RUN_MEMORY_HEAVY – tests that make large heap / anonymous-mmap allocations:
+ *                   malloc, lazy_alloc (8 MB mmap, 4 MB sbrk regions)
+ */
+static const int RUN_FORK_HEAVY   = 1;
+static const int RUN_MEMORY_HEAVY = 1;
 
 int main(int argc, char **argv, char **envp) {
     /*
@@ -122,57 +142,69 @@ int main(int argc, char **argv, char **envp) {
     ut_suite_begin("SBUnix Userspace Test Suite");
     int idx = 0;
 
+    /* ── Lightweight / no-fork tests (always run) ─────────────────────────── */
     run_test_printf(&groups[idx++]);
     run_test_string(&groups[idx++]);
     run_test_ctype(&groups[idx++]);
     run_test_stdlib(&groups[idx++]);
     // run_test_sbrk_brk(&groups[idx++]);
-    run_test_malloc(&groups[idx++]);
     run_test_file_io(&groups[idx++]);
-    run_test_process(&groups[idx++]);
     run_test_mv_cp(&groups[idx++]);
     run_test_write(&groups[idx++]);
-    run_test_exec_bin(&groups[idx++]);
     run_test_fs_persist(groups, &idx);
     run_test_syscall(&groups[idx++]);
-    run_test_cow(&groups[idx++]);
-    run_test_sched(&groups[idx++]);
-    run_test_signal(&groups[idx++]);
     run_test_dirent(&groups[idx++]);
     run_test_termios_tty(&groups[idx++]);
     run_test_stack_growth(&groups[idx++]);
-    run_test_getrusage(&groups[idx++]);
-    run_test_nice(&groups[idx++]);
-    run_test_nice_extended(&groups[idx++]);
     run_test_yield(&groups[idx++]);
-    run_test_pause(&groups[idx++]);
     run_test_procinfo(&groups[idx++]);
     run_test_procfs(&groups[idx++]);
     run_test_gettimeofday(&groups[idx++]);
-    run_test_alarm(&groups[idx++]);
-    run_test_sigaction(&groups[idx++]);
-    run_test_sigsuspend(&groups[idx++]);
-    run_test_pgrp(&groups[idx++]);
-    run_test_jobctl(&groups[idx++]);
     run_test_pipe_sigpipe(&groups[idx++]);
     run_test_time(&groups[idx++]);
-    run_test_links(groups, &idx);
     run_test_nanosleep(&groups[idx++]);
-    run_test_exec_envp(groups, &idx);
 
+    /* ── RUN_FORK_HEAVY: tests that spawn multiple child processes ─────────── */
+    if (RUN_FORK_HEAVY) {
+        run_test_process(&groups[idx++]);
+        run_test_exec_bin(&groups[idx++]);
+        run_test_cow(&groups[idx++]);
+        run_test_sched(&groups[idx++]);
+        run_test_signal(&groups[idx++]);
+        run_test_signal_faults(&groups[idx++]);
+        run_test_signals2(&groups[idx++]);
+        run_test_getrusage(&groups[idx++]);
+        run_test_nice(&groups[idx++]);
+        run_test_nice_extended(&groups[idx++]);
+        run_test_pause(&groups[idx++]);
+        run_test_alarm(&groups[idx++]);
+        run_test_sigaction(&groups[idx++]);
+        run_test_sigsuspend(&groups[idx++]);
+        run_test_pgrp(&groups[idx++]);
+        run_test_jobctl(&groups[idx++]);
+        run_test_links(groups, &idx);
+        run_test_exec_envp(groups, &idx);
+    }
+
+    /* ── RUN_MEMORY_HEAVY: tests with large heap / mmap allocations ────────── */
+    if (RUN_MEMORY_HEAVY) {
+        run_test_malloc(&groups[idx++]);
+        run_test_lazy_alloc(&groups[idx++]);
+    }
+
+    /* ── Disabled stress / destructive tests (uncomment individually) ───────── */
     // run_test_xv6_compat(&groups[idx++]);
     // run_test_fd_limits(&groups[idx++]);
     // run_test_bigfile(&groups[idx++]);
     // run_test_forkstress(&groups[idx++]);
     // run_test_dirops(&groups[idx++]);
-    run_test_lazy_alloc(&groups[idx++]);
     // run_test_inode_openunlink(&groups[idx++]);
     // run_test_syscall_robustness(&groups[idx++]);
     // run_test_fd_offset(&groups[idx++]);
     // run_test_forkforkfork(&groups[idx++]);
-    // run_test_writebig(&groups[idx++]); //test to see if disk kills itself on filling up
+    // run_test_writebig(&groups[idx++]); /* fills disk */
 
-    // /* comprehensive libc conformance tests */
+    /* ── Comprehensive libc conformance tests (always run, no forks) ────────── */
     run_test_libc_string(groups, &idx);
     run_test_libc_ctype(groups, &idx);
     run_test_libc_stdio(groups, &idx);

@@ -102,6 +102,9 @@ typedef struct terminal {
     // Foreground process group — shell sets this; used for signal delivery
     // once job-control is added.  0 means "send to current reader only".
     int32_t foreground_pgid;
+
+    // pid of process that opened this terminal as controlling
+    pid_t session_leader;
 } terminal_t;
 
 // ─────────────────────────────────────────────────────────────────────────────

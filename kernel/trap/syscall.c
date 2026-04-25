@@ -14,6 +14,7 @@
 #include "trap/trap.h"
 #include "fs/block_cache.h"
 #include "signal.h"
+#include "tty/term.h"
 
 
 #define MAP_FAILED ((void *) -1)
@@ -423,9 +424,28 @@ void syscall_handler(trap_frame *frame) {
                                 (struct itimerval_k *)arg2);
             break;
 
+        /* Single-user kernel: all processes run as UID/GID 0 (root). */
+        case SYS_getuid:
+            ret = 0;
+            break;
+
+        case SYS_getgid:
+            ret = 0;
+            break;
+
         default:
-            printk("Unknown system call: %d\n", syscall_num);
-            ret = -1;
+            // Unknown syscall number from user space will be recognized as delivering SIGSYS (Bad system call)
+            // Set a0 = -ENOSYS so masked SIGSYS callers see a defined return value.
+            // If SIGSYS is unmasked (it is maskable), trap_handler fires proc_exit(-31)
+            // before this function returns to user mode.
+            if (current) {
+                current->pending_signals |= (1U << KERNEL_SIGSYS);
+                ret = -ENOSYS;
+            }
+            else {
+                printk("Unknown system call: %d (no current process)\n", syscall_num);
+                ret = -1;
+            }
             break;
     }
 
@@ -468,6 +488,7 @@ pid_t sys_fork(void) {
     child->signal_mask = current->signal_mask; // Fork child inherits parent's signal mask
     // POSIX: child inherits parent's signal disposition table across fork
     memcpy(child->handlers, current->handlers, sizeof(current->handlers));
+    memcpy(child->sig_flags, current->sig_flags, sizeof(current->sig_flags));
     child->priority    = current->priority;    /* POSIX: nice value is inherited across fork */
     // Child also inherits parent's process group and session IDs
     child->pgid = current->pgid;
@@ -1275,8 +1296,13 @@ int sys_sigprocmask(int how, const uint32_t *set, uint32_t *oldset) {
         default: return -1;
     }
 
-    // SIGKILL (9) and SIGSTOP (19) can never be masked — POSIX requirement
-    new_mask &= ~((1U << KERNEL_SIGKILL) | (1U << KERNEL_SIGSTOP));
+    // SIGKILL (9), SIGSTOP (19), SIGILL (4), SIGABRT (6), SIGTRAP (5) can never be masked.
+    // SIGABRT: abort() must terminate; a masked SIGABRT would leave the process alive.
+    // SIGTRAP: EBREAK fires repeatedly if SIGTRAP is masked — same loop as Bug 1 in SIGS.md.
+    // SIGHUP, SIGUSR1, SIGUSR2, SIGSYS are software-only; masking them is legal.
+    new_mask &= ~((1U << KERNEL_SIGKILL)  | (1U << KERNEL_SIGSTOP)  |
+                (1U << KERNEL_SIGILL)   | (1U << KERNEL_SIGABRT)  |
+                (1U << KERNEL_SIGTRAP));
     current->signal_mask = new_mask;
     return 0;
 }
@@ -1603,7 +1629,8 @@ int sys_sigaction(int sig, const struct sigaction *act, struct sigaction *oldact
 
     if (oldact != NULL) {
         struct sigaction kold = { .sa_handler = (sighandler_t)current->handlers[sig],
-                                  .sa_mask = 0, .sa_flags = 0 };
+                                  .sa_mask = 0,
+                                  .sa_flags = (int)current->sig_flags[sig] };
         if (copy_to_user(oldact, &kold, sizeof(kold)) < 0) return -EFAULT;
     }
 
@@ -1614,6 +1641,7 @@ int sys_sigaction(int sig, const struct sigaction *act, struct sigaction *oldact
         if (copy_from_user(&kact, act, sizeof(kact)) < 0) return -EFAULT;
         if (kact.sa_handler != SIG_DFL && kact.sa_handler != SIG_IGN) return -EINVAL;
         current->handlers[sig] = (void *)kact.sa_handler;
+        current->sig_flags[sig] = (uint32_t)kact.sa_flags & SA_KNOWN_FLAGS;
     }
 
     return 0;
@@ -1789,8 +1817,14 @@ pid_t sys_setsid(void) {
     /* POSIX: process group leader cannot call setsid */
     if (current->pgid == current->pid)
         return -EPERM;
-    current->sid  = current->pid;
-    current->pgid = current->pid;
+    current->sid              = current->pid;
+    current->pgid             = current->pid;
+    current->is_session_leader = 1;
+    /* POSIX: setsid() creates a new session with NO controlling terminal.
+     * Do NOT set console_term.session_leader here — that would make every
+     * short-lived child that calls setsid() (e.g. test helpers) appear to
+     * own the console, causing proc_exit() to deliver spurious SIGHUP to
+     * the foreground process group when the child exits. */
     return current->sid;
 }
 
@@ -1850,6 +1884,16 @@ int sys_nanosleep(const struct timespec *req, struct timespec *rem) {
         }
         return 0;
     }
+    /*
+     * +1 tick: the process is at an unknown position within the current
+     * 100 ms tick interval when sys_nanosleep is called.  Without this,
+     * a 1-second request could wake after as little as ~900 ms of real
+     * time (if called 99 ms into the current tick), violating POSIX
+     * "at least the requested duration" semantics.  The extra tick makes
+     * the worst-case sleep (1001 ms for a 1 s request) rather than
+     * risking under-sleep.
+     */
+    ticks += 1;
 
     /*
      * Sleep on the process itself.  timer_handler() detects expiry via
@@ -1915,6 +1959,7 @@ int sys_clock_nanosleep(clockid_t clockid, int flags,
         if (sec < 0) return -EINVAL;
         ticks = (uint64_t)sec * TICKS_PER_SEC +
                 ((uint64_t)nsec + ns_per_tick - 1) / ns_per_tick;
+        if (ticks > 0) ticks += 1;  /* same partial-tick fix as sys_nanosleep */
     }
 
     if (ticks == 0) return 0;

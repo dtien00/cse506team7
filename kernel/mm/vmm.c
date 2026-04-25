@@ -303,11 +303,15 @@ static int vmm_copy_pagetable_recursive(
     uint64_t pte = parent[i];
     if (!(pte & PTE_V)) continue;
 
-    // At the top level (L2), skip only entries that are truly shared with the
-    // kernel root page table. This avoids skipping high-VA user mappings that
-    // happen to live above KERNBASE but are not kernel-shared entries.
-    if (level == 2 && kernel_root && pte == kernel_root[i])
+    // At the top level (L2), entries that are truly shared with the kernel root
+    // (e.g. the kernel text/data range above KERNBASE) are copied as-is into
+    // the child so that kernel code remains accessible after sret.  They must
+    // NOT be recursed into — the physical page-table pages are owned by the
+    // kernel and must not be freed when the child exits.
+    if (level == 2 && kernel_root && pte == kernel_root[i]) {
+        child[i] = pte;
         continue;
+    }
 
     if ((pte & (PTE_R | PTE_W | PTE_X)) == 0) {
       // This is a lower-level page table
@@ -356,9 +360,26 @@ static int vmm_copy_pagetable_recursive(
 
 // Clone a parent's page table for fork()
 pagetable_t vmm_copy_pagetable(pagetable_t parent) {
-  pagetable_t child = vmm_create_pagetable();
+  // Allocate a fresh, zeroed L2 page — do NOT use vmm_create_pagetable() here.
+  //
+  // vmm_create_pagetable() allocates private L1/L0 copies for every device
+  // range below KERNBASE (~172 pages: 43 for L2[0], 129 for L2[1]).  The
+  // recursive copy that follows immediately overwrites child[0] and child[1]
+  // with its own fresh allocations because the parent's entries differ from
+  // the kernel root (they are already private copies from exec()).  This
+  // causes a permanent ~688 KB leak per fork() call that exhausts physical
+  // memory after ~100–150 forks.
+  //
+  // Instead, start with a blank L2 and let vmm_copy_pagetable_recursive handle
+  // everything:
+  //   • kernel-shared L2 entries (KERNBASE and above) are copied as-is.
+  //   • device/user L2 entries below KERNBASE are deep-copied from the parent,
+  //     allocating L1/L0 pages exactly once.
+  pagetable_t child = (pagetable_t)pmm_alloc_page();
   if (!child) return NULL;
-  // Recursively copy user mappings (levels 2, 1, 0)
+  for (int i = 0; i < 512; i++) child[i] = 0;
+
+  // Recursively copy all mappings from parent (levels 2, 1, 0)
   if (vmm_copy_pagetable_recursive(child, parent, vmm_kernel_pagetable(), 2, 0) < 0) {
     vmm_free_pagetable(child);
     return NULL;
