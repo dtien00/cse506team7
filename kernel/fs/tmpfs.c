@@ -530,6 +530,17 @@ static int tmpfs_truncate(vnode_t *vnode) {
     return 0;
 }
 
+static int tmpfs_chmod(mount_t *mnt, vnode_t *vnode, mode_t mode) {
+    (void)mnt;
+    if (!vnode || !vnode->fs_data)
+        return -EINVAL;
+
+    tmpfs_inode_t *inode = (tmpfs_inode_t *)vnode->fs_data;
+    inode->mode = mode & 0x0FFF;
+    vnode->mode = inode->mode;
+    return 0;
+}
+
 static int tmpfs_link(mount_t *mnt, const char *oldpath, const char *newpath) {
     if (!mnt || !mnt->fs_data || !oldpath || !newpath) return -EINVAL;
 
@@ -746,6 +757,7 @@ static fs_type_t tmpfs_type = {.name = "tmpfs",
                                                .symlink = tmpfs_symlink,
                                                .readlink = tmpfs_readlink,
                                                .truncate = tmpfs_truncate,
+                                               .chmod = tmpfs_chmod,
                                                .get_nlink = tmpfs_get_nlink,
                                        },
                                .next = NULL};

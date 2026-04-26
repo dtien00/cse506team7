@@ -6,7 +6,7 @@
 
 /* Helpers */
 static int write_file(const char *path, const char *data) {
-    int fd = open(path, O_CREAT | O_WRONLY | O_TRUNC);
+    int fd = open(path, O_CREAT | O_WRONLY | O_TRUNC, 0644);
     if (fd < 0) return -1;
     ssize_t n = write(fd, data, strlen(data));
     close(fd);
@@ -14,7 +14,7 @@ static int write_file(const char *path, const char *data) {
 }
 
 static int read_file(const char *path, char *buf, int bufsz) {
-    int fd = open(path, O_CREAT | O_RDWR);
+    int fd = open(path, O_CREAT | O_RDWR, 0644);
     if (fd < 0) return -1;
     int n = (int)read(fd, buf, bufsz - 1);
     close(fd);
@@ -44,7 +44,7 @@ static void test_basic_rw(us_test_group_t *group) {
     ut_group_begin(group, "fs_persist.basic_rw");
 
     /* create and write */
-    int fd = open("/mnt/basic.txt", O_CREAT | O_WRONLY | O_TRUNC);
+    int fd = open("/mnt/basic.txt", O_CREAT | O_WRONLY | O_TRUNC, 0644);
     TEST(group, "open for create returns valid fd", fd >= 0);
     if (fd < 0) { ut_group_end(group); return; }
 

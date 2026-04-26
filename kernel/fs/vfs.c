@@ -322,6 +322,55 @@ static mount_t *vfs_find_mount_for_cover(dentry_t *cover) {
     return NULL;
 }
 
+static int vfs_mode_allows(vnode_t *vn, int perms) {
+    uint32_t mode = vn ? (vn->mode & 0x1FF) : 0;
+
+    if ((perms & VFS_PERM_READ) && !(mode & 0444))
+        return 0;
+    if ((perms & VFS_PERM_WRITE) && !(mode & 0222))
+        return 0;
+    if ((perms & VFS_PERM_EXEC) && !(mode & 0111))
+        return 0;
+
+    return 1;
+}
+
+int vfs_may_access(vnode_t *vn, int perms) {
+    if (!vn)
+        return -EINVAL;
+    if (!vfs_mode_allows(vn, perms))
+        return -EACCES;
+    return 0;
+}
+
+static int vfs_require_parent_perms(const char *path, int perms) {
+    if (!path || path[0] != '/')
+        return -EINVAL;
+
+    char parent_path[MAX_PATH];
+    strncpy(parent_path, path, sizeof(parent_path) - 1);
+    parent_path[sizeof(parent_path) - 1] = '\0';
+
+    char *last_slash = strrchr(parent_path, '/');
+    if (!last_slash)
+        return -EINVAL;
+
+    if (last_slash == parent_path) {
+        parent_path[1] = '\0';
+    } else {
+        *last_slash = '\0';
+    }
+
+    dentry_t *parent = NULL;
+    int err = vfs_lookup(parent_path, &parent);
+    if (err)
+        return err;
+
+    err = vfs_may_access(parent->d_vnode, perms);
+    dentry_put(parent);
+    return err;
+}
+
 // -----------------------------------------------------------------------------
 // Component-walk helpers (internal)
 // -----------------------------------------------------------------------------
@@ -334,6 +383,12 @@ static int vfs_step(dentry_t *cur, mount_t **mnt, const char *comp,
                     const char *rel_so_far, int is_last,
                     int *crossed, dentry_t **out) {
     const char *effective_rel = rel_so_far;
+
+    if (cur->d_vnode) {
+        int perm_err = vfs_may_access(cur->d_vnode, VFS_PERM_EXEC);
+        if (perm_err)
+            return perm_err;
+    }
 
     // 1. Mount crossing: if cur is a cover dentry, follow to the mounted root
     if (cur->d_flags & DENTRY_COVER) {
@@ -622,6 +677,10 @@ int vfs_create(const char *path, uint32_t mode) {
     printk("path: %s\n", path);
     if (!path) return -1;
 
+    int perm_err = vfs_require_parent_perms(path, VFS_PERM_WRITE | VFS_PERM_EXEC);
+    if (perm_err)
+        return perm_err;
+
     mount_t *mnt = vfs_find_mount(path);
     if (!mnt){
         printk("mount not found.\n");
@@ -645,6 +704,10 @@ static int vfs_lookup_nofollow(dentry_t *start, const char *path, dentry_t **out
 int vfs_unlink(const char *path) {
     if (!path)
         return -EINVAL;
+
+    int perm_err = vfs_require_parent_perms(path, VFS_PERM_WRITE | VFS_PERM_EXEC);
+    if (perm_err)
+        return perm_err;
 
     dentry_t *d = NULL;
     int err = vfs_lookup_nofollow(
@@ -766,6 +829,10 @@ done_readdir:
 int vfs_mkdir(const char *path, uint32_t mode) {
     if (!path) return -1;
 
+    int perm_err = vfs_require_parent_perms(path, VFS_PERM_WRITE | VFS_PERM_EXEC);
+    if (perm_err)
+        return perm_err;
+
     mount_t *mnt = vfs_find_mount(path);
     if (!mnt) return -1;
 
@@ -789,11 +856,12 @@ int vfs_chmod(const char *path, mode_t mode) {
     if (err) return err;
 
     vnode_t *vn = d->d_vnode;
-    vn->mode = mode & 0xFFF;
-
-    int ret = 0;
-    if (vn->mount && vn->mount->fs_type->ops.chmod)
+    int ret = -EROFS;
+    if (vn->mount && vn->mount->fs_type->ops.chmod) {
         ret = vn->mount->fs_type->ops.chmod(vn->mount, vn, mode);
+        if (ret == 0)
+            vn->mode = mode & 0xFFF;
+    }
 
     dentry_put(d);
     return ret;
@@ -802,16 +870,22 @@ int vfs_chmod(const char *path, mode_t mode) {
 int vfs_fchmod(vnode_t *vn, mode_t mode) {
     if (!vn) return -EINVAL;
 
-    vn->mode = mode & 0xFFF;
+    if (vn->mount && vn->mount->fs_type->ops.chmod) {
+        int ret = vn->mount->fs_type->ops.chmod(vn->mount, vn, mode);
+        if (ret == 0)
+            vn->mode = mode & 0xFFF;
+        return ret;
+    }
 
-    if (vn->mount && vn->mount->fs_type->ops.chmod)
-        return vn->mount->fs_type->ops.chmod(vn->mount, vn, mode);
-
-    return 0;
+    return -EROFS;
 }
 
 int vfs_rmdir(const char *path) {
     if (!path) return -EINVAL;
+
+    int perm_err = vfs_require_parent_perms(path, VFS_PERM_WRITE | VFS_PERM_EXEC);
+    if (perm_err)
+        return perm_err;
 
     /* Verify the target exists and is a directory */
     dentry_t *d = NULL;
@@ -851,6 +925,10 @@ int vfs_rmdir(const char *path) {
 
 int vfs_link(const char *oldpath, const char *newpath) {
     if (!oldpath || !newpath) return -EINVAL;
+
+    int perm_err = vfs_require_parent_perms(newpath, VFS_PERM_WRITE | VFS_PERM_EXEC);
+    if (perm_err)
+        return perm_err;
 
     // Resolve oldpath without following symlinks for the final component so we
     // get the actual file entry (not what a symlink points to).
@@ -902,6 +980,10 @@ int vfs_link(const char *oldpath, const char *newpath) {
 
 int vfs_symlink(const char *target, const char *linkpath) {
     if (!target || !linkpath) return -EINVAL;
+
+    int perm_err = vfs_require_parent_perms(linkpath, VFS_PERM_WRITE | VFS_PERM_EXEC);
+    if (perm_err)
+        return perm_err;
 
     mount_t *mnt = vfs_find_mount(linkpath);
     if (!mnt || !mnt->fs_type->ops.symlink) return -ENOSYS;
@@ -1058,6 +1140,15 @@ int vfs_chdir(const char *kpath) {
 
     if (dentry_normalize_path(current->fs->cwd, vfs_root, kpath, resolved, sizeof(resolved)) < 0)
         return -ENAMETOOLONG;
+
+    dentry_t *d = NULL;
+    int lookup_rc = vfs_lookup(resolved, &d);
+    if (lookup_rc < 0)
+        return lookup_rc;
+    int perm_rc = vfs_may_access(d->d_vnode, VFS_PERM_EXEC);
+    dentry_put(d);
+    if (perm_rc < 0)
+        return perm_rc;
 
     // 3. Hand off to fs_struct — it looks up, validates, and swaps the cwd dentry
     int rc = fs_struct_set_cwd(current->fs, resolved);
