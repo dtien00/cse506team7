@@ -76,6 +76,7 @@ void run_test_fd_offset(us_test_group_t *group);
 void run_test_forkforkfork(us_test_group_t *group);
 void run_test_writebig(us_test_group_t *group);
 void run_test_uaccess(us_test_group_t *group);
+void run_test_mmap_file(us_test_group_t *group);
 
 /* comprehensive libc conformance suites (each fills multiple groups) */
 void run_test_libc_string(us_test_group_t groups[], int *idx);
@@ -184,6 +185,7 @@ int main(int argc, char **argv, char **envp) {
         run_test_jobctl(&groups[idx++]);
         run_test_links(groups, &idx);
         run_test_exec_envp(groups, &idx);
+        run_test_mmap_file(&groups[idx++]);
     }
 
     /* ── RUN_MEMORY_HEAVY: tests with large heap / mmap allocations ────────── */

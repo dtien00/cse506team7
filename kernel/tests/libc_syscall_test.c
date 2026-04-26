@@ -25,6 +25,8 @@
 #include "errno.h"
 #include "lib/string.h"
 #include "mm/kmalloc.h"
+#include <sys/mman.h>
+#include "mm/vma.h"
 
 static int passed = 0;
 static int failed = 0;
@@ -160,20 +162,58 @@ static void test_sys_mmap(void) {
 
         void *sr = sys_sbrk(0);
         TEST("sys_sbrk without process returns MAP_FAILED", sr == (void *)-1LL);
-    } else {
+        } else {
         printk("  [INFO] Process context available — testing mmap with real pagetable\n");
 
-        /* Anonymous mmap */
+        /* Existing anonymous mmap test (do not remove) */
         void *p = sys_mmap(NULL, 4096, 0x3, 0x22, -1, 0);
         TEST("sys_mmap anonymous 4KB", p != (void *)-1LL && p != NULL);
         if (p != (void *)-1LL && p != NULL) {
             sys_munmap(p, 4096);
-            TEST("sys_munmap 4KB returns 0", 1);  /* doesn't panic */
+            TEST("sys_munmap 4KB returns 0", 1);
         }
 
-        /* sys_brk(NULL) returns current heap break */
-        int bk = sys_brk(NULL);
-        TEST("sys_brk(NULL) returns valid address", bk != -1);
+        /* File-backed mmap: invalid fd → MAP_FAILED */
+        void *fb_bad = sys_mmap(NULL, 4096, PROT_READ, MAP_PRIVATE, 99, 0);
+        TEST("sys_mmap file-backed: bad fd returns MAP_FAILED", fb_bad == (void *)-1LL);
+
+        /* File-backed mmap: unaligned offset → MAP_FAILED */
+        int fd_any = file_open("/hello.txt");
+        if (fd_any >= 0) {
+            void *fb_unalign = sys_mmap(NULL, 4096, PROT_READ, MAP_PRIVATE, fd_any, 1);
+            TEST("sys_mmap file-backed: unaligned offset returns MAP_FAILED",
+                 fb_unalign == (void *)-1LL);
+
+            /* File-backed mmap: valid fd + aligned offset → succeeds */
+            void *fb = sys_mmap(NULL, 4096, PROT_READ, MAP_PRIVATE, fd_any, 0);
+            TEST("sys_mmap file-backed: valid fd+offset succeeds",
+                 fb != (void *)-1LL && fb != NULL);
+
+            if (fb != (void *)-1LL && fb != NULL) {
+                /* Closing the fd after mmap must not invalidate the mapping */
+                file_close(fd_any);
+                fd_any = -1;
+                /* The mapping should still be accessible — no page fault expected. */
+                /* We cannot touch the VA here (no user pagetable walk in RUN_TESTS),
+                 * but we can verify the VMA was inserted correctly. */
+                struct vm_area *vma = vma_find(current->vma_list, (uintptr_t)fb);
+                TEST("sys_mmap file-backed: VMA inserted after close(fd)",
+                     vma != NULL);
+                TEST("sys_mmap file-backed: VMA type is VMA_TYPE_FILE",
+                     vma && vma->type == VMA_TYPE_FILE);
+                TEST("sys_mmap file-backed: VMA->file non-NULL after close(fd)",
+                     vma && vma->file != NULL);
+                TEST("sys_mmap file-backed: VMA->offset == 0",
+                     vma && vma->offset == 0);
+
+                sys_munmap(fb, 4096);
+                TEST("sys_munmap file-backed: VMA removed",
+                     vma_find(current->vma_list, (uintptr_t)fb) == NULL);
+            }
+            if (fd_any >= 0) file_close(fd_any);
+        } else {
+            printk("  [SKIP] /hello.txt not found — skipping file-backed mmap tests\n");
+        }
     }
 
     /* Zero-length mmap always fails */

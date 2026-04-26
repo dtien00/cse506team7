@@ -568,7 +568,29 @@ void page_fault_handler(trap_frame *frame) {
         kill_current(frame, "out of physical memory");
         return;
     }
-    memset(phys, 0, PGSIZE);
+    memset(phys, 0, PGSIZE);   // always zero-fill first (handles partial EOF page)
+
+    /* ── 6a. File-backed VMA: read page content from file ───────────────────
+     *
+     * Zero-fill above ensures bytes past EOF are zero without a separate memset.
+     * If the read returns fewer than PGSIZE bytes (end of file), the remainder
+     * is already zeroed.  If ops.read fails, the page stays zeroed — the process
+     * will see garbage, but it will not crash the kernel.
+     *
+     * POSIX note: reads past EOF on a MAP_SHARED region should deliver SIGBUS.
+     * SIGBUS is not yet implemented; zero-padding is used instead.
+     */
+    if (vma->type == VMA_TYPE_FILE && vma->file) {
+        file_t  *f       = (file_t *)vma->file;
+        vnode_t *vn      = f->vnode;
+        uint64_t file_off = vma->offset + (page_va - vma->start);
+
+        if (vn && vn->fs_type) {
+            // ops.read(vnode, buf, offset, len) — offset-based, does not advance f->offset
+            vn->fs_type->ops.read(vn, phys, (size_t)file_off, PGSIZE);
+            // Return value ignored: short reads (EOF) leave zero-filled remainder.
+        }
+    }
 
     /* ── 7. Map the new page into the current page table ─────────────────── */
     uint64_t pte_perm = vma_prot_to_pte(vma->prot);
