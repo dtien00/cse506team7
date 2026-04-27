@@ -24,6 +24,8 @@
 #define KERNEL_SIGILL    4
 #define KERNEL_SIGTRAP   5
 #define KERNEL_SIGABRT   6
+#define KERNEL_SIGBUS    7  // bus error: misaligned access, MAP_SHARED access past EOF
+#define KERNEL_SIGFPE    8  // floating-point exception (software-delivered only on RISC-V)
 #define KERNEL_SIGKILL   9
 #define KERNEL_SIGUSR1  10
 #define KERNEL_SIGSEGV  11
@@ -51,7 +53,8 @@
                            (1U << KERNEL_SIGILL)   | (1U << KERNEL_SIGSEGV)  | \
                            (1U << KERNEL_SIGHUP)   | (1U << KERNEL_SIGTRAP)  | \
                            (1U << KERNEL_SIGABRT)  | (1U << KERNEL_SIGUSR1)  | \
-                           (1U << KERNEL_SIGUSR2)  | (1U << KERNEL_SIGSYS))
+                           (1U << KERNEL_SIGUSR2)  | (1U << KERNEL_SIGSYS)   | \
+                           (1U << KERNEL_SIGBUS)   | (1U << KERNEL_SIGFPE))
 
 // SIGSTOP, SIGSTP, SIGTTIN, SIGTTOU cannot be masked or ignored (POSIX)
 #define KERNEL_STOP_SIGS ((1U << KERNEL_SIGSTOP) | (1U << KERNEL_SIGTSTP) | \

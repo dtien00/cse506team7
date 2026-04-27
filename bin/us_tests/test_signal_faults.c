@@ -1,8 +1,8 @@
 /*
- * test_signal_faults.c — Userspace integration tests for SIGSEGV, SIGILL, SIGQUIT.
+ * test_signal_faults.c — Userspace integration tests for SIGSEGV, SIGILL, SIGQUIT, SIGBUS.
  *
- * Tests exercise the three signals whose kernel-side dispatch was wired up in
- * SIGS.md: SIGQUIT (3), SIGILL (4), SIGSEGV (11).
+ * Tests exercise the signals wired up in SIGS.md / MMAP_TEST.md:
+ *  SIGQUIT (3), SIGILL (4), SIGSEGV (11), SIGBUS (7).
  *
  *  A. NULL dereference → page fault → SIGSEGV → child terminated by signal
  *  B. kill(pid, SIGQUIT) terminates a spinning child
@@ -10,6 +10,8 @@
  *  D. kill(pid, SIGSEGV) from parent terminates child
  *  E. kill(pid, SIGILL) from parent terminates child
  *  F. signal_mask inherits across fork: child inherits SIGQUIT block, exits normally
+ *  G. kill(pid, SIGBUS) from parent terminates child
+ *  H. sigprocmask(SIG_BLOCK, SIGBUS) is stripped — SIGBUS cannot be masked
  */
 
 #include <sys/wait.h>
@@ -176,6 +178,58 @@ void run_test_signal_faults(us_test_group_t *group) {
             TEST(group, "SIGQUIT/inherit-mask: child reaped", w == pid);
             TEST(group, "SIGQUIT/inherit-mask: child exited normally (mask inherited)",
                  WIFEXITED(status) && WEXITSTATUS(status) == 42);
+        }
+    }
+
+    /* ── G. kill(pid, SIGBUS) terminates a spinning child ───────────────────
+     * SIGBUS is in KERNEL_FATAL_SIGS; delivery via sys_kill exercises the
+     * same pending_signals path as SIGILL and SIGSEGV.
+     */
+    {
+        pid_t pid = fork();
+        TEST(group, "SIGBUS/kill: fork succeeded", pid >= 0);
+
+        if (pid == 0) {
+            volatile int x = 0;
+            while (1) x++;
+            _exit(0);
+        }
+
+        if (pid > 0) {
+            sleep(1);
+            kill(pid, SIGBUS);
+            int status = 0;
+            pid_t w = waitpid(pid, &status, 0);
+            TEST(group, "SIGBUS/kill: child reaped", w == pid);
+            TEST(group, "SIGBUS/kill: child terminated by signal", WIFSIGNALED(status));
+        }
+    }
+
+    /* ── H. sigprocmask(SIG_BLOCK, SIGBUS) is stripped by the kernel ────────
+     * SIGBUS is unmaskable: sys_sigprocmask strips bit 7 from any new mask.
+     * Child tries to block SIGBUS, then kills itself with SIGBUS.  Because the
+     * block attempt is silently stripped, the signal is delivered immediately
+     * and the child is terminated — it never reaches _exit(42).
+     */
+    {
+        pid_t pid = fork();
+        TEST(group, "SIGBUS/unmaskable: fork succeeded", pid >= 0);
+
+        if (pid == 0) {
+            sigset_t set;
+            sigemptyset(&set);
+            sigaddset(&set, SIGBUS);
+            sigprocmask(SIG_BLOCK, &set, NULL);  /* stripped by kernel */
+            kill(getpid(), SIGBUS);              /* delivered immediately */
+            _exit(42);                           /* unreachable if unmaskable */
+        }
+
+        if (pid > 0) {
+            int status = 0;
+            pid_t w = waitpid(pid, &status, 0);
+            TEST(group, "SIGBUS/unmaskable: child reaped", w == pid);
+            TEST(group, "SIGBUS/unmaskable: SIGBUS cannot be blocked — child killed",
+                 WIFSIGNALED(status));
         }
     }
 

@@ -8,9 +8,10 @@
  *  D. Non-page-aligned offset returns MAP_FAILED
  *  E. Invalid fd returns MAP_FAILED
  *  F. Large file: mmap content matches read() reference byte-for-byte
- *  G. Page beyond EOF is zero-padded (no SIGBUS — intentional kernel gap)
+ *  G. MAP_PRIVATE page beyond EOF is zero-padded (correct POSIX behaviour)
+ *  H. MAP_SHARED access past EOF delivers SIGBUS
  *
- * Tests B, C, F, G run in child processes to isolate faults and
+ * Tests B, C, F, G, H run in child processes to isolate faults and
  * memory pressure from the main test runner.
  */
 
@@ -22,9 +23,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <signal.h>
 #include "us_test_common.h"
 
 #define MMAP_TEST_FILE "/hello.txt"
+#define MMAP_LARGE_FILE "/large_text.txt"
 
 /* ── A. File content visible through mapping ─────────────────────────────── */
 
@@ -161,10 +164,10 @@ static void test_invalid_fd(us_test_group_t *group) {
 /* ── F. Large file: mmap content matches read() reference ────────────────── */
 
 static void test_large_file_mmap(us_test_group_t *group) {
-    int fd = open(MMAP_TEST_FILE, O_RDONLY);
+    int fd = open(MMAP_LARGE_FILE, O_RDONLY);
     if (fd < 0) {
         SKIP(group, "mmap-file/large: content matches read() reference",
-             "no " MMAP_TEST_FILE);
+             "no " MMAP_LARGE_FILE);
         return;
     }
 
@@ -173,7 +176,7 @@ static void test_large_file_mmap(us_test_group_t *group) {
     if (st.st_size < 8192) {
         close(fd);
         SKIP(group, "mmap-file/large: content matches read() reference",
-             MMAP_TEST_FILE " < 8 KB");
+             MMAP_LARGE_FILE " < 8 KB");
         return;
     }
 
@@ -187,7 +190,7 @@ static void test_large_file_mmap(us_test_group_t *group) {
         if (m == MAP_FAILED)
             _exit(1);
 
-        int fd2 = open(MMAP_TEST_FILE, O_RDONLY);
+        int fd2 = open(MMAP_LARGE_FILE, O_RDONLY);
         if (fd2 < 0) { munmap(m, len); _exit(2); }
 
         char *ref = malloc(len);
@@ -211,18 +214,19 @@ static void test_large_file_mmap(us_test_group_t *group) {
          WIFEXITED(status) && WEXITSTATUS(status) == 0);
 }
 
-/* ── G. Page beyond EOF is zero-padded (no SIGBUS) ───────────────────────── */
+/* ── G. MAP_PRIVATE page beyond EOF is zero-padded ──────────────────────── */
 
 static void test_past_eof_zero(us_test_group_t *group) {
     int fd = open(MMAP_TEST_FILE, O_RDONLY);
     if (fd < 0) {
-        SKIP(group, "mmap-file/past-eof: access past EOF returns zero-padded page",
+        SKIP(group, "mmap-file/past-eof: MAP_PRIVATE access past EOF zero-pads",
              "no " MMAP_TEST_FILE);
         return;
     }
 
-    /* Map 2 pages regardless of file size; second page is past EOF for
-     * any file smaller than 8 KB.  Access must not kill the process. */
+    /* MAP_PRIVATE: bytes past EOF are zero-filled, NOT SIGBUS.  This is
+     * correct POSIX behaviour and matches Linux.  MAP_SHARED is different —
+     * see test H (test_map_shared_eof_sigbus). */
     void *m = mmap(NULL, 2 * 4096, PROT_READ, MAP_PRIVATE, fd, 0);
     close(fd);
 
@@ -240,8 +244,49 @@ static void test_past_eof_zero(us_test_group_t *group) {
 
     int status = 0;
     waitpid(pid, &status, 0);
-    TEST(group, "mmap-file/past-eof: access past EOF returns zero-padded page",
+    TEST(group, "mmap-file/past-eof: MAP_PRIVATE access past EOF zero-pads",
          WIFEXITED(status) && WEXITSTATUS(status) == 0);
+
+    munmap(m, 2 * 4096);
+}
+
+/* ── H. MAP_SHARED access past EOF delivers SIGBUS ──────────────────────── */
+
+static void test_map_shared_eof_sigbus(us_test_group_t *group) {
+    int fd = open(MMAP_TEST_FILE, O_RDONLY);
+    if (fd < 0) {
+        SKIP(group, "mmap-file/shared-eof-sigbus: MAP_SHARED access past EOF delivers SIGBUS",
+             "no " MMAP_TEST_FILE);
+        return;
+    }
+
+    /* Map 2 pages with MAP_SHARED so the second page is guaranteed to be
+     * past EOF for any file smaller than 8 KB. */
+    void *m = mmap(NULL, 2 * 4096, PROT_READ, MAP_SHARED, fd, 0);
+    close(fd);
+
+    if (m == MAP_FAILED) {
+        SKIP(group, "mmap-file/shared-eof-sigbus: MAP_SHARED access past EOF delivers SIGBUS",
+             "MAP_SHARED file mmap returned MAP_FAILED at runtime");
+        return;
+    }
+
+    pid_t pid = fork();
+    TEST(group, "mmap-file/shared-eof-sigbus: fork succeeded", pid >= 0);
+    if (pid == 0) {
+        /* Access the second page — past EOF on a MAP_SHARED mapping.
+         * The kernel delivers SIGBUS; this child should never reach _exit(0). */
+        volatile char c = ((char *)m)[4096];
+        (void)c;
+        _exit(0);  /* unreachable if SIGBUS is delivered */
+    }
+
+    if (pid > 0) {
+        int status = 0;
+        waitpid(pid, &status, 0);
+        TEST(group, "mmap-file/shared-eof-sigbus: MAP_SHARED access past EOF delivers SIGBUS",
+             WIFSIGNALED(status) && WTERMSIG(status) == SIGBUS);
+    }
 
     munmap(m, 2 * 4096);
 }
@@ -258,6 +303,7 @@ void run_test_mmap_file(us_test_group_t *group) {
     test_invalid_fd(group);
     test_large_file_mmap(group);
     test_past_eof_zero(group);
+    test_map_shared_eof_sigbus(group);
 
     ut_group_end(group);
 }

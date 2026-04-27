@@ -1330,13 +1330,15 @@ int sys_sigprocmask(int how, const uint32_t *set, uint32_t *oldset) {
         default: return -1;
     }
 
-    // SIGKILL (9), SIGSTOP (19), SIGILL (4), SIGABRT (6), SIGTRAP (5) can never be masked.
+    // SIGKILL (9), SIGSTOP (19), SIGILL (4), SIGABRT (6), SIGTRAP (5), SIGBUS (7)
+    // can never be masked.
     // SIGABRT: abort() must terminate; a masked SIGABRT would leave the process alive.
-    // SIGTRAP: EBREAK fires repeatedly if SIGTRAP is masked — same loop as Bug 1 in SIGS.md.
+    // SIGTRAP: EBREAK fires repeatedly if SIGTRAP is masked (infinite re-fault loop).
+    // SIGBUS: misaligned access fires repeatedly if SIGBUS is masked (same loop).
     // SIGHUP, SIGUSR1, SIGUSR2, SIGSYS are software-only; masking them is legal.
     new_mask &= ~((1U << KERNEL_SIGKILL)  | (1U << KERNEL_SIGSTOP)  |
                 (1U << KERNEL_SIGILL)   | (1U << KERNEL_SIGABRT)  |
-                (1U << KERNEL_SIGTRAP));
+                (1U << KERNEL_SIGTRAP)  | (1U << KERNEL_SIGBUS));
     current->signal_mask = new_mask;
     return 0;
 }
