@@ -361,6 +361,108 @@ void sig_flag_test_run(void) {
         }
     }
 
+    /* ── 11. SA_NOCLDWAIT: child exit sets auto_reap, suppresses SIGCHLD ─────── */
+    printk("=== 11. SA_NOCLDWAIT: child exit sets auto_reap, no SIGCHLD ===\n");
+    {
+        struct proc *parent = proc_alloc();
+        struct proc *child  = proc_alloc();
+        TEST("nocldwait-exit: alloc parent", parent != NULL);
+        TEST("nocldwait-exit: alloc child",  child  != NULL);
+
+        if (parent && child) {
+            parent->pending_signals    = 0;
+            parent->signal_mask        = 0;
+            parent->handlers[SIGCHLD]  = (void *)SIG_DFL;
+            parent->sig_flags[SIGCHLD] = SA_NOCLDWAIT;
+
+            child->parent          = parent;
+            child->auto_reap       = 0;
+            child->pending_signals = 0;
+
+            // Simulate the SA_NOCLDWAIT branch from proc_exit()
+            if (parent->sig_flags[SIGCHLD] & SA_NOCLDWAIT) {
+                child->auto_reap = 1;
+            } else {
+                parent->pending_signals |= (1u << SIGCHLD);
+            }
+
+            TEST("nocldwait-exit: auto_reap is 1", child->auto_reap == 1);
+            TEST("nocldwait-exit: SIGCHLD NOT set on parent",
+                 !(parent->pending_signals & (1u << SIGCHLD)));
+        }
+
+        if (parent) proc_free(parent);
+        if (child)  proc_free(child);
+    }
+
+    /* ── 12. SA_NOCLDWAIT not set: normal zombie behavior unchanged ─────────── */
+    printk("=== 12. SA_NOCLDWAIT not set: SIGCHLD delivered, auto_reap stays 0 ===\n");
+    {
+        struct proc *parent = proc_alloc();
+        struct proc *child  = proc_alloc();
+        TEST("nocldwait-normal: alloc parent", parent != NULL);
+        TEST("nocldwait-normal: alloc child",  child  != NULL);
+
+        if (parent && child) {
+            parent->pending_signals    = 0;
+            parent->signal_mask        = 0;
+            parent->handlers[SIGCHLD]  = (void *)SIG_DFL;
+            parent->sig_flags[SIGCHLD] = 0;  /* no SA_NOCLDWAIT */
+
+            child->parent    = parent;
+            child->auto_reap = 0;
+
+            // Simulate the non-SA_NOCLDWAIT branch from proc_exit()
+            if (parent->sig_flags[SIGCHLD] & SA_NOCLDWAIT) {
+                child->auto_reap = 1;
+            } else {
+                parent->pending_signals |= (1u << SIGCHLD);
+            }
+
+            TEST("nocldwait-normal: auto_reap stays 0", child->auto_reap == 0);
+            TEST("nocldwait-normal: SIGCHLD IS set on parent",
+                 parent->pending_signals & (1u << SIGCHLD));
+        }
+
+        if (parent) proc_free(parent);
+        if (child)  proc_free(child);
+    }
+
+    /* ── 13. auto_reap zombie is swept by proc_waitpid, not returned ─────────── */
+    printk("=== 13. auto_reap zombie is swept by waitpid, not returned as zombie ===\n");
+    {
+        struct proc *parent = proc_alloc();
+        struct proc *child  = proc_alloc();
+        TEST("nocldwait-sweep: alloc parent", parent != NULL);
+        TEST("nocldwait-sweep: alloc child",  child  != NULL);
+
+        if (parent && child) {
+            current = parent;
+            parent->pending_signals = 0;
+            parent->signal_mask     = 0;
+            parent->first_child     = child;
+
+            child->parent      = parent;
+            child->state       = PROC_ZOMBIE;
+            child->auto_reap   = 1;
+            child->sibling     = NULL;
+            child->exit_code   = 0;
+            child->utime_ticks = 0;
+
+            // waitpid(-1, NULL, WNOHANG) must sweep the auto_reap zombie and
+            // return -1 (ECHILD) — the child is invisible to the caller.
+            int r = proc_waitpid(-1, NULL, 1 /* WNOHANG */);
+            TEST("nocldwait-sweep: waitpid returns -1 (ECHILD)", r == -1);
+            TEST("nocldwait-sweep: child no longer in parent->first_child",
+                 parent->first_child == NULL);
+            // child has been proc_free'd by the sweep — do not access it
+            child = NULL;
+        }
+
+        if (parent) proc_free(parent);
+        current = saved_current;
+    }
+
     current = saved_current;
 
     printk("\n========================================\n");

@@ -190,6 +190,7 @@ struct proc {
     uint8_t stop_unreported;
     uint8_t cont_unreported;
     uint8_t stop_signal;        // which signal caused the stop (for WSTOPSIG)
+    uint8_t auto_reap;          // SA_NOCLDWAIT: free without zombie on exit
 
     uintptr_t copy_fault_recover; // 0 when not inside a copy function; set by copy_{to,from}_user
 };
