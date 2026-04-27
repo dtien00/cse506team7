@@ -485,6 +485,7 @@ pid_t sys_fork(void) {
         return -1;
     }
 
+    child->sz = current->sz;
     child->signal_mask = current->signal_mask; // Fork child inherits parent's signal mask
     // POSIX: child inherits parent's signal disposition table across fork
     memcpy(child->handlers, current->handlers, sizeof(current->handlers));
