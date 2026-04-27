@@ -14,6 +14,7 @@
 #include "trap/trap.h"
 #include "fs/block_cache.h"
 #include "signal.h"
+#include "tty/term.h"
 
 
 #define MAP_FAILED ((void *) -1)
@@ -27,6 +28,11 @@
 
 #define USER_HEAP_START 0x11000000UL
 #define USER_HEAP_END   MAXVA  /* Sv39 user VA ceiling; device VMAs block kernel/MMIO ranges */
+/* mmap allocations start well above the heap so that sbrk growth and
+ * anonymous/file mmap regions never share the same VA range.
+ * 0x40000000 = 1 GB; gives ~768 MB of heap space (0x11000000..0x40000000)
+ * and the full remainder of user VA space for mmap. */
+#define USER_MMAP_START 0x40000000UL
 
 #define MAX_ARGS 64
 #define KARG_MAX 256
@@ -423,9 +429,28 @@ void syscall_handler(trap_frame *frame) {
                                 (struct itimerval_k *)arg2);
             break;
 
+        /* Single-user kernel: all processes run as UID/GID 0 (root). */
+        case SYS_getuid:
+            ret = 0;
+            break;
+
+        case SYS_getgid:
+            ret = 0;
+            break;
+
         default:
-            printk("Unknown system call: %d\n", syscall_num);
-            ret = -1;
+            // Unknown syscall number from user space will be recognized as delivering SIGSYS (Bad system call)
+            // Set a0 = -ENOSYS so masked SIGSYS callers see a defined return value.
+            // If SIGSYS is unmasked (it is maskable), trap_handler fires proc_exit(-31)
+            // before this function returns to user mode.
+            if (current) {
+                current->pending_signals |= (1U << KERNEL_SIGSYS);
+                ret = -ENOSYS;
+            }
+            else {
+                printk("Unknown system call: %d (no current process)\n", syscall_num);
+                ret = -1;
+            }
             break;
     }
 
@@ -465,9 +490,11 @@ pid_t sys_fork(void) {
         return -1;
     }
 
+    child->sz = current->sz;
     child->signal_mask = current->signal_mask; // Fork child inherits parent's signal mask
     // POSIX: child inherits parent's signal disposition table across fork
     memcpy(child->handlers, current->handlers, sizeof(current->handlers));
+    memcpy(child->sig_flags, current->sig_flags, sizeof(current->sig_flags));
     child->priority    = current->priority;    /* POSIX: nice value is inherited across fork */
     // Child also inherits parent's process group and session IDs
     child->pgid = current->pgid;
@@ -936,15 +963,13 @@ int sys_kill(pid_t pid, int sig) {
 }
 
 void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset) {
-    (void)fd;
-    (void)offset;
-
-    if (length == 0) {
+    if (length == 0 || (offset & (PGSIZE - 1))) {
         return MAP_FAILED;
     }
 
-    if (!(flags & MAP_ANONYMOUS)) {
-        printk("sys_mmap: file-backed mapping not supported yet\n");
+    // Offset must be page-aligned (POSIX requirement).
+    if (!(flags & MAP_ANONYMOUS) && (offset & (PGSIZE - 1))) {
+        printk("sys_mmap: file offset not page-aligned\n");
         return MAP_FAILED;
     }
 
@@ -954,7 +979,24 @@ void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t off
         return MAP_FAILED;
     }
 
-    size_t pages = (length + PGSIZE - 1) / PGSIZE;
+    // Acquire file reference for file-backed mappings.
+    // f_get() bumps ref_count; the VMA holds it until munmap / proc_exit.
+    // fd may be closed by the caller immediately after mmap() — this is legal (POSIX).
+    file_t *mmap_file = NULL;
+    if (!(flags & MAP_ANONYMOUS)) {
+        mmap_file = f_get(p, fd);
+        if (!mmap_file) {
+            printk("sys_mmap: invalid fd %d\n", fd);
+            return MAP_FAILED;
+        }
+        if (mmap_file->type != FILE_VNODE || !mmap_file->vnode) {
+            f_put(mmap_file);
+            printk("sys_mmap: fd %d is not a regular file\n", fd);
+            return MAP_FAILED;
+        }
+    }
+
+    size_t pages     = (length + PGSIZE - 1) / PGSIZE;
     size_t alloc_size = pages * PGSIZE;
 
     uintptr_t va;
@@ -962,6 +1004,7 @@ void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t off
     if ((flags & MAP_FIXED) && addr != NULL) {
         va = (uintptr_t)addr;
         if (va < USER_HEAP_START || va + alloc_size > USER_HEAP_END) {
+            if (mmap_file) f_put(mmap_file);
             printk("sys_mmap: fixed address out of range\n");
             return MAP_FAILED;
         }
@@ -971,8 +1014,9 @@ void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t off
          * a VMA creates a gap that vma_find_free_region will reuse on the
          * next mmap call.  p->sz is left to sbrk/brk exclusively. */
         va = vma_find_free_region(p->vma_list, alloc_size,
-                                  USER_HEAP_START, USER_HEAP_START, USER_HEAP_END);
+                                  USER_MMAP_START, USER_MMAP_START, USER_HEAP_END);
         if (va == 0) {
+            if (mmap_file) f_put(mmap_file);
             printk("sys_mmap: out of virtual address space\n");
             return MAP_FAILED;
         }
@@ -985,18 +1029,31 @@ void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t off
 
     uint32_t vma_flags = VMA_PRIVATE;
     if (flags & MAP_SHARED) vma_flags = VMA_SHARED;
+    
+    if ((flags & MAP_SHARED) && mmap_file) {
+        printk("sys_mmap: MAP_SHARED file mapping — writes are NOT flushed to file\n");
+    }
 
-    struct vm_area *new_vma = vma_create(va, va + alloc_size,
-                                         vma_prot, vma_flags, VMA_TYPE_ANON);
-    if (!new_vma)
+    uint32_t vma_type = (mmap_file) ? VMA_TYPE_FILE : VMA_TYPE_ANON;
+
+    struct vm_area *new_vma = vma_create(va, va + alloc_size, vma_prot, vma_flags, vma_type);
+    if (!new_vma) {
+        if (mmap_file) f_put(mmap_file);
         return MAP_FAILED;
+    }
+
+    // Store file reference and offset in VMA.
+    // The VMA owns the f_get ref; released in sys_munmap and vma_free_all.
+    new_vma->file   = mmap_file;   // NULL for anonymous mappings
+    new_vma->offset = (uint64_t)offset;
 
     if (vma_insert(&p->vma_list, new_vma) != 0) {
+        if (mmap_file) f_put(mmap_file);
         vma_free(new_vma);
         return MAP_FAILED;
     }
 
-    return (void*)va;
+    return (void *)va;
 }
 
 int sys_munmap(void *addr, size_t length) {
@@ -1030,6 +1087,10 @@ int sys_munmap(void *addr, size_t length) {
         if (v->start < unmap_end && v->end > unmap_start &&
                 v->type != VMA_TYPE_DEVICE) {
             vma_remove(&p->vma_list, v);
+            // Release the file reference held since sys_mmap (Step 1).
+            // Safe to call with NULL (f_put is a no-op on NULL).
+            if (v->type == VMA_TYPE_FILE && v->file)
+                f_put((file_t *)v->file);
             vma_free(v);
         }
         v = next;
@@ -1275,8 +1336,15 @@ int sys_sigprocmask(int how, const uint32_t *set, uint32_t *oldset) {
         default: return -1;
     }
 
-    // SIGKILL (9) and SIGSTOP (19) can never be masked — POSIX requirement
-    new_mask &= ~((1U << KERNEL_SIGKILL) | (1U << KERNEL_SIGSTOP));
+    // SIGKILL (9), SIGSTOP (19), SIGILL (4), SIGABRT (6), SIGTRAP (5), SIGBUS (7)
+    // can never be masked.
+    // SIGABRT: abort() must terminate; a masked SIGABRT would leave the process alive.
+    // SIGTRAP: EBREAK fires repeatedly if SIGTRAP is masked (infinite re-fault loop).
+    // SIGBUS: misaligned access fires repeatedly if SIGBUS is masked (same loop).
+    // SIGHUP, SIGUSR1, SIGUSR2, SIGSYS are software-only; masking them is legal.
+    new_mask &= ~((1U << KERNEL_SIGKILL)  | (1U << KERNEL_SIGSTOP)  |
+                (1U << KERNEL_SIGILL)   | (1U << KERNEL_SIGABRT)  |
+                (1U << KERNEL_SIGTRAP)  | (1U << KERNEL_SIGBUS));
     current->signal_mask = new_mask;
     return 0;
 }
@@ -1603,7 +1671,8 @@ int sys_sigaction(int sig, const struct sigaction *act, struct sigaction *oldact
 
     if (oldact != NULL) {
         struct sigaction kold = { .sa_handler = (sighandler_t)current->handlers[sig],
-                                  .sa_mask = 0, .sa_flags = 0 };
+                                  .sa_mask = 0,
+                                  .sa_flags = (int)current->sig_flags[sig] };
         if (copy_to_user(oldact, &kold, sizeof(kold)) < 0) return -EFAULT;
     }
 
@@ -1614,6 +1683,7 @@ int sys_sigaction(int sig, const struct sigaction *act, struct sigaction *oldact
         if (copy_from_user(&kact, act, sizeof(kact)) < 0) return -EFAULT;
         if (kact.sa_handler != SIG_DFL && kact.sa_handler != SIG_IGN) return -EINVAL;
         current->handlers[sig] = (void *)kact.sa_handler;
+        current->sig_flags[sig] = (uint32_t)kact.sa_flags & SA_KNOWN_FLAGS;
     }
 
     return 0;
@@ -1789,8 +1859,14 @@ pid_t sys_setsid(void) {
     /* POSIX: process group leader cannot call setsid */
     if (current->pgid == current->pid)
         return -EPERM;
-    current->sid  = current->pid;
-    current->pgid = current->pid;
+    current->sid              = current->pid;
+    current->pgid             = current->pid;
+    current->is_session_leader = 1;
+    /* POSIX: setsid() creates a new session with NO controlling terminal.
+     * Do NOT set console_term.session_leader here — that would make every
+     * short-lived child that calls setsid() (e.g. test helpers) appear to
+     * own the console, causing proc_exit() to deliver spurious SIGHUP to
+     * the foreground process group when the child exits. */
     return current->sid;
 }
 
@@ -1850,6 +1926,16 @@ int sys_nanosleep(const struct timespec *req, struct timespec *rem) {
         }
         return 0;
     }
+    /*
+     * +1 tick: the process is at an unknown position within the current
+     * 100 ms tick interval when sys_nanosleep is called.  Without this,
+     * a 1-second request could wake after as little as ~900 ms of real
+     * time (if called 99 ms into the current tick), violating POSIX
+     * "at least the requested duration" semantics.  The extra tick makes
+     * the worst-case sleep (1001 ms for a 1 s request) rather than
+     * risking under-sleep.
+     */
+    ticks += 1;
 
     /*
      * Sleep on the process itself.  timer_handler() detects expiry via
@@ -1915,6 +2001,7 @@ int sys_clock_nanosleep(clockid_t clockid, int flags,
         if (sec < 0) return -EINVAL;
         ticks = (uint64_t)sec * TICKS_PER_SEC +
                 ((uint64_t)nsec + ns_per_tick - 1) / ns_per_tick;
+        if (ticks > 0) ticks += 1;  /* same partial-tick fix as sys_nanosleep */
     }
 
     if (ticks == 0) return 0;

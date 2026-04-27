@@ -32,7 +32,7 @@
 #define SYS_getppid  21
 #define SYS_pipe     22
 #define SYS_dup      23
-#define SYS_getuid   24
+#define SYS_getuid   174  /* Linux RISC-V ABI; matches libc/syscall.S "li a7, 174" */
 #define SYS_waitpid  25
 #define SYS_sigprocmask 26
 #define SYS_getcwd   27

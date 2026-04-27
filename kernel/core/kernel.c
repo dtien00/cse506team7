@@ -65,6 +65,8 @@ void run_all_tests(void) {
     accounting_test_run();
     rtc_test_run();
     jobctl_test_run();
+    sig_flag_test_run();
+    
     // kstack_overflow_test_run();   // DESTRUCTIVE: must be last — triggers kernel stack overflow panic
 
     // printk("%d passed, %d failed\n", passed, failed);

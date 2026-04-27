@@ -13,6 +13,7 @@
 #include "elf/elf.h"
 #include "fs/file.h"
 #include "process/wait.h"
+#include "tty/term.h"
 
 #ifndef SEEK_SET
 #define SEEK_SET 0
@@ -103,6 +104,7 @@ struct proc* proc_create(const char *name) {
      * sys_fork() overwrites these with the parent's pgid/sid. */
     p->pgid = p->pid;
     p->sid  = p->pid;
+    p->is_session_leader = 1;
     strncpy(p->name, name, MAX_NAME - 1);
     p->state = PROC_CREATED;
 
@@ -196,27 +198,64 @@ void proc_exit(int code) {
     if (current->parent)
         proc_wakeup(current->parent);
 
-    // Reparent children to init (pid 1) to prevent orphans
+    // Reparent children to init (pid 1) to prevent orphans.
+    // Auto_reap zombies (SA_NOCLDWAIT) are freed immediately rather than
+    // burdening init with children it will never wait for.
     struct proc *initproc = proc_find(1);
     struct proc *child = current->first_child;
     while (child) {
         struct proc *next_sib = child->sibling;
-        child->parent = initproc;
-        child->sibling = initproc->first_child;
-        initproc->first_child = child;
+        if (child->state == PROC_ZOMBIE && child->auto_reap) {
+            proc_free(child);
+        } else {
+            child->parent = initproc;
+            child->sibling = initproc->first_child;
+            initproc->first_child = child;
+        }
         child = next_sib;
     }
     current->first_child = NULL;
 
     if (current->parent) {
-        current->parent->pending_signals |= (1u << SIGCHLD);
-        // Only wake the parent's pending_signals channel if the parent has
-        // installed a non-default handler for SIGCHLD.  When the disposition
-        // is SIG_DFL, SIGCHLD's default action is "ignore" (POSIX) and the
-        // signal will be silently cleared at the next dispatch point.
-        // This prevents spurious wakeups of pause()/sigsuspend().
-        if (current->parent->handlers[SIGCHLD] != (void *)0 /* SIG_DFL */)
-            proc_wakeup(&current->parent->pending_signals);
+        if (current->parent->sig_flags[SIGCHLD] & SA_NOCLDWAIT) {
+            // SA_NOCLDWAIT: mark for auto-reap; do not deliver SIGCHLD.
+            // Parent wakeup to unblock waitpid() was already done above.
+            current->auto_reap = 1;
+        } else {
+            current->parent->pending_signals |= (1u << SIGCHLD);
+            // Only wake the parent's pending_signals channel if the parent has
+            // installed a non-default handler for SIGCHLD.  When the disposition
+            // is SIG_DFL, SIGCHLD's default action is "ignore" (POSIX) and the
+            // signal will be silently cleared at the next dispatch point.
+            // This prevents spurious wakeups of pause()/sigsuspend().
+            if (current->parent->handlers[SIGCHLD] != (void *)0 /* SIG_DFL */)
+                proc_wakeup(&current->parent->pending_signals);
+        }
+    }
+
+    // SIGHUP to foreground process group: deliver when the session leader exits.
+    // POSIX: when the controlling terminal's session leader terminates, SIGHUP is
+    // sent to each process in the terminal's foreground process group.
+    // Simplified model: iterate all terminals; if terminal->session_leader == current->pid,
+    // deliver SIGHUP to all processes whose pgid == terminal->foreground_pgid.
+    //
+    // Prerequisite: proc struct must have a 'sid' (session ID) field and terminals
+    // must track their session_leader pid. If those fields do not exist, add them.
+    if (current->is_session_leader) {
+        terminal_t *t = &console_term;
+        if (t->session_leader == current->pid && t->foreground_pgid > 0) {
+            for (int i = 0; i < MAX_PROCS; i++) {
+                struct proc *p = &proctab[i];
+                if (p->state == PROC_UNUSED || p->state == PROC_ZOMBIE) continue;
+                if (p == current) continue;
+                if (p->pgid == t->foreground_pgid) {
+                    p->pending_signals |= (1U << KERNEL_SIGHUP);
+                    if (p->state == PROC_BLOCKED &&
+                        !(p->signal_mask & (1U << KERNEL_SIGHUP)))
+                        proc_unblock(p);
+                }
+            }
+        }
     }
 
     // Switch back via the normal yield path so the current process context
@@ -243,6 +282,17 @@ int proc_wait(int *exit_code_out) {
         child = current->first_child;
         while (child) {
             have_children = 1;
+            // SA_NOCLDWAIT: sweep auto_reap zombies — never visible to wait().
+            if (child->state == PROC_ZOMBIE && child->auto_reap) {
+                struct proc **link = &current->first_child;
+                while (*link && *link != child) link = &(*link)->sibling;
+                if (*link == child) *link = child->sibling;
+                struct proc *nxt = child->sibling;
+                current->children_utime += child->utime_ticks;
+                proc_free(child);
+                child = nxt;
+                continue;
+            }
             if (child->state == PROC_ZOMBIE) {
                 int pid = child->pid;
                 // Remove child from parent's child list
@@ -280,8 +330,9 @@ int proc_wait(int *exit_code_out) {
 
 // Wait for a specific child pid to exit.  Returns child's PID on success,
 // or -1 if the target pid is not a child of the current process.
-// options: 1 = WNOHANG (return 0 immediately if no qualifying child found).
-//          2 = WUNTRACED / 8 = WCONTINUED: accepted but no-op until SIGSTOP/SIGCONT are implemented.
+// options: 1 = WNOHANG (return 0 immediately if no qualifying child found),
+//          2 = WUNTRACED (also report PROC_STOPPED children via stop_unreported),
+//          8 = WCONTINUED (also report continued children via cont_unreported).
 int proc_waitpid(pid_t target_pid, int *exit_code_out, int options) {
     if (!current) return -1;
 
@@ -307,6 +358,18 @@ int proc_waitpid(pid_t target_pid, int *exit_code_out, int options) {
         int have_target = 0;
         struct proc *child = current->first_child;
         while (child) {
+            // SA_NOCLDWAIT: sweep auto_reap zombies unconditionally — they must
+            // never be visible as zombies to waitpid callers.
+            if (child->state == PROC_ZOMBIE && child->auto_reap) {
+                struct proc **link = &current->first_child;
+                while (*link && *link != child) link = &(*link)->sibling;
+                if (*link == child) *link = child->sibling;
+                struct proc *next = child->sibling;
+                current->children_utime += child->utime_ticks;
+                proc_free(child);
+                child = next;
+                continue;
+            }
             int matches;
             switch (match_mode) {
                 case 2:  matches = 1; break;                          // any
@@ -584,6 +647,15 @@ static int build_user_stack(pagetable_t pt, uintptr_t stack_top,
 }
 
 int exec(const char *path, char *const argv[], char *const envp[]) {
+    dentry_t *exec_dentry = NULL;
+    int lookup_rc = vfs_lookup_from(current->fs->cwd, path, &exec_dentry);
+    if (lookup_rc < 0)
+        return -1;
+    int exec_perm_rc = vfs_may_access(exec_dentry->d_vnode, VFS_PERM_EXEC | VFS_PERM_READ);
+    dentry_put(exec_dentry);
+    if (exec_perm_rc < 0)
+        return -1;
+
     // 1. Open the binary
     int fd = file_open(path);
     if (fd < 0) return -1;
@@ -744,6 +816,13 @@ int exec(const char *path, char *const argv[], char *const envp[]) {
     for (int i = 0; i < 32; i++) {
         if (current->handlers[i] != (void *)SIG_IGN)
             current->handlers[i] = (void *)SIG_DFL;
+        for (int i = 1; i < 32; i++) {
+            if (current->handlers[i] != (void *)SIG_DFL &&
+                current->handlers[i] != (void *)SIG_IGN) {
+                current->handlers[i]  = (void *)SIG_DFL;
+                current->sig_flags[i] = 0;  // NEW: clear flags too
+            }
+        }
     }
     pagetable_t old_pt = current->pagetable;
     struct vm_area *old_vma_list = current->vma_list;

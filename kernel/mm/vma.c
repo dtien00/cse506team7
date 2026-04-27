@@ -1,7 +1,9 @@
 #include "mm/vma.h"
 #include "mm/kmalloc.h"
 #include "kernel/printk.h"
+#include "kernel/types.h"
 #include "lib/string.h"
+#include "fs/file.h"
 
 void vma_init(struct vm_area **vma_list) {
     if (vma_list) {
@@ -108,6 +110,8 @@ void vma_free_all(struct vm_area *vma_list) {
     struct vm_area *vma = vma_list;
     while (vma) {
         struct vm_area *next = vma->next;
+        if (vma->type == VMA_TYPE_FILE && vma->file)
+            f_put((file_t *)vma->file);
         vma_free(vma);
         vma = next;
     }
@@ -223,21 +227,26 @@ int vma_copy_all(struct vm_area **dest_list, struct vm_area *src_list) {
     struct vm_area *src = src_list;
     struct vm_area **dest_tail = dest_list;
 
-    while (src) {
-        struct vm_area *new_vma = vma_create(src->start, src->end, src->prot, src->flags, src->type);
+        while (src) {
+        struct vm_area *new_vma = vma_create(src->start, src->end,
+                                             src->prot, src->flags, src->type);
         if (!new_vma) {
             vma_free_all(*dest_list);
             *dest_list = NULL;
             return -1;
         }
 
-        new_vma->file = src->file;
+        new_vma->file   = src->file;
         new_vma->offset = src->offset;
 
-        *dest_tail = new_vma;
-        dest_tail = &new_vma->next;
+        // Bump the file reference so the child's VMA is an independent owner.
+        // The child releases its ref when it munmaps or exits (vma_free_all).
+        if (new_vma->file && new_vma->type == VMA_TYPE_FILE)
+            file_ref((file_t *)new_vma->file);
 
-        src = src->next;
+        *dest_tail = new_vma;
+        dest_tail  = &new_vma->next;
+        src        = src->next;
     }
 
     return 0;

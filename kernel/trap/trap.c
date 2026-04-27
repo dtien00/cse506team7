@@ -192,6 +192,49 @@ void handle_exception(trap_frame *frame) {
         page_fault_handler(frame);
         return;
     }
+    if (!(frame->sstatus & SSTATUS_SPP) && current) {
+        switch (frame->scause) {
+            case SCAUSE_ILLEGAL_INST:
+                // Invalid / reserved opcode executed by user process.
+                current->pending_signals |= (1U << KERNEL_SIGILL);
+                return;
+            case SCAUSE_BREAKPOINT:
+                // EBREAK / C.EBREAK executed by user process.
+                // Standard RISC-V EBREAK is 4 bytes; compressed C.EBREAK is 2 bytes.
+                // We do not advance sepc: the process is killed via KERNEL_FATAL_SIGS.
+                // sepc advancement is only relevant if a signal handler could resume
+                // execution past EBREAK, which requires sigaction frame dispatch.
+                current->pending_signals |= (1U << KERNEL_SIGTRAP);
+                return;
+            case SCAUSE_INST_ACCESS_FAULT:
+                // User process tried to fetch an instruction from an inaccessible address.
+                // Maps to SIGSEGV (cannot execute at that address), not SIGILL.
+                current->pending_signals |= (1U << KERNEL_SIGSEGV);
+                return;
+            case SCAUSE_LOAD_ACCESS_FAULT:
+            case SCAUSE_STORE_ACCESS_FAULT:
+                // PMP-level access denial on load or store — region exists but is forbidden.
+                // Maps to SIGSEGV (access violation).
+                current->pending_signals |= (1U << KERNEL_SIGSEGV);
+                return;
+            
+            case SCAUSE_INST_MISALIGNED:
+            case SCAUSE_LOAD_MISALIGNED:
+            case SCAUSE_STORE_MISALIGNED:
+                // Unaligned memory access by user process.
+                // QEMU virt emulates misaligned accesses in hardware, so these causes
+                // are rare in practice. On real hardware they are not emulated and trap.
+                // SIGBUS is unmaskable (see sys_sigprocmask) to prevent the infinite
+                // re-fault loop that would occur if the process returned to the same
+                // unaligned instruction with the signal still pending.
+                current->pending_signals |= (1U << KERNEL_SIGBUS);
+                return;
+
+            default:
+                break; // S-mode or unknown cause; fall through to panic below
+        }
+    }
+    // S-mode exceptions (or unrecognized U-mode exceptions) fall through to panic:
 
     printk("\nEXCEPTION: scause=0x%p stval=0x%p sepc=0x%p\n", frame->scause, frame->stval, frame->sepc);
     dump_exception_diagnostics(frame);
@@ -375,12 +418,20 @@ static void kill_current(trap_frame *frame, const char *reason) {
         while (1) asm volatile("wfi");
     }
 
+    // U-mode fatal fault: deliver SIGSEGV via pending_signals before exiting.
+    // Setting the bit ensures consistent signal accounting and correct exit encoding.
+    // proc_exit(-KERNEL_SIGSEGV) encodes signal 11 so waitpid(WTERMSIG) returns 11.
     printk("SEGFAULT: pid=%d %s sepc=0x%p stval=0x%p\n",
            current ? current->pid : -1, reason,
            frame->sepc, frame->stval);
 
     if (current) {
-        proc_exit(1);   // does not return — switches to scheduler
+        current->pending_signals |= (1U << KERNEL_SIGSEGV);
+        // Bypass the pending_signals delivery filter: proc_exit is called directly.
+        // Real page faults cannot be masked by sigprocmask — this is intentional.
+        // kill(pid, SIGSEGV) goes through pending_signals and respects signal_mask;
+        // this path does not. See test AH in test_signal_faults.c.
+        proc_exit(-KERNEL_SIGSEGV);   // does not return — switches to scheduler
     }
 
     /* No current process (fault in kernel context) — panic. */
@@ -538,7 +589,39 @@ void page_fault_handler(trap_frame *frame) {
         kill_current(frame, "out of physical memory");
         return;
     }
-    memset(phys, 0, PGSIZE);
+    memset(phys, 0, PGSIZE);   // always zero-fill first (handles partial EOF page)
+
+    /* ── 6a. File-backed VMA: read page content from file ───────────────────
+     *
+     * Zero-fill above ensures bytes past EOF are zero without a separate memset.
+     * If the read returns fewer than PGSIZE bytes (end of file), the remainder
+     * is already zeroed.  If ops.read fails, the page stays zeroed — the process
+     * will see garbage, but it will not crash the kernel.
+     *
+     * POSIX note: MAP_SHARED reads past EOF deliver SIGBUS (implemented below).
+     * MAP_PRIVATE reads past EOF are zero-padded (Linux/POSIX behaviour).
+     */
+    if (vma->type == VMA_TYPE_FILE && vma->file) {
+        file_t  *f        = (file_t *)vma->file;
+        vnode_t *vn       = f->vnode;
+        uint64_t file_off = vma->offset + (page_va - vma->start);
+
+        if (vn && file_off >= (uint64_t)vn->size) {
+            // Access starts at or beyond EOF.
+            // MAP_SHARED: POSIX requires SIGBUS (cannot fabricate file content).
+            // MAP_PRIVATE: zero-fill is correct (Linux behaviour); fall through.
+            if (vma->flags & VMA_SHARED) {
+                pmm_free_page(phys);
+                current->pending_signals |= (1U << KERNEL_SIGBUS);
+                return;  // fatal signal delivered at trap_handler return
+            }
+            // MAP_PRIVATE past EOF: page stays zero-filled (memset above).
+        } else if (vn && vn->fs_type) {
+            // ops.read(vnode, buf, offset, len) — offset-based, does not advance f->offset
+            vn->fs_type->ops.read(vn, phys, (size_t)file_off, PGSIZE);
+            // Short reads (partial EOF page) leave the zero-filled remainder intact.
+        }
+    }
 
     /* ── 7. Map the new page into the current page table ─────────────────── */
     uint64_t pte_perm = vma_prot_to_pte(vma->prot);

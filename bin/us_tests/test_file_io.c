@@ -75,6 +75,23 @@ void run_test_file_io(us_test_group_t *group) {
         TEST(group, "chmod: stat after chmod succeeds", sr == 0);
         TEST(group, "chmod: mode bits are 0600", sr == 0 && (cst.st_mode & 0777) == 0600);
 
+        int rd = open("/tmp/perm_test.txt", O_RDONLY);
+        TEST(group, "chmod: read still allowed with 0600", rd >= 0);
+        if (rd >= 0) close(rd);
+
+        cr = chmod("/tmp/perm_test.txt", 0000);
+        TEST(group, "chmod: can drop permissions to 0000", cr == 0);
+        TEST(group, "chmod: open denied after 0000",
+             open("/tmp/perm_test.txt", O_RDONLY) < 0);
+
+        cr = chmod("/tmp/perm_test.txt", 0200);
+        TEST(group, "chmod: can set write-only mode", cr == 0);
+        TEST(group, "chmod: read open denied after 0200",
+             open("/tmp/perm_test.txt", O_RDONLY) < 0);
+        int wfd = open("/tmp/perm_test.txt", O_WRONLY);
+        TEST(group, "chmod: write open allowed after 0200", wfd >= 0);
+        if (wfd >= 0) close(wfd);
+
         /* chmod nonexistent path returns error */
         TEST(group, "chmod: nonexistent path returns error",
              chmod("/tmp/no_such_file_xyz.txt", 0600) < 0);
@@ -96,6 +113,26 @@ void run_test_file_io(us_test_group_t *group) {
 
         /* fchmod bad fd returns error */
         TEST(group, "fchmod: bad fd returns error", fchmod(-1, 0644) < 0);
+    }
+
+    /* directory search/write permissions */
+    {
+        mkdir("/tmp/perm_dir", 0755);
+        int cr = chmod("/tmp/perm_dir", 0666);
+        TEST(group, "dir-perm: chmod remove execute bit succeeds", cr == 0);
+        TEST(group, "dir-perm: create in non-searchable dir fails",
+             open("/tmp/perm_dir/file.txt", O_CREAT | O_WRONLY, 0644) < 0);
+
+        cr = chmod("/tmp/perm_dir", 0777);
+        TEST(group, "dir-perm: restore execute bit succeeds", cr == 0);
+        int pfd = open("/tmp/perm_dir/file.txt", O_CREAT | O_WRONLY, 0644);
+        TEST(group, "dir-perm: create succeeds after restoring execute", pfd >= 0);
+        if (pfd >= 0) close(pfd);
+
+        cr = chmod("/tmp/perm_dir", 0555);
+        TEST(group, "dir-perm: remove write bit succeeds", cr == 0);
+        TEST(group, "dir-perm: create denied without directory write",
+             open("/tmp/perm_dir/second.txt", O_CREAT | O_WRONLY, 0644) < 0);
     }
 
     /* rmdir */
