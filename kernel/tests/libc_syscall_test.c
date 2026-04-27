@@ -25,7 +25,7 @@
 #include "errno.h"
 #include "lib/string.h"
 #include "mm/kmalloc.h"
-#include <sys/mman.h>
+#include "mm/mman.h"
 #include "mm/vma.h"
 
 static int passed = 0;
