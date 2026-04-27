@@ -824,6 +824,11 @@ int exec(const char *path, char *const argv[], char *const envp[]) {
             }
         }
     }
+    // POSIX: close all FDs marked O_CLOEXEC before the new image starts.
+    for (int i = 0; i < MAX_FDS; i++) {
+        if (current->fds.files[i] && (current->fds.files[i]->flags & O_CLOEXEC))
+            fd_close(&current->fds, i);
+    }
     pagetable_t old_pt = current->pagetable;
     struct vm_area *old_vma_list = current->vma_list;
 

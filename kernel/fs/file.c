@@ -295,7 +295,9 @@ static void file_release(file_t *f) {
 
 int file_read(int fd, void *buf, size_t len) {
     file_t *f = fd_get(&current->fds, fd);
-    if (!f || !buf)
+    if (!f)
+        return -EBADF;
+    if (!buf)
         return -EINVAL;
 
     switch (f->type) {
@@ -347,7 +349,9 @@ int file_read(int fd, void *buf, size_t len) {
 
 int file_write(int fd, const void *buf, size_t len) {
     file_t *f = fd_get(&current->fds, fd);
-    if (!f || !buf)
+    if (!f)
+        return -EBADF;
+    if (!buf)
         return -EINVAL;
 
     switch (f->type) {

@@ -49,15 +49,19 @@ void run_test_gettimeofday(us_test_group_t *group) {
         TEST(group, "monotone: composite usec non-decreasing",  gtod_to_usec(&t2) >= gtod_to_usec(&t1));
     }
 
-    /* 5. After sleep(1), elapsed time is at least 1 second */
+    /* 5. After sleep(1), elapsed time is roughly 1 second.
+     * Measure in µs via gtod_to_usec() to avoid the tv_sec-boundary edge case:
+     * sleep(1) can complete in ~901ms real time (partial first tick), which
+     * maps to delta_sec == 0 when gettimeofday(&before) falls in the last 99ms
+     * of a calendar second. Lower bound 800ms; upper bound 10s for slow QEMU. */
     {
         struct timeval before, after;
         gettimeofday(&before, NULL);
         sleep(1);
         gettimeofday(&after, NULL);
-        long delta = (long)after.tv_sec - (long)before.tv_sec;
-        TEST(group, "elapsed >= 1s after sleep(1)", delta >= 1);
-        TEST(group, "elapsed <= 5s after sleep(1)", delta <= 5);
+        long delta_us = gtod_to_usec(&after) - gtod_to_usec(&before);
+        TEST(group, "elapsed >= 800ms after sleep(1)", delta_us >= 800000);
+        TEST(group, "elapsed <= 10s after sleep(1)",   delta_us <= 10000000);
     }
 
     /* 6. NULL tv: no crash, returns 0 */
@@ -111,14 +115,14 @@ void run_test_gettimeofday(us_test_group_t *group) {
         TEST(group, "tv_usec always in [0,999999] over 20 calls", valid);
     }
 
-    /* 12. tv_sec delta over sleep(1) is 1-5 s */
+    /* 12. Elapsed µs over sleep(1) is 800ms-10s (same rationale as section 5). */
     {
         struct timeval t1, t2;
         gettimeofday(&t1, NULL);
         sleep(1);
         gettimeofday(&t2, NULL);
-        long delta = (long)t2.tv_sec - (long)t1.tv_sec;
-        TEST(group, "tv_sec delta after sleep(1) is 1-5s", delta >= 1 && delta <= 5);
+        long delta_us = gtod_to_usec(&t2) - gtod_to_usec(&t1);
+        TEST(group, "elapsed after sleep(1) is 800ms-10s", delta_us >= 800000 && delta_us <= 10000000);
     }
 
     ut_group_end(group);
