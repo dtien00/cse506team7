@@ -957,15 +957,13 @@ int sys_kill(pid_t pid, int sig) {
 }
 
 void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset) {
-    (void)fd;
-    (void)offset;
-
-    if (length == 0) {
+    if (length == 0 || (offset & (PGSIZE - 1))) {
         return MAP_FAILED;
     }
 
-    if (!(flags & MAP_ANONYMOUS)) {
-        printk("sys_mmap: file-backed mapping not supported yet\n");
+    // Offset must be page-aligned (POSIX requirement).
+    if (!(flags & MAP_ANONYMOUS) && (offset & (PGSIZE - 1))) {
+        printk("sys_mmap: file offset not page-aligned\n");
         return MAP_FAILED;
     }
 
@@ -975,7 +973,24 @@ void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t off
         return MAP_FAILED;
     }
 
-    size_t pages = (length + PGSIZE - 1) / PGSIZE;
+    // Acquire file reference for file-backed mappings.
+    // f_get() bumps ref_count; the VMA holds it until munmap / proc_exit.
+    // fd may be closed by the caller immediately after mmap() — this is legal (POSIX).
+    file_t *mmap_file = NULL;
+    if (!(flags & MAP_ANONYMOUS)) {
+        mmap_file = f_get(p, fd);
+        if (!mmap_file) {
+            printk("sys_mmap: invalid fd %d\n", fd);
+            return MAP_FAILED;
+        }
+        if (mmap_file->type != FILE_VNODE || !mmap_file->vnode) {
+            f_put(mmap_file);
+            printk("sys_mmap: fd %d is not a regular file\n", fd);
+            return MAP_FAILED;
+        }
+    }
+
+    size_t pages     = (length + PGSIZE - 1) / PGSIZE;
     size_t alloc_size = pages * PGSIZE;
 
     uintptr_t va;
@@ -983,6 +998,7 @@ void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t off
     if ((flags & MAP_FIXED) && addr != NULL) {
         va = (uintptr_t)addr;
         if (va < USER_HEAP_START || va + alloc_size > USER_HEAP_END) {
+            if (mmap_file) f_put(mmap_file);
             printk("sys_mmap: fixed address out of range\n");
             return MAP_FAILED;
         }
@@ -994,6 +1010,7 @@ void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t off
         va = vma_find_free_region(p->vma_list, alloc_size,
                                   USER_HEAP_START, USER_HEAP_START, USER_HEAP_END);
         if (va == 0) {
+            if (mmap_file) f_put(mmap_file);
             printk("sys_mmap: out of virtual address space\n");
             return MAP_FAILED;
         }
@@ -1006,18 +1023,31 @@ void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t off
 
     uint32_t vma_flags = VMA_PRIVATE;
     if (flags & MAP_SHARED) vma_flags = VMA_SHARED;
+    
+    if ((flags & MAP_SHARED) && mmap_file) {
+        printk("sys_mmap: MAP_SHARED file mapping — writes are NOT flushed to file\n");
+    }
 
-    struct vm_area *new_vma = vma_create(va, va + alloc_size,
-                                         vma_prot, vma_flags, VMA_TYPE_ANON);
-    if (!new_vma)
+    uint32_t vma_type = (mmap_file) ? VMA_TYPE_FILE : VMA_TYPE_ANON;
+
+    struct vm_area *new_vma = vma_create(va, va + alloc_size, vma_prot, vma_flags, vma_type);
+    if (!new_vma) {
+        if (mmap_file) f_put(mmap_file);
         return MAP_FAILED;
+    }
+
+    // Store file reference and offset in VMA.
+    // The VMA owns the f_get ref; released in sys_munmap and vma_free_all.
+    new_vma->file   = mmap_file;   // NULL for anonymous mappings
+    new_vma->offset = (uint64_t)offset;
 
     if (vma_insert(&p->vma_list, new_vma) != 0) {
+        if (mmap_file) f_put(mmap_file);
         vma_free(new_vma);
         return MAP_FAILED;
     }
 
-    return (void*)va;
+    return (void *)va;
 }
 
 int sys_munmap(void *addr, size_t length) {
@@ -1051,6 +1081,10 @@ int sys_munmap(void *addr, size_t length) {
         if (v->start < unmap_end && v->end > unmap_start &&
                 v->type != VMA_TYPE_DEVICE) {
             vma_remove(&p->vma_list, v);
+            // Release the file reference held since sys_mmap (Step 1).
+            // Safe to call with NULL (f_put is a no-op on NULL).
+            if (v->type == VMA_TYPE_FILE && v->file)
+                f_put((file_t *)v->file);
             vma_free(v);
         }
         v = next;
@@ -1296,13 +1330,15 @@ int sys_sigprocmask(int how, const uint32_t *set, uint32_t *oldset) {
         default: return -1;
     }
 
-    // SIGKILL (9), SIGSTOP (19), SIGILL (4), SIGABRT (6), SIGTRAP (5) can never be masked.
+    // SIGKILL (9), SIGSTOP (19), SIGILL (4), SIGABRT (6), SIGTRAP (5), SIGBUS (7)
+    // can never be masked.
     // SIGABRT: abort() must terminate; a masked SIGABRT would leave the process alive.
-    // SIGTRAP: EBREAK fires repeatedly if SIGTRAP is masked — same loop as Bug 1 in SIGS.md.
+    // SIGTRAP: EBREAK fires repeatedly if SIGTRAP is masked (infinite re-fault loop).
+    // SIGBUS: misaligned access fires repeatedly if SIGBUS is masked (same loop).
     // SIGHUP, SIGUSR1, SIGUSR2, SIGSYS are software-only; masking them is legal.
     new_mask &= ~((1U << KERNEL_SIGKILL)  | (1U << KERNEL_SIGSTOP)  |
                 (1U << KERNEL_SIGILL)   | (1U << KERNEL_SIGABRT)  |
-                (1U << KERNEL_SIGTRAP));
+                (1U << KERNEL_SIGTRAP)  | (1U << KERNEL_SIGBUS));
     current->signal_mask = new_mask;
     return 0;
 }

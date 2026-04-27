@@ -39,10 +39,9 @@ void ut_check(us_test_group_t *group, int cond, const char *name, const char *fi
 }
 
 void ut_skip(us_test_group_t *group, const char *name, const char *reason) {
-    (void)name;
-    (void)reason;
     group->skipped++;
     g_total_skipped++;
+    printf("  [SKIP] %s: %s\n", name, reason);
 }
 
 int ut_suite_end(const us_test_group_t *groups, int count) {

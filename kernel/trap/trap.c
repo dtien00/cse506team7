@@ -215,9 +215,17 @@ void handle_exception(trap_frame *frame) {
                 current->pending_signals |= (1U << KERNEL_SIGSEGV);
                 return;
             
-            // SCAUSE_INST_MISALIGNED / LOAD_MISALIGNED / STORE_MISALIGNED:
-            // These map to SIGBUS (7) on Linux. SIGBUS is not yet implemented.
-            // Fall through to panic for now; add here when SIGBUS is wired up.
+            case SCAUSE_INST_MISALIGNED:
+            case SCAUSE_LOAD_MISALIGNED:
+            case SCAUSE_STORE_MISALIGNED:
+                // Unaligned memory access by user process.
+                // QEMU virt emulates misaligned accesses in hardware, so these causes
+                // are rare in practice. On real hardware they are not emulated and trap.
+                // SIGBUS is unmaskable (see sys_sigprocmask) to prevent the infinite
+                // re-fault loop that would occur if the process returned to the same
+                // unaligned instruction with the signal still pending.
+                current->pending_signals |= (1U << KERNEL_SIGBUS);
+                return;
 
             default:
                 break; // S-mode or unknown cause; fall through to panic below
@@ -568,7 +576,39 @@ void page_fault_handler(trap_frame *frame) {
         kill_current(frame, "out of physical memory");
         return;
     }
-    memset(phys, 0, PGSIZE);
+    memset(phys, 0, PGSIZE);   // always zero-fill first (handles partial EOF page)
+
+    /* ── 6a. File-backed VMA: read page content from file ───────────────────
+     *
+     * Zero-fill above ensures bytes past EOF are zero without a separate memset.
+     * If the read returns fewer than PGSIZE bytes (end of file), the remainder
+     * is already zeroed.  If ops.read fails, the page stays zeroed — the process
+     * will see garbage, but it will not crash the kernel.
+     *
+     * POSIX note: MAP_SHARED reads past EOF deliver SIGBUS (implemented below).
+     * MAP_PRIVATE reads past EOF are zero-padded (Linux/POSIX behaviour).
+     */
+    if (vma->type == VMA_TYPE_FILE && vma->file) {
+        file_t  *f        = (file_t *)vma->file;
+        vnode_t *vn       = f->vnode;
+        uint64_t file_off = vma->offset + (page_va - vma->start);
+
+        if (vn && file_off >= (uint64_t)vn->size) {
+            // Access starts at or beyond EOF.
+            // MAP_SHARED: POSIX requires SIGBUS (cannot fabricate file content).
+            // MAP_PRIVATE: zero-fill is correct (Linux behaviour); fall through.
+            if (vma->flags & VMA_SHARED) {
+                pmm_free_page(phys);
+                current->pending_signals |= (1U << KERNEL_SIGBUS);
+                return;  // fatal signal delivered at trap_handler return
+            }
+            // MAP_PRIVATE past EOF: page stays zero-filled (memset above).
+        } else if (vn && vn->fs_type) {
+            // ops.read(vnode, buf, offset, len) — offset-based, does not advance f->offset
+            vn->fs_type->ops.read(vn, phys, (size_t)file_off, PGSIZE);
+            // Short reads (partial EOF page) leave the zero-filled remainder intact.
+        }
+    }
 
     /* ── 7. Map the new page into the current page table ─────────────────── */
     uint64_t pte_perm = vma_prot_to_pte(vma->prot);

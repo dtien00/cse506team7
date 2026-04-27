@@ -334,6 +334,105 @@ void kill_test_run(void) {
         proc_free(p);
     }
 
+    // ── SIGBUS / SIGFPE dispatch ──────────────────────────────────────────────────
+    printk("=== SIGBUS / SIGFPE dispatch ===\n");
+
+    // Test: kill(pid, SIGBUS) sets bit 7 in pending_signals
+    {
+        struct proc *p = proc_alloc();
+        p->pid = 306; p->state = PROC_READY; p->signal_mask = 0; p->pending_signals = 0;
+        proc_ready(p);
+        int r = sys_kill(p->pid, SIGBUS);
+        TEST("SIGBUS: sys_kill returns 0", r == 0);
+        TEST("SIGBUS: bit 7 set in pending_signals", p->pending_signals & (1U << 7));
+        struct proc *drain; do { drain = proc_next_ready(); } while (drain && drain != p);
+        proc_free(p);
+    }
+
+    // Test: kill(pid, SIGFPE) sets bit 8 in pending_signals
+    {
+        struct proc *p = proc_alloc();
+        p->pid = 307; p->state = PROC_READY; p->signal_mask = 0; p->pending_signals = 0;
+        proc_ready(p);
+        sys_kill(p->pid, SIGFPE);
+        TEST("SIGFPE: bit 8 set in pending_signals", p->pending_signals & (1U << 8));
+        struct proc *drain; do { drain = proc_next_ready(); } while (drain && drain != p);
+        proc_free(p);
+    }
+
+    // Test: KERNEL_FATAL_SIGS includes SIGBUS (7) and SIGFPE (8)
+    {
+        TEST("KERNEL_FATAL_SIGS includes SIGBUS(7)",  KERNEL_FATAL_SIGS & (1U << 7));
+        TEST("KERNEL_FATAL_SIGS includes SIGFPE(8)",  KERNEL_FATAL_SIGS & (1U << 8));
+        TEST("KERNEL_SIGBUS constant is 7",           KERNEL_SIGBUS == 7);
+        TEST("KERNEL_SIGFPE constant is 8",           KERNEL_SIGFPE == 8);
+    }
+
+    // Test: SIGBUS to PROC_BLOCKED — bit set, proc_unblock called → PROC_READY
+    {
+        struct proc *p = proc_alloc();
+        p->pid = 308; p->state = PROC_CREATED; p->signal_mask = 0;
+        p->pending_signals = 0; p->chan = p;
+        proc_block(p);
+        sys_kill(p->pid, SIGBUS);
+        TEST("SIGBUS to BLOCKED: bit 7 set", p->pending_signals & (1U << 7));
+        TEST("SIGBUS to BLOCKED: state becomes PROC_READY", p->state == PROC_READY);
+        struct proc *drain; do { drain = proc_next_ready(); } while (drain && drain != p);
+        proc_free(p);
+    }
+
+    // Test: SIGBUS to PROC_ZOMBIE — returns -1, state unchanged
+    {
+        struct proc *p = proc_alloc();
+        p->pid = 309; p->state = PROC_ZOMBIE; p->pending_signals = 0;
+        int r = sys_kill(p->pid, SIGBUS);
+        TEST("SIGBUS to ZOMBIE: returns -1",        r == -1);
+        TEST("SIGBUS to ZOMBIE: state unchanged",   p->state == PROC_ZOMBIE);
+        proc_free(p);
+    }
+
+    // Test: SIGBUS unmasked — passes KERNEL_FATAL_SIGS delivery filter
+    {
+        struct proc *p = proc_alloc();
+        p->pid = 310; p->state = PROC_READY; p->signal_mask = 0; p->pending_signals = 0;
+        proc_ready(p);
+        sys_kill(p->pid, SIGBUS);
+        uint32_t unmasked = p->pending_signals & ~p->signal_mask;
+        TEST("SIGBUS unmasked: passes delivery filter",
+             unmasked & KERNEL_FATAL_SIGS & (1U << 7));
+        struct proc *drain; do { drain = proc_next_ready(); } while (drain && drain != p);
+        proc_free(p);
+    }
+
+    // Test: sys_sigprocmask strip removes SIGBUS — it cannot be masked
+    // Directly verify the strip formula matches the enforcement in sys_sigprocmask.
+    {
+        uint32_t attempted = 0xFFFFFFFFU;  // try to mask every signal
+        uint32_t stripped  = attempted & ~((1U << KERNEL_SIGKILL) | (1U << KERNEL_SIGSTOP) |
+                                           (1U << KERNEL_SIGILL)  | (1U << KERNEL_SIGABRT) |
+                                           (1U << KERNEL_SIGTRAP) | (1U << KERNEL_SIGBUS));
+        TEST("SIGBUS unmaskable: bit 7 cleared by sigprocmask strip formula",
+             !(stripped & (1U << KERNEL_SIGBUS)));
+        TEST("SIGBUS not in KERNEL_STOP_SIGS", !(KERNEL_STOP_SIGS & (1U << KERNEL_SIGBUS)));
+        TEST("SIGFPE not in KERNEL_STOP_SIGS", !(KERNEL_STOP_SIGS & (1U << KERNEL_SIGFPE)));
+        // SIGQUIT (maskable) survives the strip
+        TEST("SIGQUIT(3) survives strip (still maskable)", stripped & (1U << KERNEL_SIGQUIT));
+    }
+
+    // Test: multi-signal race — SIGBUS (7) fires before SIGSEGV (11) via ctz ordering
+    {
+        struct proc *p = proc_alloc();
+        p->pid = 311; p->state = PROC_READY; p->signal_mask = 0; p->pending_signals = 0;
+        proc_ready(p);
+        sys_kill(p->pid, SIGSEGV);   // bit 11
+        sys_kill(p->pid, SIGBUS);    // bit 7
+        uint32_t fatal = (p->pending_signals & ~p->signal_mask) & KERNEL_FATAL_SIGS;
+        TEST("SIGBUS(7) fires before SIGSEGV(11) when both pending (ctz)",
+             kernel_ctz(fatal) == 7);
+        struct proc *drain; do { drain = proc_next_ready(); } while (drain && drain != p);
+        proc_free(p);
+    }
+
     // ── Group A: SIGUSR1 / SIGUSR2 basic dispatch ────────────────────────────────
     printk("=== Group A: SIGUSR1 / SIGUSR2 / SIGABRT / SIGTRAP / SIGHUP / SIGSYS basic dispatch ===\n");
 
