@@ -957,7 +957,7 @@ int sys_kill(pid_t pid, int sig) {
 }
 
 void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset) {
-    if (length == 0) {
+    if (length == 0 || (offset & (PGSIZE - 1))) {
         return MAP_FAILED;
     }
 
@@ -1023,6 +1023,10 @@ void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t off
 
     uint32_t vma_flags = VMA_PRIVATE;
     if (flags & MAP_SHARED) vma_flags = VMA_SHARED;
+    
+    if ((flags & MAP_SHARED) && mmap_file) {
+        printk("sys_mmap: MAP_SHARED file mapping — writes are NOT flushed to file\n");
+    }
 
     uint32_t vma_type = (mmap_file) ? VMA_TYPE_FILE : VMA_TYPE_ANON;
 

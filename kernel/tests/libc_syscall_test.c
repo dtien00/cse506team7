@@ -220,7 +220,7 @@ static void test_sys_mmap(void) {
     void *zr = sys_mmap(NULL, 0, 0x3, 0x22, -1, 0);
     TEST("sys_mmap length=0 returns MAP_FAILED", zr == (void *)-1LL);
 
-    /* File-backed mmap not supported */
+    /* File-backed mmap */
     void *fbr = sys_mmap(NULL, 4096, 0x3, 0x02 /* MAP_PRIVATE, no MAP_ANONYMOUS */, 3, 0);
     TEST("sys_mmap file-backed returns MAP_FAILED", fbr == (void *)-1LL);
 }
