@@ -70,6 +70,7 @@ void run_test_bigfile(us_test_group_t *group);
 void run_test_forkstress(us_test_group_t *group);
 void run_test_dirops(us_test_group_t *group);
 void run_test_lazy_alloc(us_test_group_t *group);
+void run_test_demand_heap(us_test_group_t *group);
 void run_test_inode_openunlink(us_test_group_t *group);
 void run_test_syscall_robustness(us_test_group_t *group);
 void run_test_fd_offset(us_test_group_t *group);
@@ -192,6 +193,7 @@ int main(int argc, char **argv, char **envp) {
     if (RUN_MEMORY_HEAVY) {
         run_test_malloc(&groups[idx++]);
         run_test_lazy_alloc(&groups[idx++]);
+        run_test_demand_heap(&groups[idx++]);
     }
 
     /* ── Disabled stress / destructive tests (uncomment individually) ───────── */

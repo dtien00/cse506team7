@@ -28,6 +28,11 @@
 
 #define USER_HEAP_START 0x11000000UL
 #define USER_HEAP_END   MAXVA  /* Sv39 user VA ceiling; device VMAs block kernel/MMIO ranges */
+/* mmap allocations start well above the heap so that sbrk growth and
+ * anonymous/file mmap regions never share the same VA range.
+ * 0x40000000 = 1 GB; gives ~768 MB of heap space (0x11000000..0x40000000)
+ * and the full remainder of user VA space for mmap. */
+#define USER_MMAP_START 0x40000000UL
 
 #define MAX_ARGS 64
 #define KARG_MAX 256
@@ -485,6 +490,7 @@ pid_t sys_fork(void) {
         return -1;
     }
 
+    child->sz = current->sz;
     child->signal_mask = current->signal_mask; // Fork child inherits parent's signal mask
     // POSIX: child inherits parent's signal disposition table across fork
     memcpy(child->handlers, current->handlers, sizeof(current->handlers));
@@ -1008,7 +1014,7 @@ void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t off
          * a VMA creates a gap that vma_find_free_region will reuse on the
          * next mmap call.  p->sz is left to sbrk/brk exclusively. */
         va = vma_find_free_region(p->vma_list, alloc_size,
-                                  USER_HEAP_START, USER_HEAP_START, USER_HEAP_END);
+                                  USER_MMAP_START, USER_MMAP_START, USER_HEAP_END);
         if (va == 0) {
             if (mmap_file) f_put(mmap_file);
             printk("sys_mmap: out of virtual address space\n");
