@@ -70,6 +70,7 @@ void run_all_tests(void) {
     // kstack_overflow_test_run();   // DESTRUCTIVE: must be last — triggers kernel stack overflow panic
 
     // printk("%d passed, %d failed\n", passed, failed);
+    test_summary_report();
 }
 
 void boot(uint64_t hart_id, uint64_t dtb) {

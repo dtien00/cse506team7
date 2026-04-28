@@ -1,15 +1,21 @@
 #pragma once
 
+void test_record(int passed_case);
+void test_summary_reset(void);
+void test_summary_report(void);
+
 // PASSED AND FAILED MUST BE DEFINED IN THE TEST FILES THEMSELVES, NOT HERE, WHEN TEST IS USED
 #define TEST(name, cond)                                    \
     do {                                                    \
         if (cond) {                                         \
             printk("  [PASS] %s\n", name);                \
             passed++;                                       \
+            test_record(1);                                 \
         } else {                                            \
             printk("  [FAIL] %s  (%s:%d)\n", name,       \
                     __FILE__, __LINE__);                    \
             failed++;                                       \
+            test_record(0);                                 \
         }                                                   \
     } while (0)
 
