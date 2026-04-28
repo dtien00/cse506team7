@@ -179,7 +179,7 @@ void tmpfs_test(void) {
     TEST("created /tmp/test.txt", ret == 0);
 
     // 2. Open and write to the file
-    int f = file_open("/tmp/test.txt");
+    int f = file_open_with_flags("/tmp/test.txt", O_WRONLY, 0);
     TEST("opened /tmp/test.txt", f >= 0);
     if (f < 0) return;
 
@@ -214,7 +214,7 @@ void tmpfs_test(void) {
     // 5. Write at non-zero offset (sparse / append-style)
     ret = vfs_create("/tmp/sparse.txt", 0644);
     TEST("created /tmp/sparse.txt", ret == 0);
-    f = file_open("/tmp/sparse.txt");
+    f = file_open_with_flags("/tmp/sparse.txt", O_WRONLY, 0);
     if (f >= 0) {
         // Advance offset to simulate appending
         int seek_rc = file_lseek(f, 10, SEEK_SET);
@@ -250,7 +250,7 @@ void tmpfs_test(void) {
     TEST("created /tmp/testdir/nested.txt", ret == 0);
 
     // 11. Write and read nested file
-    f = file_open("/tmp/testdir/nested.txt");
+    f = file_open_with_flags("/tmp/testdir/nested.txt", O_WRONLY, 0);
     if (f >= 0) {
         const char *nested_data = "Nested file data";
         file_write(f, nested_data, strlen(nested_data));
@@ -310,7 +310,7 @@ void tmpfs_test(void) {
     // 19. Read with oversized buffer returns only available bytes (no overread)
     ret = vfs_create("/tmp/small.txt", 0644);
     if (ret == 0) {
-        f = file_open("/tmp/small.txt");
+        f = file_open_with_flags("/tmp/small.txt", O_WRONLY, 0);
         if (f >= 0) {
             file_write(f, "hi", 2);
             file_close(f);
@@ -327,7 +327,7 @@ void tmpfs_test(void) {
     // 20. Second write extends file and data is correct
     ret = vfs_create("/tmp/extend.txt", 0644);
     if (ret == 0) {
-        f = file_open("/tmp/extend.txt");
+        f = file_open_with_flags("/tmp/extend.txt", O_WRONLY, 0);
         if (f >= 0) {
             file_write(f, "Hello", 5);
             file_write(f, " World", 6);
@@ -373,8 +373,8 @@ void tmpfs_test(void) {
 
         ret = vfs_chmod("/tmp/perm_enforced.txt", 0600);
         TEST("chmod tmpfs file back to 0600 succeeds", ret == 0);
-        int allowed = file_open("/tmp/perm_enforced.txt");
-        TEST("read open allowed after chmod 0600", allowed >= 0);
+        int allowed = file_open_with_flags("/tmp/perm_enforced.txt", O_WRONLY, 0);
+        TEST("write open allowed after chmod 0600", allowed >= 0);
         if (allowed >= 0) file_close(allowed);
     }
 

@@ -8,10 +8,6 @@
 #include "process/process.h"
 #include "tty/term.h"
 
-#ifndef O_ACCMODE
-#define O_ACCMODE 0x3
-#endif
-
 #define SEEK_SET 0
 #define SEEK_CUR 1
 #define SEEK_END 2
