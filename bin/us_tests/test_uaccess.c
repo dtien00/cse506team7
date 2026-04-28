@@ -1,12 +1,11 @@
 /**
  * test_uaccess.c — Userspace integration tests for copy_to/from_user fault recovery
  *
- * Verifies that passing a bad pointer to a syscall returns -EFAULT and does NOT
+ * Verifies that passing a bad pointer to a syscall returns -1 with errno=EFAULT and does NOT
  * kernel-panic.  Each test forks so that even an unexpected process death does
  * not abort the suite.
  *
- * NOTE: Our libc syscall stubs are bare ecall wrappers (no errno translation).
- * Syscalls return the raw kernel value, e.g. -EFAULT (-14) on bad pointer.
+ * NOTE: libc syscall stubs translate errors into errno and return -1.
  */
 
 #include <unistd.h>
@@ -38,33 +37,37 @@ static int run_in_child(void (*fn)(void)) {
 /* ── test bodies (run inside fork) ──────────────────────────────────────── */
 
 static void child_write_bad_buf(void) {
-    /* write() with unmapped source: kernel copy_from_user faults → -EFAULT */
+    /* write() with unmapped source: kernel copy_from_user faults → errno=EFAULT */
+    errno = 0;
     ssize_t r = write(STDOUT_FILENO, BAD_PTR, 4);
-    _exit(r == -EFAULT ? 0 : 1);
+    _exit((r == -1 && errno == EFAULT) ? 0 : 1);
 }
 
 static void child_open_bad_path(void) {
-    /* open() with unmapped path: kernel strncpy_from_user faults → -EFAULT */
+    /* open() with unmapped path: kernel strncpy_from_user faults → errno=EFAULT */
+    errno = 0;
     int fd = open((const char *)BAD_PTR, O_RDONLY, 0);
-    _exit(fd == -EFAULT ? 0 : 1);
+    _exit((fd == -1 && errno == EFAULT) ? 0 : 1);
 }
 
 static void child_stat_bad_stat_buf(void) {
-    /* stat() with valid path but unmapped output buffer → -EFAULT from copy_to_user.
+    /* stat() with valid path but unmapped output buffer → errno=EFAULT from copy_to_user.
      * Use "/" which always exists so we reach the copy_to_user call. */
     struct stat *bad = (struct stat *)BAD_PTR;
+    errno = 0;
     int r = stat("/", bad);
-    _exit(r == -EFAULT ? 0 : 1);
+    _exit((r == -1 && errno == EFAULT) ? 0 : 1);
 }
 
 static void child_fstat_bad_buf(void) {
-    /* fstat() with valid fd but unmapped output buffer → -EFAULT */
+    /* fstat() with valid fd but unmapped output buffer → errno=EFAULT */
     int fd = open("/", O_RDONLY, 0);
     if (fd < 0) _exit(2);
     struct stat *bad = (struct stat *)BAD_PTR;
+    errno = 0;
     int r = fstat(fd, bad);
     close(fd);
-    _exit(r == -EFAULT ? 0 : 1);
+    _exit((r == -1 && errno == EFAULT) ? 0 : 1);
 }
 
 static void child_write_null_buf(void) {
@@ -94,35 +97,35 @@ static void child_invalid_write(void) {
 void run_test_uaccess(us_test_group_t *group) {
     ut_group_begin(group, "uaccess");
 
-    /* T1: write() with bad source buffer returns -EFAULT, kernel survives */
+    /* T1: write() with bad source buffer returns errno=EFAULT, kernel survives */
     {
         int st = run_in_child(child_write_bad_buf);
-        TEST(group, "write bad buf: -EFAULT, no panic",
+        TEST(group, "write bad buf: errno=EFAULT, no panic",
              WIFEXITED(st) && WEXITSTATUS(st) == 0);
     }
 
-    /* T2: open() with bad path pointer returns -EFAULT */
+    /* T2: open() with bad path pointer returns errno=EFAULT */
     {
         int st = run_in_child(child_open_bad_path);
-        TEST(group, "open bad path ptr: -EFAULT, no panic",
+        TEST(group, "open bad path ptr: errno=EFAULT, no panic",
              WIFEXITED(st) && WEXITSTATUS(st) == 0);
     }
 
-    /* T3: stat() with bad output pointer returns -EFAULT */
+    /* T3: stat() with bad output pointer returns errno=EFAULT */
     {
         int st = run_in_child(child_stat_bad_stat_buf);
-        TEST(group, "stat bad stat buf: -EFAULT, no panic",
+        TEST(group, "stat bad stat buf: errno=EFAULT, no panic",
              WIFEXITED(st) && WEXITSTATUS(st) == 0);
     }
 
-    /* T4: fstat() with bad output pointer returns -EFAULT */
+    /* T4: fstat() with bad output pointer returns errno=EFAULT */
     {
         int st = run_in_child(child_fstat_bad_buf);
         int skip = WIFEXITED(st) && WEXITSTATUS(st) == 2;
         if (skip)
-            SKIP(group, "fstat bad stat buf: -EFAULT, no panic", "/ not openable");
+            SKIP(group, "fstat bad stat buf: errno=EFAULT, no panic", "/ not openable");
         else
-            TEST(group, "fstat bad stat buf: -EFAULT, no panic",
+            TEST(group, "fstat bad stat buf: errno=EFAULT, no panic",
                  WIFEXITED(st) && WEXITSTATUS(st) == 0);
     }
 

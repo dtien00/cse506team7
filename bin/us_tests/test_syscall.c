@@ -106,23 +106,27 @@ void run_test_syscall(us_test_group_t *group) {
         int restore = tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
         TEST(group, "tcsetattr restore old termios: returns 0", restore == 0);
 
+        errno = 0;
         int bad_action = tcsetattr(STDIN_FILENO, 99, &oldt);
-        TEST(group, "tcsetattr invalid action: returns -EINVAL", bad_action == -EINVAL);
+        TEST(group, "tcsetattr invalid action: returns -1 (errno=EINVAL)",
+             bad_action == -1 && errno == EINVAL);
     } else {
         SKIP(group, "tcsetattr(stdin,TCSANOW): returns 0", "tcgetattr(stdin) failed");
         SKIP(group, "tcgetattr(stdin) after set: returns 0", "tcgetattr(stdin) failed");
         SKIP(group, "tcsetattr updates c_lflag", "tcgetattr(stdin) failed");
         SKIP(group, "tcsetattr restore old termios: returns 0", "tcgetattr(stdin) failed");
-        SKIP(group, "tcsetattr invalid action: returns -EINVAL", "tcgetattr(stdin) failed");
+        SKIP(group, "tcsetattr invalid action: returns -1 (errno=EINVAL)", "tcgetattr(stdin) failed");
     }
 
     int regfd = open("/hello.txt", O_RDONLY);
     if (regfd < 0) {
-        SKIP(group, "tcgetattr(regular file): returns -ENOTTY", "open(/hello.txt) failed");
+        SKIP(group, "tcgetattr(regular file): returns -1 (errno=ENOTTY)", "open(/hello.txt) failed");
     } else {
         struct termios t;
+        errno = 0;
         int notty = tcgetattr(regfd, &t);
-        TEST(group, "tcgetattr(regular file): returns -ENOTTY", notty == -ENOTTY);
+        TEST(group, "tcgetattr(regular file): returns -1 (errno=ENOTTY)",
+             notty == -1 && errno == ENOTTY);
         close(regfd);
     }
 

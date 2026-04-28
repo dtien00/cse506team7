@@ -16,7 +16,7 @@ void run_test_termios_tty(us_test_group_t *group) {
     if (gr != 0) {
         SKIP(group, "tcsetattr(stdin,TCSANOW): toggles ECHO bit", "tcgetattr(stdin) failed");
         SKIP(group, "tcsetattr(stdin): restore original state", "tcgetattr(stdin) failed");
-        SKIP(group, "tcsetattr(stdin,invalid): returns -EINVAL", "tcgetattr(stdin) failed");
+        SKIP(group, "tcsetattr(stdin,invalid): returns -1 (errno=EINVAL)", "tcgetattr(stdin) failed");
         SKIP(group, "ioctl(stdin,TCSETS): toggles ECHO bit", "tcgetattr(stdin) failed");
         SKIP(group, "ioctl(stdin,TCSETSW): accepts action", "tcgetattr(stdin) failed");
         SKIP(group, "ioctl(stdin,TCSETSF): accepts action", "tcgetattr(stdin) failed");
@@ -35,8 +35,10 @@ void run_test_termios_tty(us_test_group_t *group) {
         int restore = tcsetattr(STDIN_FILENO, TCSANOW, &stdin_old);
         TEST(group, "tcsetattr(stdin): restore original state", restore == 0);
 
+        errno = 0;
         int bad_action = tcsetattr(STDIN_FILENO, 99, &stdin_old);
-        TEST(group, "tcsetattr(stdin,invalid): returns -EINVAL", bad_action == -EINVAL);
+        TEST(group, "tcsetattr(stdin,invalid): returns -1 (errno=EINVAL)",
+             bad_action == -1 && errno == EINVAL);
 
         int iow = ioctl(STDIN_FILENO, TCSETSW, &mod);
         TEST(group, "ioctl(stdin,TCSETSW): accepts action", iow == 0);
@@ -70,13 +72,17 @@ void run_test_termios_tty(us_test_group_t *group) {
 
     int regfd = open("/hello.txt", O_RDONLY);
     if (regfd < 0) {
-        SKIP(group, "tcgetattr(regular file): returns -ENOTTY", "open(/hello.txt) failed");
-        SKIP(group, "ioctl(regular file,TCGETS): returns -ENOTTY", "open(/hello.txt) failed");
+        SKIP(group, "tcgetattr(regular file): returns -1 (errno=ENOTTY)", "open(/hello.txt) failed");
+        SKIP(group, "ioctl(regular file,TCGETS): returns -1 (errno=ENOTTY)", "open(/hello.txt) failed");
     } else {
+        errno = 0;
         int notty = tcgetattr(regfd, &t);
-        TEST(group, "tcgetattr(regular file): returns -ENOTTY", notty == -ENOTTY);
+        TEST(group, "tcgetattr(regular file): returns -1 (errno=ENOTTY)",
+             notty == -1 && errno == ENOTTY);
+        errno = 0;
         int io_notty = ioctl(regfd, TCGETS, &t);
-        TEST(group, "ioctl(regular file,TCGETS): returns -ENOTTY", io_notty == -ENOTTY);
+        TEST(group, "ioctl(regular file,TCGETS): returns -1 (errno=ENOTTY)",
+             io_notty == -1 && errno == ENOTTY);
         close(regfd);
     }
 
@@ -85,7 +91,9 @@ void run_test_termios_tty(us_test_group_t *group) {
     TEST(group, "ioctl(stdout,TIOCGWINSZ): returns 0", gwr == 0);
     TEST(group, "ioctl(stdout,TIOCGWINSZ): reports non-zero rows/cols", gwr == 0 && ws.ws_row > 0 && ws.ws_col > 0);
     TEST(group, "ioctl(stdout,TIOCSWINSZ): returns 0", ioctl(STDOUT_FILENO, TIOCSWINSZ, &ws) == 0);
-    TEST(group, "ioctl(stdout,TIOCGWINSZ,NULL): returns -EINVAL", ioctl(STDOUT_FILENO, TIOCGWINSZ, 0) == -EINVAL);
+    errno = 0;
+    TEST(group, "ioctl(stdout,TIOCGWINSZ,NULL): returns -1 (errno=EINVAL)",
+         ioctl(STDOUT_FILENO, TIOCGWINSZ, 0) == -1 && errno == EINVAL);
 
     ut_group_end(group);
 }

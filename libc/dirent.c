@@ -94,11 +94,10 @@ DIR *fdopendir(int fd) {
     }
 
     // Verify fd refers to a directory — probe with a zero-byte read.
-    // getdents returns -ENOTDIR if vnode->type != VNODE_DIR.
+    // getdents sets errno=ENOTDIR if vnode->type != VNODE_DIR.
     char probe[1];
     int r = fs_getdents(fd, probe, sizeof(probe), 0);
-    if (r < 0 && r != -EINVAL) { // -EINVAL = buf too small, still a dir
-        errno = (r == -ENOTDIR) ? ENOTDIR : EBADF;
+    if (r < 0 && errno != EINVAL) { // EINVAL = buf too small, still a dir
         return NULL;
     }
 
