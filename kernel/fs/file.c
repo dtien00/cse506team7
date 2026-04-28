@@ -8,6 +8,10 @@
 #include "process/process.h"
 #include "tty/term.h"
 
+#ifndef O_ACCMODE
+#define O_ACCMODE 0x3
+#endif
+
 #define SEEK_SET 0
 #define SEEK_CUR 1
 #define SEEK_END 2
@@ -304,6 +308,8 @@ int file_read(int fd, void *buf, size_t len) {
 
     switch (f->type) {
         case FILE_VNODE: {
+            if ((f->flags & O_ACCMODE) == O_WRONLY)
+                return -EBADF;
             if (!f->vnode || !f->vnode->mount || !f->vnode->mount->fs_type->ops.read) {
                 printk("file_read: no read op on vnode\n");
                 return -EBADF;
@@ -361,6 +367,8 @@ int file_write(int fd, const void *buf, size_t len) {
             return term_write(&console_term, buf, (uint32_t) len);
 
         case FILE_VNODE: {
+            if ((f->flags & O_ACCMODE) == O_RDONLY)
+                return -EBADF;
             if (!f->vnode || !f->vnode->mount || !f->vnode->mount->fs_type->ops.write) {
                 printk("file_write: no write op on vnode\n");
                 return -EBADF;
