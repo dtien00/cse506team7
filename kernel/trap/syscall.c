@@ -438,6 +438,14 @@ void syscall_handler(trap_frame *frame) {
             ret = 0;
             break;
 
+        case SYS_fsync:
+            ret = sys_fsync((int)arg0);
+            break;
+
+        case SYS_fdatasync:
+            ret = sys_fdatasync((int)arg0);
+            break;
+
         default:
             // Unknown syscall number from user space will be recognized as delivering SIGSYS (Bad system call)
             // Set a0 = -ENOSYS so masked SIGSYS callers see a defined return value.
@@ -1314,6 +1322,21 @@ int sys_mkdir(const char *path, mode_t mode) {
 
 int sys_sync(void) {
     return block_cache_flush();
+}
+
+int sys_fsync(int fd) {
+    if (!current)
+        return -EINVAL;
+    file_t *f = fd_get(&current->fds, fd);
+    if (!f)
+        return -EBADF;
+    if (f->type != FILE_VNODE)
+        return -EINVAL;    /* pipes and stdio have no storage device */
+    return block_cache_flush();
+}
+
+int sys_fdatasync(int fd) {
+    return sys_fsync(fd);  /* data and metadata share the same block-cache path */
 }
 
 int sys_sigprocmask(int how, const uint32_t *set, uint32_t *oldset) {

@@ -61,6 +61,8 @@ int unlink(const char *pathname);
 int access(const char *pathname, int mode);
 
 void sync(void);
+int fsync(int fd);
+int fdatasync(int fd);
 
 pid_t getpgid(pid_t pid);
 int   setpgid(pid_t pid, pid_t pgid);

@@ -61,6 +61,8 @@
 #define SYS_fs_getdents  61
 #define SYS_stat     79
 #define SYS_fstat    80
+#define SYS_fsync    82    /* Linux RISC-V ABI */
+#define SYS_fdatasync 83   /* Linux RISC-V ABI */
 #define SYS_lstat    107
 #define SYS_link     86
 #define SYS_symlink  88

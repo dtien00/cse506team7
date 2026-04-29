@@ -54,6 +54,10 @@
 .global tcgetpgrp
 .global nanosleep
 .global clock_nanosleep
+.globl getitimer
+.globl setitimer
+.global fsync
+.global fdatasync
 
 mmap:
     li a7, 14
@@ -336,15 +340,23 @@ clock_nanosleep:
     ecall
     j __syscall_ret
 
-.globl getitimer
 getitimer:
     li a7, 94
     ecall
     j __syscall_ret
 
-.globl setitimer
 setitimer:
     li a7, 95
+    ecall
+    j __syscall_ret
+
+fsync:
+    li a7, 82
+    ecall
+    j __syscall_ret
+
+fdatasync:
+    li a7, 83
     ecall
     j __syscall_ret
 
