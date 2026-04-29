@@ -61,6 +61,8 @@
 #define SYS_fs_getdents  61
 #define SYS_stat     79
 #define SYS_fstat    80
+#define SYS_fsync    82    /* Linux RISC-V ABI */
+#define SYS_fdatasync 83   /* Linux RISC-V ABI */
 #define SYS_lstat    107
 #define SYS_link     86
 #define SYS_symlink  88
@@ -141,3 +143,5 @@ int sys_clock_nanosleep(clockid_t clockid, int flags,
 int sys_getitimer(int which, struct itimerval_k *curr_value);
 int sys_setitimer(int which, const struct itimerval_k *new_value,
                   struct itimerval_k *old_value);
+int sys_fsync(int fildes);
+int sys_fdatasync(int fildes);
