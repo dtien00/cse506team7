@@ -304,6 +304,8 @@ int file_read(int fd, void *buf, size_t len) {
 
     switch (f->type) {
         case FILE_VNODE: {
+            if ((f->flags & O_ACCMODE) == O_WRONLY)
+                return -EBADF;
             if (!f->vnode || !f->vnode->mount || !f->vnode->mount->fs_type->ops.read) {
                 printk("file_read: no read op on vnode\n");
                 return -EBADF;
@@ -361,6 +363,8 @@ int file_write(int fd, const void *buf, size_t len) {
             return term_write(&console_term, buf, (uint32_t) len);
 
         case FILE_VNODE: {
+            if ((f->flags & O_ACCMODE) == O_RDONLY)
+                return -EBADF;
             if (!f->vnode || !f->vnode->mount || !f->vnode->mount->fs_type->ops.write) {
                 printk("file_write: no write op on vnode\n");
                 return -EBADF;
@@ -416,7 +420,7 @@ int file_write(int fd, const void *buf, size_t len) {
 int file_lseek(int fd, size_t offset, int whence) {
     file_t *f = fd_get(&current->fds, fd);
     if (!f)
-        return -EINVAL;
+        return -EBADF;
 
     // Pipes and terminal files have no concept of position
     if (f->type == FILE_PIPE || f->type == FILE_STDIN || f->type == FILE_STDOUT) {

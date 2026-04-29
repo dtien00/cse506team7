@@ -829,6 +829,14 @@ done_readdir:
 int vfs_mkdir(const char *path, uint32_t mode) {
     if (!path) return -1;
 
+    /* POSIX: EEXIST must be returned when the path already exists, even
+     * when the caller lacks write permission on the parent directory. */
+    dentry_t *existing = NULL;
+    if (vfs_lookup(path, &existing) == 0) {
+        dentry_put(existing);
+        return -EEXIST;
+    }
+
     int perm_err = vfs_require_parent_perms(path, VFS_PERM_WRITE | VFS_PERM_EXEC);
     if (perm_err)
         return perm_err;

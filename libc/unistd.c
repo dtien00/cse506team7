@@ -45,6 +45,7 @@ int isatty(int fd) {
 
 int access(const char *pathname, int mode) {
     (void)pathname; (void)mode;
+    errno = ENOSYS;
     return -1;
 }
 
@@ -66,13 +67,12 @@ int rename(const char *oldpath, const char *newpath) {
 
     int oldfd = open(oldpath, O_RDONLY);
     if (oldfd < 0) {
-        errno = -oldfd;
         return -1;
     }
 
     int newfd = open(newpath, O_WRONLY | O_CREAT | O_TRUNC, 0666);
     if (newfd < 0) {
-        int err = -newfd;
+        int err = errno;
         close(oldfd);
         errno = err;
         return -1;
@@ -86,7 +86,7 @@ int rename(const char *oldpath, const char *newpath) {
         while (nread > 0) {
             nwritten = write(newfd, ptr, (size_t)nread);
             if (nwritten <= 0) {
-                int err = (nwritten < 0) ? -nwritten : EIO;
+                int err = (nwritten < 0) ? errno : EIO;
                 close(oldfd);
                 close(newfd);
                 unlink(newpath);
@@ -99,7 +99,7 @@ int rename(const char *oldpath, const char *newpath) {
     }
 
     if (nread < 0) {
-        int err = -nread;
+        int err = errno;
         close(oldfd);
         close(newfd);
         unlink(newpath);
@@ -109,7 +109,7 @@ int rename(const char *oldpath, const char *newpath) {
 
     int rc = close(oldfd);
     if (rc < 0) {
-        int err = -rc;
+        int err = errno;
         close(newfd);
         unlink(newpath);
         errno = err;
@@ -118,7 +118,7 @@ int rename(const char *oldpath, const char *newpath) {
 
     rc = close(newfd);
     if (rc < 0) {
-        int err = -rc;
+        int err = errno;
         unlink(newpath);
         errno = err;
         return -1;
@@ -126,7 +126,7 @@ int rename(const char *oldpath, const char *newpath) {
 
     rc = unlink(oldpath);
     if (rc < 0) {
-        int err = -rc;
+        int err = errno;
         errno = err;
         return -1;
     }

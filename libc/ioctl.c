@@ -36,7 +36,10 @@ int ioctl(int fd, unsigned long request, ...) {
             struct winsize *ws = va_arg(ap, struct winsize *);
             va_end(ap);
             if (!ws)
-                return -EINVAL;
+            {
+                errno = EINVAL;
+                return -1;
+            }
 
             ws->ws_row = 24;
             ws->ws_col = 80;
@@ -47,6 +50,7 @@ int ioctl(int fd, unsigned long request, ...) {
         case TIOCSWINSZ:
             return 0;
         default:
-            return -ENOTTY;
+            errno = ENOTTY;
+            return -1;
     }
 }

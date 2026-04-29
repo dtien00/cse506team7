@@ -318,7 +318,7 @@ int proc_wait(int *exit_code_out) {
             }
             child = child->sibling;
         }
-        if (!have_children) return -1;
+        if (!have_children) return -ECHILD;
         // Block until a child exits.  proc_sleep puts the process into
         // blocked_queue (via proc_block) so that proc_wakeup() inside
         // proc_exit() can find and unblock it.  The channel is the current
@@ -421,7 +421,7 @@ int proc_waitpid(pid_t target_pid, int *exit_code_out, int options) {
             }
             child = child->sibling;
         }
-        if (!have_target) return -1;
+        if (!have_target) return -ECHILD;
         if (options & 1) return 0;    // WNOHANG
         proc_sleep(current);
     }

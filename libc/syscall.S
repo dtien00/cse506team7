@@ -58,292 +58,301 @@
 mmap:
     li a7, 14
     ecall
-    ret
+    j __syscall_ret
 
 munmap:
     li a7, 15
     ecall
-    ret
+    j __syscall_ret
 
 brk:
     li a7, 16
     ecall
-    ret
+    j __syscall_ret
 
 sbrk:
     li a7, 10
     ecall
-    ret
+    j __syscall_ret
 
 open:
     li a7, 5
     ecall
-    ret
+    j __syscall_ret
 
 read:
     li a7, 3
     ecall
-    ret
+    j __syscall_ret
 
 write:
     li a7, 4
     ecall
-    ret
+    j __syscall_ret
 
 close:
     li a7, 6
     ecall
-    ret
+    j __syscall_ret
 
 fork:
     li a7, 2
     ecall
-    ret
+    j __syscall_ret
 
 wait:
     li a7, 7
     ecall
-    ret
+    j __syscall_ret
 
 execve:
     li a7, 8
     ecall
-    ret
+    j __syscall_ret
 
 getpid:
     li a7, 9
     ecall
-    ret
+    j __syscall_ret
 
 getppid:
     li a7, 21
     ecall
-    ret
+    j __syscall_ret
 
 getuid:
     li a7, 174   // SYS_getuid (Linux RISC-V ABI); unimplemented — kernel returns -1
     ecall
-    ret
+    j __syscall_ret
 
 getgid:
     li a7, 47
     ecall
-    ret
+    j __syscall_ret
 
 lseek:
     li a7, 17
     ecall
-    ret
+    j __syscall_ret
 
 sync:
     li a7, 20
     ecall
-    ret
+    j __syscall_ret
 
 pipe:
     li a7, 22
     ecall
-    ret
+    j __syscall_ret
 
 dup:
     li a7, 23
     ecall
-    ret
+    j __syscall_ret
 
 dup2:
     li a7, 33
     ecall
-    ret
+    j __syscall_ret
 
 chdir:
     li a7, 49
     ecall
-    ret
+    j __syscall_ret
 
 getcwd:
     li a7, 27
     ecall
-    ret
+    j __syscall_ret
 
 stat:
     li a7, 79
     ecall
-    ret
+    j __syscall_ret
 
 lstat:
     li a7, 107
     ecall
-    ret
+    j __syscall_ret
 
 fstat:
     li a7, 80
     ecall
-    ret
+    j __syscall_ret
 
 mkdir:
     li a7, 19
     ecall
-    ret
+    j __syscall_ret
 
 rmdir:
     li a7, 54    /* SYS_rmdir — was 52, moved to avoid conflict with SYS_setsid */
     ecall
-    ret
+    j __syscall_ret
 
 chmod:
     li a7, 90
     ecall
-    ret
+    j __syscall_ret
 
 fchmod:
     li a7, 91
     ecall
-    ret
+    j __syscall_ret
 
 fs_getdents:
     li a7, 61
     ecall
-    ret
+    j __syscall_ret
 
 unlink:
     li a7, 18
     ecall
-    ret
+    j __syscall_ret
 
 kill:
     li a7, 13
     ecall
-    ret
+    j __syscall_ret
 
 link:
     li a7, 86
     ecall
-    ret
+    j __syscall_ret
 
 symlink:
     li a7, 88
     ecall
-    ret
+    j __syscall_ret
 
 readlink:
     li a7, 89
     ecall
-    ret
+    j __syscall_ret
 
 sigprocmask:
     li a7, 26
     ecall
-    ret
+    j __syscall_ret
 
 getrusage:
     li a7, 28
     ecall
-    ret
+    j __syscall_ret
 
 nice:
     li a7, 29
     ecall
-    ret
+    j __syscall_ret
 
 procinfo:
     li a7, 30
     ecall
-    ret
+    j __syscall_ret
 
 sched_yield:
     li a7, 31
     ecall
-    ret
+    j __syscall_ret
 
 pause:
     li a7, 32
     ecall
-    ret
+    j __syscall_ret
 
 gettimeofday:
     li a7, 34
     ecall
-    ret
+    j __syscall_ret
 
 alarm:
     li a7, 37
     ecall
-    ret
+    j __syscall_ret
 
 tcgetattr:
     li a7, 35
     ecall
-    ret
+    j __syscall_ret
 
 sigaction:
     li a7, 38
     ecall
-    ret
+    j __syscall_ret
 
 tcsetattr:
     li a7, 36
     ecall
-    ret
+    j __syscall_ret
 
 sigpending:
     li a7, 39
     ecall
-    ret
+    j __syscall_ret
 
 sigsuspend:
     li a7, 40
     ecall
-    ret
+    j __syscall_ret
 
 getpgrp:
     li a7, 50
     ecall
-    ret
+    j __syscall_ret
 
 
 setpgid:
     li a7, 51
     ecall
-    ret
+    j __syscall_ret
 
 setsid:
     li a7, 52
     ecall
-    ret
+    j __syscall_ret
 
 getpgid:
     li a7, 53
     ecall
-    ret
+    j __syscall_ret
 
 tcsetpgrp:
     li a7, 41
     ecall
-    ret
+    j __syscall_ret
 
 tcgetpgrp:
     li a7, 42
     ecall
-    ret
+    j __syscall_ret
 
 nanosleep:
     li a7, 92
     ecall
-    ret
+    j __syscall_ret
 
 clock_nanosleep:
     li a7, 93
     ecall
-    ret
+    j __syscall_ret
 
 .globl getitimer
 getitimer:
     li a7, 94
     ecall
-    ret
+    j __syscall_ret
 
 .globl setitimer
 setitimer:
     li a7, 95
     ecall
+    j __syscall_ret
+
+__syscall_ret:
+    bgez a0, 1f
+    neg t0, a0
+    la t1, __errno_value
+    sw t0, 0(t1)
+    li a0, -1
+1:
     ret
