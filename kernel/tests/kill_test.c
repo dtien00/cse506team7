@@ -21,19 +21,19 @@ void kill_test_run(void) {
     printk("       kill / pending_signals Tests\n");
     printk("========================================\n\n");
 
-    /* ── 1. sys_kill with invalid pid returns -1 ───────────────────────── */
+    /* ── 1. sys_kill with invalid args returns specific errno codes ─────── */
     printk("=== sys_kill invalid args ===\n");
     int r = sys_kill(-1, 9);
-    TEST("kill: invalid pid -1 returns -1", r == -1);
+    TEST("kill(-1): no eligible targets returns -ESRCH", r == -ESRCH);
 
     r = sys_kill(99999, 9);
-    TEST("kill: unknown pid returns -1", r == -1);
+    TEST("kill(unknown pid): returns -ESRCH", r == -ESRCH);
 
     r = sys_kill(1, -1);
-    TEST("kill: negative signal returns -1", r == -1);
+    TEST("kill: negative signal returns -EINVAL", r == -EINVAL);
 
     r = sys_kill(1, 32);
-    TEST("kill: signal 32 (out of range) returns -1", r == -1);
+    TEST("kill: signal 32 (out of range) returns -EINVAL", r == -EINVAL);
 
     /* ── 2. sig==0 is a validity check — no signal delivered ───────────── */
     printk("=== kill sig==0 validity check ===\n");
@@ -100,8 +100,8 @@ void kill_test_run(void) {
     TEST("fatal mask includes SIGTERM (15)", KERNEL_FATAL_SIGS & (1U << 15));
     TEST("fatal mask excludes SIGCHLD (17)", !(KERNEL_FATAL_SIGS & (1U << 17)));
 
-    /* ── 6. Killing a ZOMBIE process returns -1 ────────────────────────── */
-    printk("=== kill on ZOMBIE returns -1 ===\n");
+    /* ── 6. Killing a ZOMBIE process returns -ESRCH ─────────────────────── */
+    printk("=== kill on ZOMBIE returns -ESRCH ===\n");
     struct proc *p4 = proc_alloc();
     TEST("kill: proc_alloc for zombie test", p4 != NULL);
     if (p4) {
@@ -110,7 +110,7 @@ void kill_test_run(void) {
         p4->pending_signals = 0;
 
         r = sys_kill(p4->pid, 9);
-        TEST("kill: ZOMBIE target returns -1", r == -1);
+        TEST("kill: ZOMBIE target returns -ESRCH", r == -ESRCH);
         TEST("kill: ZOMBIE pending_signals unchanged", p4->pending_signals == 0);
 
         proc_free(p4);
@@ -381,12 +381,12 @@ void kill_test_run(void) {
         proc_free(p);
     }
 
-    // Test: SIGBUS to PROC_ZOMBIE — returns -1, state unchanged
+    // Test: SIGBUS to PROC_ZOMBIE — returns -ESRCH, state unchanged
     {
         struct proc *p = proc_alloc();
         p->pid = 309; p->state = PROC_ZOMBIE; p->pending_signals = 0;
         int r = sys_kill(p->pid, SIGBUS);
-        TEST("SIGBUS to ZOMBIE: returns -1",        r == -1);
+        TEST("SIGBUS to ZOMBIE: returns -ESRCH",        r == -ESRCH);
         TEST("SIGBUS to ZOMBIE: state unchanged",   p->state == PROC_ZOMBIE);
         proc_free(p);
     }
@@ -607,25 +607,25 @@ void kill_test_run(void) {
             kernel_ctz(both) == 1);
     }
 
-    // ── Group J: SIGSYS to ZOMBIE returns -1 ────────────────────────────────────
-    printk("=== Group J: SIGSYS to ZOMBIE returns -1 ===\n");
+    // ── Group J: SIGSYS to ZOMBIE returns -ESRCH ────────────────────────────────
+    printk("=== Group J: SIGSYS to ZOMBIE returns -ESRCH ===\n");
 
     {
         struct proc *p = proc_alloc();
         p->pid = 520; p->state = PROC_ZOMBIE; p->pending_signals = 0;
         int r = sys_kill(p->pid, SIGSYS);
-        TEST("SIGSYS to ZOMBIE: returns -1", r == -1);
+        TEST("SIGSYS to ZOMBIE: returns -ESRCH", r == -ESRCH);
         proc_free(p);
     }
 
     // ── Group K: SIGUSR1 / SIGUSR2 edge cases ───────────────────────────────────
 
-    printk("=== K1. SIGUSR1 to ZOMBIE → returns -1 ===\n");
+    printk("=== K1. SIGUSR1 to ZOMBIE → returns -ESRCH ===\n");
     {
         struct proc *p = proc_alloc();
         p->pid = 600; p->state = PROC_ZOMBIE; p->pending_signals = 0;
         int r = sys_kill(p->pid, SIGUSR1);
-        TEST("K1: SIGUSR1 to ZOMBIE: returns -1", r == -1);
+        TEST("K1: SIGUSR1 to ZOMBIE: returns -ESRCH", r == -ESRCH);
         TEST("K1: SIGUSR1 to ZOMBIE: state unchanged", p->state == PROC_ZOMBIE);
         proc_free(p);
     }
@@ -687,12 +687,12 @@ void kill_test_run(void) {
     TEST("L1: bit 6 in KERNEL_FATAL_SIGS", KERNEL_FATAL_SIGS & (1U << 6));
     TEST("L1: KERNEL_SIGABRT constant is 6", KERNEL_SIGABRT == 6);
 
-    printk("=== L2. SIGABRT to ZOMBIE → returns -1 ===\n");
+    printk("=== L2. SIGABRT to ZOMBIE → returns -ESRCH ===\n");
     {
         struct proc *p = proc_alloc();
         p->pid = 610; p->state = PROC_ZOMBIE; p->pending_signals = 0;
         int r = sys_kill(p->pid, SIGABRT);
-        TEST("L2: SIGABRT to ZOMBIE: returns -1", r == -1);
+        TEST("L2: SIGABRT to ZOMBIE: returns -ESRCH", r == -ESRCH);
         proc_free(p);
     }
 

@@ -78,6 +78,7 @@ void run_test_forkforkfork(us_test_group_t *group);
 void run_test_writebig(us_test_group_t *group);
 void run_test_uaccess(us_test_group_t *group);
 void run_test_mmap_file(us_test_group_t *group);
+void run_test_errno(us_test_group_t *group);
 void run_test_cloexec(us_test_group_t *group);
 
 /* comprehensive libc conformance suites (each fills multiple groups) */
@@ -163,6 +164,7 @@ int main(int argc, char **argv, char **envp) {
         run_test_write(&groups[idx++]);
         run_test_fs_persist(groups, &idx);
         run_test_syscall(&groups[idx++]);
+        run_test_errno(&groups[idx++]);
         run_test_dirent(&groups[idx++]);
         run_test_termios_tty(&groups[idx++]);
         run_test_stack_growth(&groups[idx++]);

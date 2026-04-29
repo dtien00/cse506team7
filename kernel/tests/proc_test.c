@@ -83,7 +83,7 @@ void proc_test_run(void) {
         // After wait, child should be freed
         TEST("wait: child reaped", child->state == PROC_UNUSED);
         // No more children — proc_wait already cleared first_child
-        TEST("wait: no more children", proc_wait(NULL) == -1);
+        TEST("wait: no more children", proc_wait(NULL) == -ECHILD);
 
         current = wait_saved;
         proc_free(parent);  // must free parent; leaving it in proctab pollutes later tests
@@ -421,7 +421,7 @@ void proc_waitpid_test_run(void) {
     printk("=== Test: non-child PID returns -1 ===\n");
     parent->first_child = NULL;
     pid_t r4 = proc_waitpid(9999, NULL, 0);
-    TEST("waitpid: non-child returns -1", r4 == -1);
+    TEST("waitpid: non-child returns ECHILD", r4 == -ECHILD);
 
     // --- Test 5: WUNTRACED|WNOHANG and WCONTINUED|WNOHANG silently accepted ---
     // No stopped/continued processes exist yet; WNOHANG fires and returns 0.

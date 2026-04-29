@@ -420,7 +420,7 @@ int file_write(int fd, const void *buf, size_t len) {
 int file_lseek(int fd, size_t offset, int whence) {
     file_t *f = fd_get(&current->fds, fd);
     if (!f)
-        return -EINVAL;
+        return -EBADF;
 
     // Pipes and terminal files have no concept of position
     if (f->type == FILE_PIPE || f->type == FILE_STDIN || f->type == FILE_STDOUT) {

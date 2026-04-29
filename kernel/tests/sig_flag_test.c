@@ -452,7 +452,7 @@ void sig_flag_test_run(void) {
             // waitpid(-1, NULL, WNOHANG) must sweep the auto_reap zombie and
             // return -1 (ECHILD) — the child is invisible to the caller.
             int r = proc_waitpid(-1, NULL, 1 /* WNOHANG */);
-            TEST("nocldwait-sweep: waitpid returns -1 (ECHILD)", r == -1);
+            TEST("nocldwait-sweep: waitpid returns -1 (ECHILD)", r == -ECHILD);
             TEST("nocldwait-sweep: child no longer in parent->first_child",
                  parent->first_child == NULL);
             // child has been proc_free'd by the sweep — do not access it

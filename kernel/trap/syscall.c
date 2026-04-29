@@ -469,7 +469,7 @@ pid_t sys_fork(void) {
 
     // Allocate and initialize new process (assigns pid, stack, context)
     struct proc *child = proc_create(current->name);
-    if (!child) return -1;
+    if (!child) return -ENOMEM;
 
     // Inherit parent's open files (including stdio) and bump file refs.
     for (int i = 0; i < MAX_FDS; i++) {
@@ -482,12 +482,12 @@ pid_t sys_fork(void) {
     child->pagetable = vmm_copy_pagetable(current->pagetable);
     if (!child->pagetable) {
         proc_free(child);
-        return -1;
+        return -ENOMEM;
     }
     if (vma_copy_all(&child->vma_list, current->vma_list) != 0) {
         vmm_free_pagetable(child->pagetable);
         proc_free(child);
-        return -1;
+        return -ENOMEM;
     }
 
     child->sz = current->sz;
@@ -511,7 +511,7 @@ pid_t sys_fork(void) {
         vma_free_all(child->vma_list);
         vmm_free_pagetable(child->pagetable);
         proc_free(child);
-        return -1;
+        return -ENOMEM;
     }
 
     // Copy parent's trap frame and register state to the child
@@ -520,7 +520,7 @@ pid_t sys_fork(void) {
         if (!child->trapframe) {
             vmm_free_pagetable(child->pagetable);
             proc_free(child);
-            return -1;
+            return -ENOMEM;
         }
         child->trapframe_owned = 1;
         memcpy(child->trapframe, current->trapframe, sizeof(trap_frame));
@@ -804,7 +804,7 @@ int sys_uptime(void) {
 }
 
 int sys_kill(pid_t pid, int sig) {
-    if (sig < 0 || sig > 31) return -1;
+    if (sig < 0 || sig > 31) return -EINVAL;
 
     // POSIX: kill(-1, sig) broadcasts to all processes except init (PID 1) and the caller.
     // Returns -1 (ESRCH) if no eligible targets exist.
@@ -846,7 +846,7 @@ int sys_kill(pid_t pid, int sig) {
                     proc_unblock(p);
             }
         }
-        return (sent > 0) ? 0 : -1;
+        return (sent > 0) ? 0 : -ESRCH;
     }
 
     /* POSIX: kill(0, sig) — send to every process in the caller's process group.
@@ -903,7 +903,7 @@ int sys_kill(pid_t pid, int sig) {
 
     struct proc *target = proc_find(pid);
     if (!target || target->state == PROC_UNUSED || target->state == PROC_ZOMBIE)
-        return -1;
+        return -ESRCH;
 
     // sig == 0: validity check only (POSIX), no signal sent
     if (sig == 0) return 0;
