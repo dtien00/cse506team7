@@ -6,6 +6,7 @@
 #include "fs/file.h"
 #include "fs/vfs.h"
 #include "kernel/limits.h"
+#include "kernel/resource.h"
 
 #define KSTACK_SIZE 4096
 #define MAX_PROCS   SBUNIX_CHILD_MAX        /* 64 */
@@ -193,6 +194,8 @@ struct proc {
     uint8_t cont_unreported;
     uint8_t stop_signal;        // which signal caused the stop (for WSTOPSIG)
     uint8_t auto_reap;          // SA_NOCLDWAIT: free without zombie on exit
+
+    struct rlimit rlimits[RLIM_NLIMITS];
 
     uintptr_t copy_fault_recover; // 0 when not inside a copy function; set by copy_{to,from}_user
 };

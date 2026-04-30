@@ -7,6 +7,7 @@
 #include "mm/kmalloc.h"
 #include "process/process.h"
 #include "tty/term.h"
+#include "kernel/resource.h"
 
 #define SEEK_SET 0
 #define SEEK_CUR 1
@@ -80,15 +81,22 @@ int fd_alloc(fd_table_t *table, file_t *f) {
     if (!table || !f)
         return -1;
 
-    for (int i = 0; i < MAX_FDS; i++) {
+    /* RLIMIT_NOFILE caps the highest allowable fd + 1. */
+    int limit = MAX_FDS;
+    if (current) {
+        int soft = (int)current->rlimits[RLIMIT_NOFILE].rlim_cur;
+        if (soft < limit)
+            limit = soft;
+    }
+
+    for (int i = 0; i < limit; i++) {
         if (table->files[i] == NULL) {
             table->files[i] = f;
             return i;
         }
     }
 
-    printk("fd_alloc: no free file descriptors\n");
-    return -1;
+    return -EMFILE;
 }
 
 // -----------------------------------------------------------------------------

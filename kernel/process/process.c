@@ -43,7 +43,7 @@ struct proc* proc_alloc(void) {
     for (int i = 0; i < MAX_PROCS; i++) {
         if (proctab[i].state == PROC_UNUSED) {
             memset(&proctab[i], 0, sizeof(proctab[i]));
-            proctab[i].state = PROC_CREATED;   // mark as taken immediately
+            proctab[i].state = PROC_CREATED;
             return &proctab[i];
         }
     }
@@ -98,6 +98,20 @@ struct proc* proc_create(const char *name) {
     if (!p) return NULL;
 
     memset(p, 0, sizeof(*p));
+
+    /* Default resource limits — sys_fork() overwrites these with the parent's values. */
+    p->rlimits[RLIMIT_NOFILE].rlim_cur = SBUNIX_OPEN_MAX;
+    p->rlimits[RLIMIT_NOFILE].rlim_max = SBUNIX_OPEN_MAX;
+    p->rlimits[RLIMIT_NPROC].rlim_cur  = SBUNIX_CHILD_MAX;
+    p->rlimits[RLIMIT_NPROC].rlim_max  = SBUNIX_CHILD_MAX;
+    p->rlimits[RLIMIT_STACK].rlim_cur  = SBUNIX_STACK_MAX;
+    p->rlimits[RLIMIT_STACK].rlim_max  = SBUNIX_STACK_MAX;
+    p->rlimits[RLIMIT_AS].rlim_cur     = RLIM_INFINITY;
+    p->rlimits[RLIMIT_AS].rlim_max     = RLIM_INFINITY;
+    p->rlimits[RLIMIT_DATA].rlim_cur   = RLIM_INFINITY;
+    p->rlimits[RLIMIT_DATA].rlim_max   = RLIM_INFINITY;
+    p->rlimits[RLIMIT_CORE].rlim_cur   = 0;
+    p->rlimits[RLIMIT_CORE].rlim_max   = 0;
 
     p->pid = next_pid++;
     /* Each new process starts as its own group and session leader.

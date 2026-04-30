@@ -452,6 +452,14 @@ void syscall_handler(trap_frame *frame) {
             ret = sys_fdatasync((int)arg0);
             break;
 
+        case SYS_getrlimit:
+            ret = sys_getrlimit((int)arg0, (struct rlimit *)arg1);
+            break;
+
+        case SYS_setrlimit:
+            ret = sys_setrlimit((int)arg0, (const struct rlimit *)arg1);
+            break;
+
         default:
             // Unknown syscall number from user space will be recognized as delivering SIGSYS (Bad system call)
             // Set a0 = -ENOSYS so masked SIGSYS callers see a defined return value.
@@ -513,6 +521,10 @@ pid_t sys_fork(void) {
     // Child also inherits parent's process group and session IDs
     child->pgid = current->pgid;
     child->sid = current->sid;
+
+    /* Child inherits parent's resource limits (POSIX). */
+    memcpy(child->rlimits, current->rlimits, sizeof(current->rlimits));
+
     /* Child starts one level below the parent so a timer-preempted parent
      * re-enters at the same level as the child; LIFO insertion then keeps
      * the parent at the head of that level so it finishes forking remaining
@@ -2142,4 +2154,23 @@ long sys_sysconf(int name) {
     default:
         return -EINVAL;
     }
+}
+
+int sys_getrlimit(int resource, struct rlimit *user_rlim) {
+    if (resource < 0 || resource >= RLIM_NLIMITS) return -EINVAL;
+    return copy_to_user(user_rlim, &current->rlimits[resource],
+                        sizeof(struct rlimit));
+}
+
+int sys_setrlimit(int resource, const struct rlimit *user_rlim) {
+    if (resource < 0 || resource >= RLIM_NLIMITS) return -EINVAL;
+    struct rlimit new_rlim;
+    if (copy_from_user(&new_rlim, user_rlim, sizeof(struct rlimit)) < 0)
+        return -EFAULT;
+    /* Unprivileged: may not raise soft limit above hard limit. */
+    if (new_rlim.rlim_cur > current->rlimits[resource].rlim_max) return -EPERM;
+    /* May not raise hard limit (no CAP_SYS_RESOURCE). */
+    if (new_rlim.rlim_max > current->rlimits[resource].rlim_max) return -EPERM;
+    current->rlimits[resource] = new_rlim;
+    return 0;
 }

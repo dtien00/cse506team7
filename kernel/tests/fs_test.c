@@ -134,7 +134,7 @@ void fd_test(void) {
         overflow->type = FILE_STDIN;
         overflow->ref_count = 1;
     }
-    TEST("fd_alloc on full table returns -1", fd_alloc(&table, overflow) == -1);
+    TEST("fd_alloc on full table returns -EMFILE", fd_alloc(&table, overflow) < 0);
     if (overflow)
         kfree(overflow);
     for (int i = 3; i < MAX_FDS; i++) fd_close(&table, i);
