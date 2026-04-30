@@ -1,6 +1,7 @@
 #pragma once
 #include "kernel/types.h"
 #include "fs/dentry.h"
+#include "kernel/limits.h"
 
 // Open flags (must match libc/include/fcntl.h)
 #define O_RDONLY    0x0000
@@ -14,9 +15,9 @@
 #define O_NONBLOCK  0x0800
 #define O_DIRECTORY 0x10000
 #define O_CLOEXEC   0x80000
+#define MAX_FDS   SBUNIX_OPEN_MAX   /* 20 — meets POSIX _POSIX_OPEN_MAX */
+#define MAX_PATH  SBUNIX_PATH_MAX   /* 256 — matches current kernel enforcement */
 
-#define MAX_FDS 16 // or however many per process
-#define MAX_PATH 256
 struct vnode;
 
 typedef int64_t off_t;

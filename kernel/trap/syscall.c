@@ -15,6 +15,8 @@
 #include "fs/block_cache.h"
 #include "signal.h"
 #include "tty/term.h"
+#include "kernel/limits.h"
+/* _SC_* not included here: use SBUNIX_SC_* from kernel/limits.h in sys_sysconf */
 
 
 #define MAP_FAILED ((void *) -1)
@@ -427,6 +429,10 @@ void syscall_handler(trap_frame *frame) {
         case SYS_setitimer:
             ret = sys_setitimer((int)arg0, (const struct itimerval_k *)arg1,
                                 (struct itimerval_k *)arg2);
+            break;
+
+        case SYS_sysconf:
+            ret = sys_sysconf((int)arg0);
             break;
 
         /* Single-user kernel: all processes run as UID/GID 0 (root). */
@@ -2115,4 +2121,25 @@ int sys_setitimer(int which, const struct itimerval_k *new_value,
     }
 
     return 0;
+}
+
+long sys_sysconf(int name) {
+    switch (name) {
+    case SBUNIX_SC_OPEN_MAX:          return SBUNIX_OPEN_MAX;
+    case SBUNIX_SC_CHILD_MAX:         return SBUNIX_CHILD_MAX;
+    case SBUNIX_SC_CLK_TCK:           return SBUNIX_CLK_TCK;
+    case SBUNIX_SC_PAGESIZE:          return SBUNIX_PAGESIZE;   /* _SC_PAGE_SIZE == _SC_PAGESIZE == 6 */
+    case SBUNIX_SC_ARG_MAX:           return SBUNIX_ARG_MAX;
+    case SBUNIX_SC_NGROUPS_MAX:       return SBUNIX_NGROUPS_MAX;
+    case SBUNIX_SC_LOGIN_NAME_MAX:    return SBUNIX_LOGIN_NAME_MAX;
+    case SBUNIX_SC_SIGQUEUE_MAX:      return SBUNIX_NSIG - 1;
+    case SBUNIX_SC_STREAM_MAX:        return SBUNIX_OPEN_MAX;   /* stdio streams ≤ OPEN_MAX */
+    case SBUNIX_SC_NPROCESSORS_CONF:  return 1;   /* single-core QEMU */
+    case SBUNIX_SC_NPROCESSORS_ONLN:  return 1;
+    case SBUNIX_SC_PHYS_PAGES:        return (0x88000000UL - 0x80000000UL) / SBUNIX_PAGESIZE;
+    case SBUNIX_SC_HOST_NAME_MAX:     return SBUNIX_HOST_NAME_MAX;
+    case SBUNIX_SC_SYMLOOP_MAX:       return SBUNIX_SYMLOOP_MAX;
+    default:
+        return -EINVAL;
+    }
 }

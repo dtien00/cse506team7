@@ -58,6 +58,7 @@
 .globl setitimer
 .global fsync
 .global fdatasync
+.global sysconf
 
 mmap:
     li a7, 14
@@ -357,6 +358,11 @@ fsync:
 
 fdatasync:
     li a7, 83
+    ecall
+    j __syscall_ret
+
+sysconf:
+    li a7, 96
     ecall
     j __syscall_ret
 

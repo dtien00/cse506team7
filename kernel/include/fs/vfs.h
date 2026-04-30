@@ -2,6 +2,7 @@
 #pragma once
 #include "fs/file.h"
 #include "kernel/types.h"
+#include "kernel/limits.h"
 
 // Forward declarations
 struct vnode;
@@ -20,7 +21,7 @@ typedef enum {
 #define VFS_PERM_WRITE 0x2
 #define VFS_PERM_READ  0x4
 
-#define PIPE_CAPACITY 4096
+#define PIPE_CAPACITY  SBUNIX_PIPE_BUF   /* 4096 */
 #define PIPE_END_READ 0x1
 #define PIPE_END_WRITE 0x2
 

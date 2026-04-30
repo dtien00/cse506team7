@@ -66,6 +66,7 @@ void run_test_pipe_sigpipe(us_test_group_t *group);
 void run_test_nanosleep(us_test_group_t *group);
 void run_test_xv6_compat(us_test_group_t *group);
 void run_test_fd_limits(us_test_group_t *group);
+void run_test_limits(us_test_group_t *group);
 void run_test_bigfile(us_test_group_t *group);
 void run_test_forkstress(us_test_group_t *group);
 void run_test_dirops(us_test_group_t *group);
@@ -214,6 +215,7 @@ int main(int argc, char **argv, char **envp) {
     if (RUN_STRESS_TESTS) {
         run_test_xv6_compat(&groups[idx++]);
         run_test_fd_limits(&groups[idx++]);
+        run_test_limits(&groups[idx++]);
         // run_test_bigfile(&groups[idx++]);
         // run_test_forkstress(&groups[idx++]);
         // run_test_dirops(&groups[idx++]);
