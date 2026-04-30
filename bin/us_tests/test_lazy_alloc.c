@@ -127,6 +127,47 @@ static void test_demand_zero_fill(us_test_group_t *group) {
          WIFEXITED(status) && WEXITSTATUS(status) == 0);
 }
 
+/* ── 4. fixed-address anonymous mmap must avoid device reservations ─────── */
+
+static void test_fixed_mmap_layout(us_test_group_t *group) {
+    pid_t pid = fork();
+    if (pid < 0) {
+        SKIP(group, "mmap-fixed: device overlap rejected, safe fixed page zero-filled",
+             "fork failed");
+        return;
+    }
+    if (pid == 0) {
+        char *dev = mmap((void *)0x40000000UL, PAGE,
+                         PROT_READ | PROT_WRITE,
+                         MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED, -1, 0);
+        if (dev != MAP_FAILED)
+            _exit(1);
+
+        char *p = mmap((void *)0x50000000UL, PAGE,
+                       PROT_READ | PROT_WRITE,
+                       MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED, -1, 0);
+        if (p == MAP_FAILED)
+            _exit(2);
+
+        for (int i = 0; i < PAGE; i++)
+            if (p[i] != 0)
+                _exit(3);
+
+        p[0] = 0x5a;
+        p[PAGE - 1] = 0x33;
+        if (p[0] != 0x5a || p[PAGE - 1] != 0x33)
+            _exit(4);
+
+        munmap(p, PAGE);
+        _exit(0);
+    }
+
+    int status = 0;
+    waitpid(pid, &status, 0);
+    TEST(group, "mmap-fixed: device overlap rejected, safe fixed page zero-filled",
+         WIFEXITED(status) && WEXITSTATUS(status) == 0);
+}
+
 /* ── public entry point ─────────────────────────────────────────────────── */
 
 void run_test_lazy_alloc(us_test_group_t *group) {
@@ -135,6 +176,7 @@ void run_test_lazy_alloc(us_test_group_t *group) {
     test_mmap_large(group);
     test_mmap_fork_halves(group);
     test_demand_zero_fill(group);
+    test_fixed_mmap_layout(group);
 
     ut_group_end(group);
 }

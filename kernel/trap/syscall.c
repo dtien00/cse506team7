@@ -1017,10 +1017,24 @@ void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t off
 
     if ((flags & MAP_FIXED) && addr != NULL) {
         va = (uintptr_t)addr;
-        if (va < USER_HEAP_START || va + alloc_size > USER_HEAP_END) {
+        if (va < USER_HEAP_START || va + alloc_size > USER_HEAP_END ||
+            va + alloc_size < va) {
             if (mmap_file) f_put(mmap_file);
             printk("sys_mmap: fixed address out of range\n");
             return MAP_FAILED;
+        }
+        if (vma_find_overlap(p->vma_list, va, va + alloc_size)) {
+            if (mmap_file) f_put(mmap_file);
+            printk("sys_mmap: fixed address overlaps existing VMA\n");
+            return MAP_FAILED;
+        }
+        for (uintptr_t page = va; page < va + alloc_size; page += PGSIZE) {
+            uint64_t *pte = vmm_walk(p->pagetable, page, 0);
+            if (pte && (*pte & PTE_V) && !(*pte & PTE_U)) {
+                if (mmap_file) f_put(mmap_file);
+                printk("sys_mmap: fixed address overlaps kernel mapping\n");
+                return MAP_FAILED;
+            }
         }
     } else {
         /* Find a free gap in the VMA list rather than bumping p->sz.
