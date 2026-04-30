@@ -20,6 +20,23 @@ extern char **environ;
 #define W_OK 2
 #define R_OK 4
 
+/* sysconf() name constants (_SC_*) — values must match SBUNIX_SC_* in kernel/limits.h */
+#define _SC_ARG_MAX             0
+#define _SC_CHILD_MAX           1
+#define _SC_CLK_TCK             2
+#define _SC_NGROUPS_MAX         3
+#define _SC_OPEN_MAX            4
+#define _SC_STREAM_MAX          5
+#define _SC_PAGESIZE            6
+#define _SC_PAGE_SIZE           6   /* XSI alias: must equal _SC_PAGESIZE */
+#define _SC_SIGQUEUE_MAX        7
+#define _SC_NPROCESSORS_CONF    8
+#define _SC_NPROCESSORS_ONLN    9
+#define _SC_PHYS_PAGES          10
+#define _SC_LOGIN_NAME_MAX      11
+#define _SC_HOST_NAME_MAX       12
+#define _SC_SYMLOOP_MAX         13
+
 ssize_t read(int fd, void *buf, size_t count);
 ssize_t write(int fd, const void *buf, size_t count);
 int close(int fd);
@@ -79,5 +96,7 @@ ssize_t readlink(const char *pathname, char *buf, size_t bufsiz);
 int pause(void);   /* suspend until signal; always returns -1 (EINTR) */
 
 int alarm(unsigned int seconds);
+
+long sysconf(int name);
 
 #endif

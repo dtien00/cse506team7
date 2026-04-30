@@ -73,6 +73,7 @@
 #define SYS_clock_nanosleep 93
 #define SYS_getitimer       94
 #define SYS_setitimer       95
+#define SYS_sysconf   96   /* long sysconf(int name) */
 
 // Initialize syscall subsystem
 void syscall_init(void);
@@ -145,3 +146,4 @@ int sys_setitimer(int which, const struct itimerval_k *new_value,
                   struct itimerval_k *old_value);
 int sys_fsync(int fildes);
 int sys_fdatasync(int fildes);
+long sys_sysconf(int name);
