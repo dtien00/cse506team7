@@ -32,9 +32,10 @@
 #define USER_HEAP_END   MAXVA  /* Sv39 user VA ceiling; device VMAs block kernel/MMIO ranges */
 /* mmap allocations start well above the heap so that sbrk growth and
  * anonymous/file mmap regions never share the same VA range.
- * 0x40000000 = 1 GB; gives ~768 MB of heap space (0x11000000..0x40000000)
- * and the full remainder of user VA space for mmap. */
-#define USER_MMAP_START 0x40000000UL
+ * The PCI MMIO reservation ends at 0x50000000; leave the first post-device
+ * range available for explicit MAP_FIXED callers instead of consuming it with
+ * automatic mmap placement. */
+#define USER_MMAP_START 0x51000000UL
 
 #define MAX_ARGS 64
 #define KARG_MAX 256
