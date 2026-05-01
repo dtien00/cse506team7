@@ -4,35 +4,15 @@
 #include <unistd.h>
 #include "us_test_common.h"
 
-/*
- * Run cmd_str in /bin/sh by writing it to sh's stdin via pipe.
- * Returns raw waitpid status, or -1 on error.
- * Shell doesn't support -c, so we feed the command through stdin.
- */
+/* Run cmd_str via /bin/sh -c and return the raw waitpid status, or -1. */
 static int shell_exit_status(const char *cmd_str) {
-    int pipefd[2];
-    if (pipe(pipefd) < 0) return -1;
-
     pid_t pid = fork();
-    if (pid < 0) {
-        close(pipefd[0]);
-        close(pipefd[1]);
-        return -1;
-    }
+    if (pid < 0) return -1;
     if (pid == 0) {
-        close(pipefd[1]);
-        dup2(pipefd[0], STDIN_FILENO);
-        close(pipefd[0]);
-        char *argv[] = { "sh", NULL };
+        char *argv[] = { "sh", "-c", (char *)cmd_str, NULL };
         execve("/bin/sh", argv, NULL);
         _exit(127);
     }
-
-    close(pipefd[0]);
-    /* Write command + newline so the shell reads and executes it, then EOF closes. */
-    write(pipefd[1], cmd_str, strlen(cmd_str));
-    write(pipefd[1], "\n", 1);
-    close(pipefd[1]);
 
     int status = -1;
     if (waitpid(pid, &status, 0) != pid) return -1;
