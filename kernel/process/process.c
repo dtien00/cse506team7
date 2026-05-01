@@ -156,10 +156,9 @@ static void proc_free_pagetable(struct proc *p) {
 }
 
 /* Full teardown — used by proc_exit().
- * Does NOT free the page table: the zombie must remain mapped until the
- * parent calls waitpid() and proc_free() reaps it.  Freeing the page table
- * here would return its physical pages to the PMM while the scheduler may
- * still switch to them (e.g. for a sibling process). */
+ * Frees the page table, trapframe, FS context, and file descriptors.
+ * VMA list structs are left intact so the zombie remains identifiable until
+ * the parent calls waitpid() and proc_free() reaps them. */
 void proc_destroy(struct proc *p) {
     if (!p) return;
 

@@ -1053,6 +1053,25 @@ void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t off
     size_t pages     = (length + PGSIZE - 1) / PGSIZE;
     size_t alloc_size = pages * PGSIZE;
 
+    /* Enforce RLIMIT_AS: reject mappings that would push total virtual address
+     * space usage over the soft limit.  Default is RLIM_INFINITY, so this is
+     * a no-op unless the process calls setrlimit(RLIMIT_AS, ...).
+     * POSIX: mmap() shall fail with ENOMEM if the limit would be exceeded. */
+    if (p->rlimits[RLIMIT_AS].rlim_cur != RLIM_INFINITY) {
+        uint64_t current_as = 0;
+        for (struct vm_area *v = p->vma_list; v; v = v->next) {
+            if (v->type & VMA_TYPE_DEVICE) continue; /* exclude kernel guard/MMIO reservations */
+            current_as += v->end - v->start;
+        }
+        if (current_as + alloc_size > p->rlimits[RLIMIT_AS].rlim_cur) {
+            if (mmap_file) f_put(mmap_file);
+            /* POSIX: mmap() sets errno=ENOMEM when RLIMIT_AS is exceeded.
+             * Return -ENOMEM so __syscall_ret encodes the correct errno;
+             * userspace still receives MAP_FAILED (a0=-1). */
+            return (void *)(intptr_t)(-ENOMEM);
+        }
+    }
+
     uintptr_t va;
 
     if ((flags & MAP_FIXED) && addr != NULL) {
@@ -1197,6 +1216,15 @@ int sys_brk(void *addr) {
     }
 
     if (new_break > old_break) {
+        /* Enforce RLIMIT_DATA: heap size = new_break - USER_HEAP_START.
+         * Default is RLIM_INFINITY; only active if process calls setrlimit.
+         * POSIX: brk() sets errno=ENOMEM when RLIMIT_DATA is exceeded. */
+        if (p->rlimits[RLIMIT_DATA].rlim_cur != RLIM_INFINITY) {
+            uint64_t new_heap_size = new_break - USER_HEAP_START;
+            if (new_heap_size > p->rlimits[RLIMIT_DATA].rlim_cur)
+                return -ENOMEM;
+        }
+
         uintptr_t new_end = PGROUNDUP(new_break);
 
         if (heap_vma) {
@@ -1268,7 +1296,9 @@ void *sys_sbrk(intptr_t increment) {
     }
 
     if (sys_brk((void*)new_break) != 0) {
-        return (void *) -1;
+        /* Propagate ENOMEM so __syscall_ret sets errno correctly.
+         * userspace sbrk() receives (void*)-1 either way. */
+        return (void *)(intptr_t)(-ENOMEM);
     }
 
     return old_break;
