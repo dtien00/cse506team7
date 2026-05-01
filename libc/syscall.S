@@ -59,6 +59,8 @@
 .global fsync
 .global fdatasync
 .global sysconf
+.global getrlimit
+.global setrlimit
 
 mmap:
     li a7, 14
@@ -363,6 +365,16 @@ fdatasync:
 
 sysconf:
     li a7, 96
+    ecall
+    j __syscall_ret
+
+getrlimit:
+    li a7, 97
+    ecall
+    j __syscall_ret
+
+setrlimit:
+    li a7, 98
     ecall
     j __syscall_ret
 

@@ -74,6 +74,8 @@
 #define SYS_getitimer       94
 #define SYS_setitimer       95
 #define SYS_sysconf   96   /* long sysconf(int name) */
+#define SYS_getrlimit   97   /* int getrlimit(int resource, struct rlimit *rlim) */
+#define SYS_setrlimit   98   /* int setrlimit(int resource, const struct rlimit *rlim) */
 
 // Initialize syscall subsystem
 void syscall_init(void);
@@ -147,3 +149,5 @@ int sys_setitimer(int which, const struct itimerval_k *new_value,
 int sys_fsync(int fildes);
 int sys_fdatasync(int fildes);
 long sys_sysconf(int name);
+int sys_getrlimit(int resource, struct rlimit *user_rlim);
+int sys_setrlimit(int resource, const struct rlimit *user_rlim);

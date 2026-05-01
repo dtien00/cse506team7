@@ -44,3 +44,19 @@ struct itimerval_k {
     struct timeval_k it_interval;  // reload value (0 = one-shot)
     struct timeval_k it_value;     // time until next expiry
 };
+
+/* Per-process resource limit (soft = current enforcement; hard = ceiling). */
+struct rlimit {
+    uint64_t rlim_cur;   /* soft limit */
+    uint64_t rlim_max;   /* hard limit (ceiling) */
+};
+#define RLIM_INFINITY   ((uint64_t)~0ULL)
+
+/* Resource identifiers for getrlimit/setrlimit */
+#define RLIMIT_NOFILE   0    /* max open file descriptors */
+#define RLIMIT_NPROC    1    /* max child processes */
+#define RLIMIT_STACK    2    /* max stack size in bytes */
+#define RLIMIT_AS       3    /* max virtual address space */
+#define RLIMIT_DATA     4    /* max data segment (heap) size */
+#define RLIMIT_CORE     5    /* max core dump file size (0 = no dump) */
+#define RLIM_NLIMITS    6    /* number of resource types */
