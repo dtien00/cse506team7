@@ -542,7 +542,7 @@ static int execute_pipeline(char *line) {
     return last_status;
 }
 
-int main(void) {
+int main(int argc, char **argv) {
     char line[MAX_LINE];
     int n;
     int last_status = 0;
@@ -551,6 +551,12 @@ int main(void) {
     signal(SIGTTIN, SIG_IGN);
     signal(SIGTTOU, SIG_IGN);
     signal(SIGCHLD, SIG_IGN);
+
+    if (argc >= 3 && strcmp(argv[1], "-c") == 0) {
+        strncpy(line, argv[2], sizeof(line) - 1);
+        line[sizeof(line) - 1] = '\0';
+        return execute_pipeline(line);
+    }
 
     while (1) {
         job_reap_done();
