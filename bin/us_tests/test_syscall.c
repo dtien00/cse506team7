@@ -3,13 +3,57 @@
 #include <unistd.h>
 #include <signal.h>
 #include <sys/wait.h>
+#include <sys/syscall.h>
+#include <sys/mman.h>
 #include <fcntl.h>
 #include <termios.h>
 #include <errno.h>
 #include "us_test_common.h"
 
+#define PAGE_SIZE 4096
+
 void run_test_syscall(us_test_group_t *group) {
     ut_group_begin(group, "syscall");
+
+    TEST(group, "sys/syscall.h: SYS_getpid matches ABI", SYS_getpid == 9);
+    TEST(group, "sys/syscall.h: SYS_execve alias matches exec syscall", SYS_execve == SYS_exec);
+
+    {
+        pid_t mmap_child = fork();
+        if (mmap_child < 0) {
+            SKIP(group, "mmap-fixed: device overlap rejected, safe page zero-filled",
+                 "fork failed");
+        } else if (mmap_child == 0) {
+            char *dev = mmap((void *)0x40000000UL, PAGE_SIZE,
+                             PROT_READ | PROT_WRITE,
+                             MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED, -1, 0);
+            if (dev != MAP_FAILED)
+                _exit(1);
+
+            char *p = mmap((void *)0x50000000UL, PAGE_SIZE,
+                           PROT_READ | PROT_WRITE,
+                           MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED, -1, 0);
+            if (p == MAP_FAILED)
+                _exit(2);
+
+            for (int i = 0; i < PAGE_SIZE; i++)
+                if (p[i] != 0)
+                    _exit(3);
+
+            p[0] = 0x5a;
+            p[PAGE_SIZE - 1] = 0x33;
+            if (p[0] != 0x5a || p[PAGE_SIZE - 1] != 0x33)
+                _exit(4);
+
+            munmap(p, PAGE_SIZE);
+            _exit(0);
+        } else {
+            int mmap_status = 0;
+            waitpid(mmap_child, &mmap_status, 0);
+            TEST(group, "mmap-fixed: device overlap rejected, safe page zero-filled",
+                 WIFEXITED(mmap_status) && WEXITSTATUS(mmap_status) == 0);
+        }
+    }
 
     /* ── uptime ─────────────────────────────────────────────────────── */
     int t1 = uptime();

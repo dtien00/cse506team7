@@ -32,9 +32,10 @@
 #define USER_HEAP_END   MAXVA  /* Sv39 user VA ceiling; device VMAs block kernel/MMIO ranges */
 /* mmap allocations start well above the heap so that sbrk growth and
  * anonymous/file mmap regions never share the same VA range.
- * 0x40000000 = 1 GB; gives ~768 MB of heap space (0x11000000..0x40000000)
- * and the full remainder of user VA space for mmap. */
-#define USER_MMAP_START 0x40000000UL
+ * The PCI MMIO reservation ends at 0x50000000; leave the first post-device
+ * range available for explicit MAP_FIXED callers instead of consuming it with
+ * automatic mmap placement. */
+#define USER_MMAP_START 0x51000000UL
 
 #define MAX_ARGS 64
 #define KARG_MAX 256
@@ -1029,10 +1030,24 @@ void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t off
 
     if ((flags & MAP_FIXED) && addr != NULL) {
         va = (uintptr_t)addr;
-        if (va < USER_HEAP_START || va + alloc_size > USER_HEAP_END) {
+        if (va < USER_HEAP_START || va + alloc_size > USER_HEAP_END ||
+            va + alloc_size < va) {
             if (mmap_file) f_put(mmap_file);
             printk("sys_mmap: fixed address out of range\n");
             return MAP_FAILED;
+        }
+        if (vma_find_overlap(p->vma_list, va, va + alloc_size)) {
+            if (mmap_file) f_put(mmap_file);
+            printk("sys_mmap: fixed address overlaps existing VMA\n");
+            return MAP_FAILED;
+        }
+        for (uintptr_t page = va; page < va + alloc_size; page += PGSIZE) {
+            uint64_t *pte = vmm_walk(p->pagetable, page, 0);
+            if (pte && (*pte & PTE_V) && !(*pte & PTE_U)) {
+                if (mmap_file) f_put(mmap_file);
+                printk("sys_mmap: fixed address overlaps kernel mapping\n");
+                return MAP_FAILED;
+            }
         }
     } else {
         /* Find a free gap in the VMA list rather than bumping p->sz.
