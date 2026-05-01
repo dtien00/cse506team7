@@ -545,11 +545,12 @@ static int execute_pipeline(char *line) {
 int main(void) {
     char line[MAX_LINE];
     int n;
+    int last_status = 0;
     signal(SIGINT,  SIG_IGN);
     signal(SIGTSTP, SIG_IGN);
     signal(SIGTTIN, SIG_IGN);
     signal(SIGTTOU, SIG_IGN);
-    signal(SIGCHLD, SIG_IGN); 
+    signal(SIGCHLD, SIG_IGN);
 
     while (1) {
         job_reap_done();
@@ -563,10 +564,10 @@ int main(void) {
 
         if (line[0] == '\n' || line[0] == '\0') continue;
 
-        execute_pipeline(line);
+        last_status = execute_pipeline(line);
     }
 
-    return 0;
+    return last_status;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
