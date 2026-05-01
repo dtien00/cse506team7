@@ -84,6 +84,7 @@ void run_test_cloexec(us_test_group_t *group);
 void run_test_fsync(us_test_group_t *group);
 void run_test_fork_alloc_stress(us_test_group_t *group);
 void run_test_rlimit(us_test_group_t *group);
+void run_test_pathconf(us_test_group_t *group);
 
 /* comprehensive libc conformance suites (each fills multiple groups) */
 void run_test_libc_string(us_test_group_t groups[], int *idx);
@@ -219,6 +220,7 @@ int main(int argc, char **argv, char **envp) {
         run_test_fd_limits(&groups[idx++]);
         run_test_limits(&groups[idx++]);
         run_test_rlimit(&groups[idx++]);
+        run_test_pathconf(&groups[idx++]);
         run_test_fork_alloc_stress(&groups[idx++]);
         // run_test_bigfile(&groups[idx++]);
         // run_test_forkstress(&groups[idx++]);

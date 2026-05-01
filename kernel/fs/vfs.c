@@ -33,11 +33,12 @@ static void __attribute__((unused)) vfs_dump_mounts(void) {
     }
 
     printk("vfs: active mount points:\n");
+    char *path_buf = kmalloc(MAX_PATH);
+    if (!path_buf) return;
     while (curr) {
         if (curr->cover) {
-            char path[MAX_PATH];
-            if (dentry_build_path(curr->cover, vfs_root, path, sizeof(path)) == 0)
-                printk(" - '%s' (type: %s)\n", path, curr->fs_type ? curr->fs_type->name : "unknown");
+            if (dentry_build_path(curr->cover, vfs_root, path_buf, MAX_PATH) == 0)
+                printk(" - '%s' (type: %s)\n", path_buf, curr->fs_type ? curr->fs_type->name : "unknown");
             else
                 printk(" - '<cover?>' (type: %s)\n", curr->fs_type ? curr->fs_type->name : "unknown");
         } else {
@@ -45,6 +46,7 @@ static void __attribute__((unused)) vfs_dump_mounts(void) {
         }
         curr = curr->next;
     }
+    kfree(path_buf);
 }
 
 // -----------------------------------------------------------------------------
@@ -274,6 +276,8 @@ mount_t *vfs_find_mount(const char *path) {
     mount_t *best = NULL;
     size_t best_len = 0;
 
+    char *mntpath = kmalloc(MAX_PATH);
+    if (!mntpath) return NULL;
     for (mount_t *m = mounts; m; m = m->next) {
         if (!m->cover) {
             if (best_len == 0) {
@@ -283,8 +287,7 @@ mount_t *vfs_find_mount(const char *path) {
             continue;
         }
 
-        char mntpath[MAX_PATH];
-        if (dentry_build_path(m->cover, vfs_root, mntpath, sizeof(mntpath)) != 0)
+        if (dentry_build_path(m->cover, vfs_root, mntpath, MAX_PATH) != 0)
             continue;
 
         size_t mnt_len = strlen(mntpath);
@@ -300,7 +303,7 @@ mount_t *vfs_find_mount(const char *path) {
         best = m;
         best_len = mnt_len;
     }
-
+    kfree(mntpath);
     return best;
 }
 
@@ -347,13 +350,16 @@ static int vfs_require_parent_perms(const char *path, int perms) {
     if (!path || path[0] != '/')
         return -EINVAL;
 
-    char parent_path[MAX_PATH];
-    strncpy(parent_path, path, sizeof(parent_path) - 1);
-    parent_path[sizeof(parent_path) - 1] = '\0';
+    char *parent_path = kmalloc(MAX_PATH);
+    if (!parent_path) return -ENOMEM;
+    strncpy(parent_path, path, MAX_PATH - 1);
+    parent_path[MAX_PATH - 1] = '\0';
 
     char *last_slash = strrchr(parent_path, '/');
-    if (!last_slash)
+    if (!last_slash) {
+        kfree(parent_path);
         return -EINVAL;
+    }
 
     if (last_slash == parent_path) {
         parent_path[1] = '\0';
@@ -363,6 +369,7 @@ static int vfs_require_parent_perms(const char *path, int perms) {
 
     dentry_t *parent = NULL;
     int err = vfs_lookup(parent_path, &parent);
+    kfree(parent_path);
     if (err)
         return err;
 
@@ -726,8 +733,10 @@ int vfs_unlink(const char *path) {
         return -ENOSYS;
     }
 
-    char rel_path[MAX_PATH];
-    if (dentry_build_path(d, mnt->root, rel_path, sizeof(rel_path)) != 0) {
+    char *rel_path = kmalloc(MAX_PATH);
+    if (!rel_path) { dentry_put(d); return -ENOMEM; }
+    if (dentry_build_path(d, mnt->root, rel_path, MAX_PATH) != 0) {
+        kfree(rel_path);
         dentry_put(d);
         return -ENAMETOOLONG;
     }
@@ -746,7 +755,7 @@ int vfs_unlink(const char *path) {
     } else {
         dentry_put(d);
     }
-
+    kfree(rel_path);
     return ret;
 }
 
@@ -957,9 +966,10 @@ int vfs_link(const char *oldpath, const char *newpath) {
         return -ENOSYS;
     }
 
-    // Build relative path of old_d within its mount.
-    char old_rel[MAX_PATH];
-    if (dentry_build_path(old_d, mnt->root, old_rel, sizeof(old_rel)) != 0) {
+    char *old_rel = kmalloc(MAX_PATH);
+    if (!old_rel) { dentry_put(old_d); return -ENOMEM; }
+    if (dentry_build_path(old_d, mnt->root, old_rel, MAX_PATH) != 0) {
+        kfree(old_rel);
         dentry_put(old_d);
         return -ENAMETOOLONG;
     }
@@ -969,6 +979,7 @@ int vfs_link(const char *oldpath, const char *newpath) {
     // newpath relative to mount root.
     size_t mp_len = strlen(mnt->mountpoint);
     if (strncmp(newpath, mnt->mountpoint, mp_len) != 0) {
+        kfree(old_rel);
         dentry_put(old_d);
         return -EXDEV; // different filesystem
     }
@@ -982,6 +993,7 @@ int vfs_link(const char *oldpath, const char *newpath) {
     if (ret == 0 && old_d->d_vnode)
         old_d->d_vnode->nlink++;
 
+    kfree(old_rel);
     dentry_put(old_d);
     return ret;
 }
@@ -1142,24 +1154,33 @@ ssize_t vfs_readlink(const char *path, char *buf, size_t size) {
 // -----------------------------------------------------------------------------
 
 int vfs_chdir(const char *kpath) {
-    char resolved[MAX_PATH];
     if (!current || !current->fs)
         return -EINVAL;
 
-    if (dentry_normalize_path(current->fs->cwd, vfs_root, kpath, resolved, sizeof(resolved)) < 0)
+    char *resolved = kmalloc(MAX_PATH);
+    if (!resolved) return -ENOMEM;
+
+    if (dentry_normalize_path(current->fs->cwd, vfs_root, kpath, resolved, MAX_PATH) < 0) {
+        kfree(resolved);
         return -ENAMETOOLONG;
+    }
 
     dentry_t *d = NULL;
     int lookup_rc = vfs_lookup(resolved, &d);
-    if (lookup_rc < 0)
+    if (lookup_rc < 0) {
+        kfree(resolved);
         return lookup_rc;
+    }
     int perm_rc = vfs_may_access(d->d_vnode, VFS_PERM_EXEC);
     dentry_put(d);
-    if (perm_rc < 0)
+    if (perm_rc < 0) {
+        kfree(resolved);
         return perm_rc;
+    }
 
     // 3. Hand off to fs_struct — it looks up, validates, and swaps the cwd dentry
     int rc = fs_struct_set_cwd(current->fs, resolved);
+    kfree(resolved);
     return rc;
 }
 
@@ -1173,8 +1194,10 @@ void fs_struct_dump(const fs_struct_t *fs) {
         return;
     }
 
-    char root_path[MAX_PATH];
-    char cwd_path[MAX_PATH];
+    char *_pathbufs = kmalloc(2 * MAX_PATH);
+    if (!_pathbufs) return;
+    char *root_path = _pathbufs;
+    char *cwd_path  = _pathbufs + MAX_PATH;
 
     if (!fs->root) {
         printk("[fs_struct] root=NULL\n");
@@ -1191,6 +1214,7 @@ void fs_struct_dump(const fs_struct_t *fs) {
         printk("[fs_struct] cwd=%s (dentry=%p, d_ref=%d)\n",
                cwd_path, fs->cwd, fs->cwd->d_ref);
     }
+    kfree(_pathbufs);
 }
 
 fs_struct_t *fs_struct_alloc(void) {

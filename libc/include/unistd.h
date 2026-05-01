@@ -36,6 +36,8 @@ extern char **environ;
 #define _SC_LOGIN_NAME_MAX      11
 #define _SC_HOST_NAME_MAX       12
 #define _SC_SYMLOOP_MAX         13
+#define _SC_VERSION             14
+#define _POSIX_VERSION          200809L
 
 ssize_t read(int fd, void *buf, size_t count);
 ssize_t write(int fd, const void *buf, size_t count);
@@ -98,5 +100,26 @@ int pause(void);   /* suspend until signal; always returns -1 (EINTR) */
 int alarm(unsigned int seconds);
 
 long sysconf(int name);
+
+/* pathconf()/fpathconf() name constants (_PC_*).
+ * Values match Linux POSIX ABI for cross-platform compatibility. */
+#define _PC_LINK_MAX            0
+#define _PC_MAX_CANON           1
+#define _PC_MAX_INPUT           2
+#define _PC_NAME_MAX            3
+#define _PC_PATH_MAX            4
+#define _PC_PIPE_BUF            5
+#define _PC_CHOWN_RESTRICTED    6
+#define _PC_NO_TRUNC            7
+#define _PC_VDISABLE            8
+#define _PC_SYNC_IO             9
+#define _PC_ASYNC_IO            10
+#define _PC_PRIO_IO             11
+#define _PC_FILESIZEBITS        13
+#define _PC_SYMLINK_MAX         19
+#define _PC_2_SYMLINKS          20
+
+long pathconf(const char *path, int name);
+long fpathconf(int fd, int name);
 
 #endif

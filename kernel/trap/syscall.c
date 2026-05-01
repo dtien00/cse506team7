@@ -18,6 +18,11 @@
 #include "kernel/limits.h"
 /* _SC_* not included here: use SBUNIX_SC_* from kernel/limits.h in sys_sysconf */
 
+/* Forward declarations for functions defined later in this file */
+static long pathconf_query(int name);
+long sys_pathconf(const char *upath, int name);
+long sys_fpathconf(int fd, int name);
+
 
 #define MAP_FAILED ((void *) -1)
 #define PROT_READ  0x1
@@ -461,6 +466,14 @@ void syscall_handler(trap_frame *frame) {
             ret = sys_setrlimit((int)arg0, (const struct rlimit *)arg1);
             break;
 
+        case SYS_pathconf:
+            ret = sys_pathconf((const char *)arg0, (int)arg1);
+            break;
+
+        case SYS_fpathconf:
+            ret = sys_fpathconf((int)arg0, (int)arg1);
+            break;
+
         default:
             // Unknown syscall number from user space will be recognized as delivering SIGSYS (Bad system call)
             // Set a0 = -ENOSYS so masked SIGSYS callers see a defined return value.
@@ -652,11 +665,13 @@ ssize_t sys_write(int fd, const void *buf, size_t count) {
 int sys_open(const char *path, int flags, mode_t mode) {
     if (!current || !path) return -EINVAL;
 
-    char kpath[MAX_PATH];
-    if (strncpy_from_user(kpath, path, MAX_PATH - 1) < 0) return -EFAULT;
+    char *kpath = kmalloc(MAX_PATH);
+    if (!kpath) return -ENOMEM;
+    if (strncpy_from_user(kpath, path, MAX_PATH - 1) < 0) { kfree(kpath); return -EFAULT; }
     kpath[MAX_PATH - 1] = '\0';
-
-    return file_open_with_flags(kpath, flags, mode);
+    int ret = file_open_with_flags(kpath, flags, mode);
+    kfree(kpath);
+    return ret;
 }
 
 int sys_close(int fd) {
@@ -1266,11 +1281,13 @@ off_t sys_lseek(int fd, off_t offset, int whence) {
 int sys_unlink(const char *path) {
     if (!current) return -1;
 
-    char kpath[MAX_PATH];
-    if (strncpy_from_user(kpath, path, MAX_PATH - 1) < 0) return -EFAULT;
+    char *kpath = kmalloc(MAX_PATH);
+    if (!kpath) return -ENOMEM;
+    if (strncpy_from_user(kpath, path, MAX_PATH - 1) < 0) { kfree(kpath); return -EFAULT; }
     kpath[MAX_PATH - 1] = '\0';
-
-    return vfs_unlink(kpath);
+    int ret = vfs_unlink(kpath);
+    kfree(kpath);
+    return ret;
 }
 
 int sys_link(const char *uoldpath, const char *unewpath) {
@@ -1350,19 +1367,22 @@ ssize_t sys_readlink(const char *upath, char *ubuf, size_t bufsiz) {
 int sys_mkdir(const char *path, mode_t mode) {
     if (!current) return -1;
 
-    char kpath[MAX_PATH];
-    if (strncpy_from_user(kpath, path, MAX_PATH - 1) < 0) return -EFAULT;
+    char *_pathbufs = kmalloc(2 * MAX_PATH);
+    if (!_pathbufs) return -ENOMEM;
+    char *kpath    = _pathbufs;
+    char *resolved = _pathbufs + MAX_PATH;
+    if (strncpy_from_user(kpath, path, MAX_PATH - 1) < 0) { kfree(_pathbufs); return -EFAULT; }
     kpath[MAX_PATH - 1] = '\0';
 
     /* vfs_mkdir uses vfs_find_mount() prefix matching, so it needs a
      * normalized absolute path.  dentry_normalize_path handles ".", "..",
      * double slashes, and relative-to-cwd expansion. */
-    char resolved[MAX_PATH];
     if (dentry_normalize_path(current->fs->cwd, vfs_get_root(),
-                              kpath, resolved, sizeof(resolved)) < 0)
-        return -ENAMETOOLONG;
+                              kpath, resolved, MAX_PATH) < 0) { kfree(_pathbufs); return -ENAMETOOLONG; }
 
-    return vfs_mkdir(resolved, mode);
+    int ret = vfs_mkdir(resolved, mode);
+    kfree(_pathbufs);
+    return ret;
 }
 
 int sys_sync(void) {
@@ -1420,26 +1440,28 @@ int sys_sigprocmask(int how, const uint32_t *set, uint32_t *oldset) {
 int sys_chdir(const char *path) {
     if (!current || !path) return -EINVAL;
 
-    char kpath[MAX_PATH];
-    if (strncpy_from_user(kpath, path, MAX_PATH - 1) < 0) return -EFAULT;
+    char *kpath = kmalloc(MAX_PATH);
+    if (!kpath) return -ENOMEM;
+    if (strncpy_from_user(kpath, path, MAX_PATH - 1) < 0) { kfree(kpath); return -EFAULT; }
     kpath[MAX_PATH - 1] = '\0';
-
-    return vfs_chdir(kpath);   // VFS owns everything below
+    int ret = vfs_chdir(kpath);
+    kfree(kpath);
+    return ret;
 }
 
 char *sys_getcwd(char *buf, size_t size) {
     if (!current || !buf || size == 0 || !current->fs) return NULL;
 
     // Build the absolute path from the cwd dentry chain
-    char kbuf[MAX_PATH];
-    if (fs_struct_get_cwd(current->fs, kbuf, MAX_PATH) < 0)
-        return NULL;
+    char *kbuf = kmalloc(MAX_PATH);
+    if (!kbuf) return NULL;
+    if (fs_struct_get_cwd(current->fs, kbuf, MAX_PATH) < 0) { kfree(kbuf); return NULL; }
 
     size_t cwd_len = strlen(kbuf);
-    if (cwd_len + 1 > size) return NULL;   // user buffer too small
+    if (cwd_len + 1 > size) { kfree(kbuf); return NULL; }   // user buffer too small
 
     copy_to_user(buf, kbuf, cwd_len + 1);
-
+    kfree(kbuf);
     return buf;
 }
 
@@ -1634,12 +1656,14 @@ int sys_stat(const char *upath, struct stat *ustat)
 {
     if (!current || !upath || !ustat) return -EINVAL;
 
-    char kpath[MAX_PATH];
-    if (strncpy_from_user(kpath, upath, MAX_PATH - 1) < 0) return -EFAULT;
+    char *kpath = kmalloc(MAX_PATH);
+    if (!kpath) return -ENOMEM;
+    if (strncpy_from_user(kpath, upath, MAX_PATH - 1) < 0) { kfree(kpath); return -EFAULT; }
     kpath[MAX_PATH - 1] = '\0';
 
     struct stat kst;
     int ret = file_stat(kpath, &kst);
+    kfree(kpath);
     if (ret != 0) return ret;
 
     if (copy_to_user(ustat, &kst, sizeof(struct stat)) < 0) return -EFAULT;
@@ -1650,12 +1674,14 @@ int sys_lstat(const char *upath, struct stat *ustat)
 {
     if (!current || !upath || !ustat) return -EINVAL;
 
-    char kpath[MAX_PATH];
-    if (strncpy_from_user(kpath, upath, MAX_PATH - 1) < 0) return -EFAULT;
+    char *kpath = kmalloc(MAX_PATH);
+    if (!kpath) return -ENOMEM;
+    if (strncpy_from_user(kpath, upath, MAX_PATH - 1) < 0) { kfree(kpath); return -EFAULT; }
     kpath[MAX_PATH - 1] = '\0';
 
     struct stat kst;
     int ret = file_lstat(kpath, &kst);
+    kfree(kpath);
     if (ret != 0) return ret;
 
     if (copy_to_user(ustat, &kst, sizeof(struct stat)) < 0) return -EFAULT;
@@ -1677,16 +1703,19 @@ int sys_fstat(int fd, struct stat *ustat)
 int sys_chmod(const char *upath, mode_t mode) {
     if (!current || !upath) return -EINVAL;
 
-    char kpath[MAX_PATH];
-    if (strncpy_from_user(kpath, upath, MAX_PATH - 1) < 0) return -EFAULT;
+    char *_pathbufs = kmalloc(2 * MAX_PATH);
+    if (!_pathbufs) return -ENOMEM;
+    char *kpath    = _pathbufs;
+    char *resolved = _pathbufs + MAX_PATH;
+    if (strncpy_from_user(kpath, upath, MAX_PATH - 1) < 0) { kfree(_pathbufs); return -EFAULT; }
     kpath[MAX_PATH - 1] = '\0';
 
-    char resolved[MAX_PATH];
     if (dentry_normalize_path(current->fs->cwd, vfs_get_root(),
-                              kpath, resolved, sizeof(resolved)) < 0)
-        return -ENAMETOOLONG;
+                              kpath, resolved, MAX_PATH) < 0) { kfree(_pathbufs); return -ENAMETOOLONG; }
 
-    return vfs_chmod(resolved, mode);
+    int ret = vfs_chmod(resolved, mode);
+    kfree(_pathbufs);
+    return ret;
 }
 
 int sys_fchmod(int fd, mode_t mode) {
@@ -1702,16 +1731,19 @@ int sys_fchmod(int fd, mode_t mode) {
 int sys_rmdir(const char *path) {
     if (!current || !path) return -EINVAL;
 
-    char kpath[MAX_PATH];
-    if (strncpy_from_user(kpath, path, MAX_PATH - 1) < 0) return -EFAULT;
+    char *_pathbufs = kmalloc(2 * MAX_PATH);
+    if (!_pathbufs) return -ENOMEM;
+    char *kpath    = _pathbufs;
+    char *resolved = _pathbufs + MAX_PATH;
+    if (strncpy_from_user(kpath, path, MAX_PATH - 1) < 0) { kfree(_pathbufs); return -EFAULT; }
     kpath[MAX_PATH - 1] = '\0';
 
-    char resolved[MAX_PATH];
     if (dentry_normalize_path(current->fs->cwd, vfs_get_root(),
-                              kpath, resolved, sizeof(resolved)) < 0)
-        return -ENAMETOOLONG;
+                              kpath, resolved, MAX_PATH) < 0) { kfree(_pathbufs); return -ENAMETOOLONG; }
 
-    return vfs_rmdir(resolved);
+    int ret = vfs_rmdir(resolved);
+    kfree(_pathbufs);
+    return ret;
 }
 
 unsigned int sys_alarm(unsigned int seconds) {
@@ -2178,6 +2210,7 @@ long sys_sysconf(int name) {
     case SBUNIX_SC_PHYS_PAGES:        return (0x88000000UL - 0x80000000UL) / SBUNIX_PAGESIZE;
     case SBUNIX_SC_HOST_NAME_MAX:     return SBUNIX_HOST_NAME_MAX;
     case SBUNIX_SC_SYMLOOP_MAX:       return SBUNIX_SYMLOOP_MAX;
+    case SBUNIX_SC_VERSION:           return 200809L;
     default:
         return -EINVAL;
     }
@@ -2200,4 +2233,66 @@ int sys_setrlimit(int resource, const struct rlimit *user_rlim) {
     if (new_rlim.rlim_max > current->rlimits[resource].rlim_max) return -EPERM;
     current->rlimits[resource] = new_rlim;
     return 0;
+}
+
+/*
+ * sys_pathconf_query -- shared helper for pathconf(2) and fpathconf(2).
+ *
+ * SBUnix uses fixed, filesystem-independent limits, so the path/fd argument
+ * only needs to be validated for existence; the returned value is the same
+ * for every path or fd.  Returns the limit value (>= 0) or -EINVAL for
+ * unknown names.
+ *
+ * _PC_* values match the Linux POSIX ABI (same as the libc/include/unistd.h
+ * definitions).
+ */
+static long pathconf_query(int name) {
+    switch (name) {
+    case 0:  /* _PC_LINK_MAX */         return SBUNIX_LINK_MAX;
+    case 1:  /* _PC_MAX_CANON */        return SBUNIX_MAX_CANON;
+    case 2:  /* _PC_MAX_INPUT */        return SBUNIX_MAX_INPUT;
+    case 3:  /* _PC_NAME_MAX */         return SBUNIX_NAME_MAX;
+    case 4:  /* _PC_PATH_MAX */         return SBUNIX_PATH_MAX;
+    case 5:  /* _PC_PIPE_BUF */         return SBUNIX_PIPE_BUF;
+    case 6:  /* _PC_CHOWN_RESTRICTED */ return 0;   /* no multi-user; chown unrestricted */
+    case 7:  /* _PC_NO_TRUNC */         return 1;   /* long names return ENAMETOOLONG */
+    case 8:  /* _PC_VDISABLE */         return 0;   /* no terminal disable character */
+    case 9:  /* _PC_SYNC_IO */          return 1;
+    case 10: /* _PC_ASYNC_IO */         return -1;  /* not supported; -1 = indeterminate */
+    case 11: /* _PC_PRIO_IO */          return -1;  /* not supported */
+    case 13: /* _PC_FILESIZEBITS */     return 32;  /* ext2 max file size: 2 GB */
+    case 19: /* _PC_SYMLINK_MAX */      return SBUNIX_SYMLINK_MAX;
+    case 20: /* _PC_2_SYMLINKS */       return 1;   /* symbolic links are supported */
+    default:
+        return -EINVAL;
+    }
+}
+
+/*
+ * pathconf(2): query a filesystem limit by pathname.
+ * The path must resolve to an existing entry; the returned value is the same
+ * regardless of which filesystem the path resides on (SBUnix uses fixed limits).
+ */
+long sys_pathconf(const char *upath, int name) {
+    char *kpath = kmalloc(MAX_PATH);
+    if (!kpath) return -ENOMEM;
+    if (strncpy_from_user(kpath, upath, MAX_PATH) < 0) { kfree(kpath); return -EFAULT; }
+    kpath[MAX_PATH - 1] = '\0';
+
+    dentry_t *de = NULL;
+    if (vfs_lookup(kpath, &de) < 0 || !de) { kfree(kpath); return -ENOENT; }
+    dentry_put(de);
+    kfree(kpath);
+
+    return pathconf_query(name);
+}
+
+/*
+ * fpathconf(2): query a filesystem limit by open file descriptor.
+ * The fd must be open; the returned value is the same for every file.
+ */
+long sys_fpathconf(int fd, int name) {
+    if (fd < 0 || fd >= MAX_FDS) return -EBADF;
+    if (!current || !current->fds.files[fd]) return -EBADF;
+    return pathconf_query(name);
 }

@@ -19,6 +19,12 @@ static void test_sysconf_clk_tck(us_test_group_t *tg) {
     TEST(tg, "sysconf(_SC_CLK_TCK) > 0", v > 0);
 }
 
+static void test_sysconf_version(us_test_group_t *tg) {
+    long v = sysconf(_SC_VERSION);
+    TEST(tg, "sysconf(_SC_VERSION) > 0", v > 0);
+    TEST(tg, "sysconf(_SC_VERSION) == 200809L (POSIX.1-2008)", v == 200809L);
+}
+
 static void test_open_max_fds(us_test_group_t *tg) {
     /* Open OPEN_MAX - 3 new fds (0/1/2 already used). Should succeed. */
     int fds[OPEN_MAX];
@@ -37,6 +43,7 @@ void run_test_limits(us_test_group_t *group) {
     test_sysconf_open_max(group);
     test_sysconf_pagesize(group);
     test_sysconf_clk_tck(group);
+    test_sysconf_version(group);
     test_open_max_fds(group);
     ut_group_end(group);
 }

@@ -15,11 +15,9 @@
 #define SBUNIX_OPEN_MAX         20
 
 /* Maximum length of a pathname (bytes, including NUL terminator).
- * POSIX minimum (_POSIX_PATH_MAX) = 256. Kernel currently enforces 256.
- * libc/include/limits.h must match this value exactly (enforcement limit).
- * WARNING: raising this above 256 requires converting all stack-allocated
- * char[MAX_PATH] buffers in syscall.c and vfs.c to kmalloc first — see §3.6. */
-#define SBUNIX_PATH_MAX         256
+ * POSIX minimum (_POSIX_PATH_MAX) = 256. Kernel currently enforces 1024.
+ * libc/include/limits.h must match this value exactly (enforcement limit). */
+#define SBUNIX_PATH_MAX         1024
 
 /* Maximum length of a single filename component (bytes, excluding NUL).
  * POSIX minimum (_POSIX_NAME_MAX) = 14. */
@@ -125,5 +123,6 @@
 #define SBUNIX_SC_LOGIN_NAME_MAX      11
 #define SBUNIX_SC_HOST_NAME_MAX       12
 #define SBUNIX_SC_SYMLOOP_MAX         13
+#define SBUNIX_SC_VERSION             14
 
 #endif /* _KERNEL_LIMITS_H */

@@ -189,10 +189,14 @@ int file_open_with_flags(const char *path, int flags, mode_t mode) {
         } else {
             /* vfs_create uses vfs_find_mount() which does prefix matching,
              * so it needs an already-normalized absolute path. */
-            char resolved[MAX_PATH];
-            if (normalize_path(path, resolved, sizeof(resolved)) != 0)
+            char *resolved = kmalloc(MAX_PATH);
+            if (!resolved) return -ENOMEM;
+            if (normalize_path(path, resolved, MAX_PATH) != 0) {
+                kfree(resolved);
                 return -ENAMETOOLONG;
+            }
             int create_rc = vfs_create(resolved, mode ? mode : 0644);
+            kfree(resolved);
             if (create_rc < 0)
                 return create_rc;
         }

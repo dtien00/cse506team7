@@ -61,6 +61,8 @@
 .global sysconf
 .global getrlimit
 .global setrlimit
+.global pathconf
+.global fpathconf
 
 mmap:
     li a7, 14
@@ -375,6 +377,16 @@ getrlimit:
 
 setrlimit:
     li a7, 98
+    ecall
+    j __syscall_ret
+
+pathconf:
+    li a7, 99
+    ecall
+    j __syscall_ret
+
+fpathconf:
+    li a7, 100
     ecall
     j __syscall_ret
 
