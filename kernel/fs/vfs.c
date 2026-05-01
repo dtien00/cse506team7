@@ -741,6 +741,12 @@ int vfs_unlink(const char *path) {
         // Drop non-structural cache entries so lookups do not resurrect removed files.
         if (!(d->d_flags & (DENTRY_ROOT | DENTRY_COVER)))
             dentry_detach(d);
+        // If no fds are open (ref_count == 1: only this lookup holds a ref),
+        // call release now so the fs can free blocks immediately rather than
+        // leaking until the next open fd closes (or fsck).
+        vnode_t *vn = d->d_vnode;
+        if (vn && vn->ref_count == 1 && mnt->fs_type->ops.release)
+            mnt->fs_type->ops.release(vn);
         dentry_put(d);
         dentry_prune(d);
     } else {
