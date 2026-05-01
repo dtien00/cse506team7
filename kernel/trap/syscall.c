@@ -490,6 +490,18 @@ void sys_exit(int status) {
 pid_t sys_fork(void) {
     if (!current) return -1;
 
+    /* Count live (non-ZOMBIE, non-UNUSED) processes to enforce RLIMIT_NPROC. */
+    /* Note: this enforces a system-wide count. POSIX defines `RLIMIT_NPROC` per real user ID,
+        but since SBUnix has no multi-user support, a system-wide count is a reasonable
+        approximation and exercises the enforcement path. */
+    int live = 0;
+    for (int i = 0; i < MAX_PROCS; i++) {
+        struct proc *p = &proctab[i];
+        if (p->state != PROC_UNUSED && p->state != PROC_ZOMBIE) live++;
+    }
+    if ((uint64_t)live >= current->rlimits[RLIMIT_NPROC].rlim_cur)
+        return -EAGAIN;
+
     // Allocate and initialize new process (assigns pid, stack, context)
     struct proc *child = proc_create(current->name);
     if (!child) return -ENOMEM;
