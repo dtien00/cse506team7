@@ -503,9 +503,6 @@ static void test_exec_args(us_test_group_t *group) {
  *     write-back cache backed by VirtIO.  test_lseek and test_fs_persist already
  *     exercise the same /mnt/ path and pass.  Block cache confirmed functional.
  *
- *   test_sbrk: REMAINS DISABLED.
- *     sbrk() return-value semantics (old break vs. new break) differ from POSIX
- *     in the current kernel.  See JC_TESTS.md §1.4.
  */
 void run_test_xv6_compat(us_test_group_t *group) {
     ut_group_begin(group, "xv6_compat");
@@ -514,7 +511,7 @@ void run_test_xv6_compat(us_test_group_t *group) {
     test_two_children(group);
     test_exit_before_wait(group);
     test_reparent(group);
-    // test_sbrk(group); /* disabled: sbrk return-value semantics gap — JC_TESTS.md §1.4 */
+    test_sbrk(group); /* DEFECT-A: disable comment stale — sbrk already correct @ CHECK_5_2.md */
     test_mmap_anon(group);
     /* disk-file tests below — backed by block_cache (LRU write-back, VirtIO) */
     test_open_flags(group);

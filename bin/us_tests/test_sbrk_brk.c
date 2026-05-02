@@ -111,6 +111,28 @@ static void test_sbrk_sequential(us_test_group_t *group) {
          WIFEXITED(status) && WEXITSTATUS(status) == 0);
 }
 
+/* DEFECT-A verification: sbrk(N) must return the OLD break (POSIX).
+ * The existing tests exercise allocation size and COW but never check the
+ * return value contract.  Runs in a child so the parent's break is clean. */
+static void test_sbrk_retval(us_test_group_t *group) {
+    pid_t pid = fork();
+    if (pid == 0) {
+        void *before = sbrk(0);
+        void *ret    = sbrk(PAGE);
+        void *after  = sbrk(0);
+        /* ret must equal before (old break); break must have advanced by PAGE */
+        int ok = (ret == before) &&
+                 ((char *)after - (char *)before == PAGE);
+        if (ok) *(volatile char *)ret = 0xAB; /* touch: confirm page is mapped */
+        restore_brk_or_die(before, 3);
+        _exit(ok ? 0 : 1);
+    }
+    int status = 0;
+    waitpid(pid, &status, 0);
+    TEST(group, "sbrk-retval: sbrk(N) returns old break; break advances by N",
+         WIFEXITED(status) && WEXITSTATUS(status) == 0);
+}
+
 void run_test_sbrk_brk(us_test_group_t *group) {
     ut_group_begin(group, "sbrk_brk");
 
@@ -118,6 +140,7 @@ void run_test_sbrk_brk(us_test_group_t *group) {
     test_sbrk_sparse(group);
     test_sbrk_fork_cow(group);
     test_sbrk_sequential(group);
+    test_sbrk_retval(group);
 
     ut_group_end(group);
 }

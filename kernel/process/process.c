@@ -162,6 +162,27 @@ static void proc_free_pagetable(struct proc *p) {
 void proc_destroy(struct proc *p) {
     if (!p) return;
 
+    /* Flush dirty MAP_SHARED file pages before the page table is torn down.
+     * POSIX mmap: a process that exits without calling munmap() must still
+     * propagate writes to the underlying file object.  PTE_D is only readable
+     * while the page table exists, so this must run before proc_free_pagetable. */
+    if (p->pagetable) {
+        for (struct vm_area *v = p->vma_list; v; v = v->next) {
+            if (v->type != VMA_TYPE_FILE || !(v->flags & VMA_SHARED) || !v->file)
+                continue;
+            vnode_t *vn = ((file_t *)v->file)->vnode;
+            if (!vn || !vn->fs_type) continue;
+            for (uintptr_t va = v->start; va < v->end; va += PGSIZE) {
+                uint64_t *pte = vmm_walk(p->pagetable, va, 0);
+                if (pte && (*pte & PTE_V) && (*pte & PTE_U) && (*pte & PTE_D)) {
+                    uintptr_t pa = PTE_TO_PA(*pte);
+                    size_t off   = (size_t)(v->offset + (va - v->start));
+                    vn->fs_type->ops.write(vn, (void *)pa, off, PGSIZE);
+                }
+            }
+        }
+    }
+
     proc_free_pagetable(p);
 
     if (p->trapframe && p->trapframe_owned) {
