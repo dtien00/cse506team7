@@ -78,6 +78,7 @@
 #define SYS_setrlimit   98   /* int setrlimit(int resource, const struct rlimit *rlim) */
 #define SYS_pathconf    99   /* long pathconf(const char *path, int name) */
 #define SYS_fpathconf   100  /* long fpathconf(int fd, int name) */
+#define SYS_fcntl       101  /* int fcntl(int fd, int cmd, long arg) */
 
 // Initialize syscall subsystem
 void syscall_init(void);
@@ -155,3 +156,4 @@ int sys_getrlimit(int resource, struct rlimit *user_rlim);
 int sys_setrlimit(int resource, const struct rlimit *user_rlim);
 long pathconf(const char *path, int name);
 long fpathconf(int fd, int name);
+int sys_fcntl(int fd, int cmd, long arg);

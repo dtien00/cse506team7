@@ -4,6 +4,8 @@
 #include "errno.h"
 #include "string.h"
 #include "time.h"
+#include "termios.h"
+#include "sys/ioctl.h"
 
 #define SYS_exit  1
 #define SYS_sleep 11
@@ -40,7 +42,11 @@ int usleep(unsigned int usec) {
 /* getppid() is implemented as an assembly syscall wrapper in syscall.S */
 
 int isatty(int fd) {
-    return (fd == 0 || fd == 1 || fd == 2) ? 1 : 0;
+    struct termios t;
+    if (tcgetattr(fd, &t) == 0)
+        return 1;
+    /* errno is already set by tcgetattr (ENOTTY or EBADF) */
+    return 0;
 }
 
 int access(const char *pathname, int mode) {
