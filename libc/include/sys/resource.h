@@ -15,12 +15,14 @@ struct rusage {
     struct timeval ru_stime;  // system CPU time (always 0)
 };
 
+typedef uint64_t rlim_t;
+
 /* Per-process resource limit (soft = current enforcement; hard = ceiling). */
 struct rlimit {
-    uint64_t rlim_cur;   /* soft limit */
-    uint64_t rlim_max;   /* hard limit (ceiling) */
+    rlim_t rlim_cur;   /* soft limit */
+    rlim_t rlim_max;   /* hard limit (ceiling) */
 };
-#define RLIM_INFINITY   ((uint64_t)~0ULL)
+#define RLIM_INFINITY   ((rlim_t)~0ULL)
 
 /* Resource identifiers for getrlimit/setrlimit */
 #define RLIMIT_NOFILE   0    /* max open file descriptors */

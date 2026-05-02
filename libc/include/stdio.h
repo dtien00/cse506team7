@@ -4,6 +4,13 @@
 #include "stdarg.h"
 
 #define EOF (-1)
+#define BUFSIZ 256
+
+#ifndef SEEK_SET
+#define SEEK_SET 0
+#define SEEK_CUR 1
+#define SEEK_END 2
+#endif
 
 /* Opaque FILE type backed by an fd + small buffer */
 typedef struct {

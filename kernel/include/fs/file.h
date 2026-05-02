@@ -10,6 +10,7 @@
 #define O_ACCMODE   0x0003
 #define O_CREAT     0x0040
 #define O_EXCL      0x0080
+#define O_NOCTTY    0x0100
 #define O_TRUNC     0x0200
 #define O_APPEND    0x0400
 #define O_NONBLOCK  0x0800

@@ -14,9 +14,9 @@ time_t time(time_t *tloc) {
     return (time_t)tv.tv_sec;
 }
 
-int clock_gettime(int clk_id, struct timespec *tp) {
-    if (clk_id != CLOCK_REALTIME && clk_id != CLOCK_MONOTONIC &&
-        clk_id != CLOCK_PROCESS_CPUTIME_ID && clk_id != CLOCK_THREAD_CPUTIME_ID)
+int clock_gettime(clockid_t clock_id, struct timespec *tp) {
+    if (clock_id != CLOCK_REALTIME && clock_id != CLOCK_MONOTONIC &&
+        clock_id != CLOCK_PROCESS_CPUTIME_ID && clock_id != CLOCK_THREAD_CPUTIME_ID)
         return -1;   /* EINVAL — unknown clock */
     if (!tp) return -1;
     struct timeval tv;

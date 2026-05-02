@@ -3,7 +3,11 @@
 
 #include "types.h"
 
-#define offsetof(type, member) ((size_t)&((type*)0)->member)
+#ifndef NULL
+#define NULL ((void *)0)
+#endif
+
+#define offsetof(type, member) __builtin_offsetof(type, member)
 
 typedef long ptrdiff_t;
 
