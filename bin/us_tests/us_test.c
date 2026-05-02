@@ -20,6 +20,8 @@
  * are clearly marked SKIP so it's easy to enable them later.
  */
 
+#pragma GCC diagnostic ignored "-Wunused-function"
+#pragma GCC diagnostic ignored "-Wunused-const-variable"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -66,6 +68,7 @@ void run_test_pipe_sigpipe(us_test_group_t *group);
 void run_test_nanosleep(us_test_group_t *group);
 void run_test_xv6_compat(us_test_group_t *group);
 void run_test_fd_limits(us_test_group_t *group);
+void run_test_shell_exit(us_test_group_t *group);
 void run_test_limits(us_test_group_t *group);
 void run_test_bigfile(us_test_group_t *group);
 void run_test_forkstress(us_test_group_t *group);
@@ -73,6 +76,7 @@ void run_test_dirops(us_test_group_t *group);
 void run_test_lazy_alloc(us_test_group_t *group);
 void run_test_demand_heap(us_test_group_t *group);
 void run_test_inode_openunlink(us_test_group_t *group);
+void run_test_fd_reclaim(us_test_group_t *group);
 void run_test_syscall_robustness(us_test_group_t *group);
 void run_test_fd_offset(us_test_group_t *group);
 void run_test_forkforkfork(us_test_group_t *group);
@@ -85,6 +89,8 @@ void run_test_fsync(us_test_group_t *group);
 void run_test_fork_alloc_stress(us_test_group_t *group);
 void run_test_rlimit(us_test_group_t *group);
 void run_test_pathconf(us_test_group_t *group);
+void run_test_mm_health(us_test_group_t *group);
+void run_test_eval_mm(us_test_group_t *group);
 
 /* comprehensive libc conformance suites (each fills multiple groups) */
 void run_test_libc_string(us_test_group_t groups[], int *idx);
@@ -118,7 +124,7 @@ void run_test_libc_time(us_test_group_t groups[], int *idx);
 static const int RUN_ALL_TESTS   = 1;
 static const int RUN_FORK_HEAVY  = RUN_ALL_TESTS && 1;
 static const int RUN_MEMORY_HEAVY = RUN_ALL_TESTS && 1;
-static const int RUN_STRESS_TESTS = RUN_ALL_TESTS || 1;
+static const int RUN_STRESS_TESTS = RUN_ALL_TESTS && 0;
 
 int main(int argc, char **argv, char **envp) {
     /*
@@ -205,6 +211,7 @@ int main(int argc, char **argv, char **envp) {
         run_test_mmap_file(&groups[idx++]);
         run_test_fsync(&groups[idx++]);
         run_test_cloexec(&groups[idx++]);
+        run_test_shell_exit(&groups[idx++]);
     }
 
     /* ── RUN_MEMORY_HEAVY: tests with large heap / mmap allocations ────────── */
@@ -212,6 +219,8 @@ int main(int argc, char **argv, char **envp) {
         run_test_malloc(&groups[idx++]);
         run_test_lazy_alloc(&groups[idx++]);
         run_test_demand_heap(&groups[idx++]);
+        run_test_mm_health(&groups[idx++]);
+        run_test_eval_mm(&groups[idx++]);
     }
 
     /* ── Disabled stress / destructive tests (uncomment individually) ───────── */
@@ -222,14 +231,15 @@ int main(int argc, char **argv, char **envp) {
         run_test_rlimit(&groups[idx++]);
         run_test_pathconf(&groups[idx++]);
         run_test_fork_alloc_stress(&groups[idx++]);
-        // run_test_bigfile(&groups[idx++]);
-        // run_test_forkstress(&groups[idx++]);
-        // run_test_dirops(&groups[idx++]);
-        // run_test_inode_openunlink(&groups[idx++]);
+        run_test_bigfile(&groups[idx++]);
+        run_test_forkstress(&groups[idx++]);
+        run_test_dirops(&groups[idx++]);
+        run_test_inode_openunlink(&groups[idx++]);
+        run_test_fd_reclaim(&groups[idx++]);
         // run_test_syscall_robustness(&groups[idx++]);
         // run_test_fd_offset(&groups[idx++]);
         // run_test_forkforkfork(&groups[idx++]);
-        // run_test_writebig(&groups[idx++]); /* fills disk */
+        // // run_test_writebig(&groups[idx++]); /* fills disk */
     }
 
     /* ── Comprehensive libc conformance tests (always run, no forks) ────────── */

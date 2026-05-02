@@ -542,14 +542,21 @@ static int execute_pipeline(char *line) {
     return last_status;
 }
 
-int main(void) {
+int main(int argc, char **argv) {
     char line[MAX_LINE];
     int n;
+    int last_status = 0;
     signal(SIGINT,  SIG_IGN);
     signal(SIGTSTP, SIG_IGN);
     signal(SIGTTIN, SIG_IGN);
     signal(SIGTTOU, SIG_IGN);
-    signal(SIGCHLD, SIG_IGN); 
+    signal(SIGCHLD, SIG_IGN);
+
+    if (argc >= 3 && strcmp(argv[1], "-c") == 0) {
+        strncpy(line, argv[2], sizeof(line) - 1);
+        line[sizeof(line) - 1] = '\0';
+        return execute_pipeline(line);
+    }
 
     while (1) {
         job_reap_done();
@@ -563,10 +570,10 @@ int main(void) {
 
         if (line[0] == '\n' || line[0] == '\0') continue;
 
-        execute_pipeline(line);
+        last_status = execute_pipeline(line);
     }
 
-    return 0;
+    return last_status;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

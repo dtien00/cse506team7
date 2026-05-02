@@ -655,6 +655,28 @@ static int tmpfs_readdir(mount_t *mnt, vnode_t *vnode, uint32_t start_idx, void 
     uint32_t found = 0;
     uint32_t idx = 0;
 
+    /* emit "." and ".." as virtual entries at index 0 and 1 */
+    struct { const char *name; uint32_t ino; } dots[2] = {
+        { ".",  dir->ino },
+        { "..", dir->parent ? dir->parent->ino : dir->ino },
+    };
+    for (int di = 0; di < 2; di++) {
+        if (idx++ < start_idx)
+            continue;
+        size_t nlen = strlen(dots[di].name);
+        uint16_t reclen = FS_DENT_RECLEN(nlen);
+        if (written + reclen > bufsize)
+            goto done;
+        struct fs_dent *d = (struct fs_dent *) (out + written);
+        memset(d, 0, reclen);
+        d->d_ino = dots[di].ino;
+        d->d_reclen = reclen;
+        d->d_type = DT_DIR;
+        memcpy(d->d_name, dots[di].name, nlen + 1);
+        written += reclen;
+        found++;
+    }
+
     for (tmpfs_inode_t *child = dir->children; child; child = child->next) {
         if (idx++ < start_idx)
             continue;
@@ -679,6 +701,7 @@ static int tmpfs_readdir(mount_t *mnt, vnode_t *vnode, uint32_t start_idx, void 
         written += reclen;
         found++;
     }
+done:
 
     if (entries_out)
         *entries_out = found;

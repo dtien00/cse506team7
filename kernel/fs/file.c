@@ -288,6 +288,13 @@ static void file_release(file_t *f) {
     if (f->type == FILE_VNODE && f->dentry) {
         if (f->flags & O_WRONLY || f->flags & O_RDWR)
             block_cache_flush();
+        // If this is the last fd and the fs has a release hook, call it so
+        // the fs can free inode resources for files that were unlinked while open.
+        vnode_t *vn = f->vnode;
+        if (vn && vn->mount && vn->mount->fs_type &&
+            vn->mount->fs_type->ops.release &&
+            vn->ref_count == 1) // about to drop to 0 via dentry_put below
+            vn->mount->fs_type->ops.release(vn);
         dentry_put(f->dentry); // the only type that owns a dentry ref
         f->dentry = NULL;
         f->vnode = NULL;

@@ -329,8 +329,8 @@ void run_test_exec_bin(us_test_group_t *group) {
         int status = run_shell_script("echo broken >\n", NULL, 0, stderr_buf, sizeof(stderr_buf));
 
         TEST(group, "shell redirect syntax error: /bin/sh executes", status >= 0);
-        TEST(group, "shell redirect syntax error: shell stays alive and exits cleanly",
-             status >= 0 && WIFEXITED(status) && WEXITSTATUS(status) == 0);
+        TEST(group, "shell redirect syntax error: shell exits with failure status",
+             status >= 0 && WIFEXITED(status) && WEXITSTATUS(status) != 0);
         TEST(group, "shell redirect syntax error: emits parser error",
              strstr(stderr_buf, "invalid syntax") != NULL);
     }

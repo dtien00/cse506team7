@@ -69,6 +69,7 @@ typedef struct filesystem_operations {
     int (*symlink)(struct mount *mnt, const char *target, const char *linkpath);
     int (*readlink)(vnode_t *vnode, char *buf, size_t size);
     uint32_t (*get_nlink)(vnode_t *vnode); // optional: return fresh nlink from fs
+    int (*release)(vnode_t *vnode); // optional: called when last fd referencing vnode closes
 } fs_ops_t;
 
 typedef struct fs_struct {
