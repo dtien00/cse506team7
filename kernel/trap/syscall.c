@@ -443,10 +443,12 @@ void syscall_handler(trap_frame *frame) {
 
         /* Single-user kernel: all processes run as UID/GID 0 (root). */
         case SYS_getuid:
+        case SYS_geteuid:
             ret = 0;
             break;
 
         case SYS_getgid:
+        case SYS_getegid:
             ret = 0;
             break;
 
