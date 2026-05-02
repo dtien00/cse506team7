@@ -49,3 +49,4 @@ void jobctl_test_run(void);
 void sig_flag_test_run(void);
 void kstack_overflow_test_run(void);
 void leak_test_run(void);
+void mm_vma_test_run(void);

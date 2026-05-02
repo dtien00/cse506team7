@@ -67,6 +67,7 @@ void run_all_tests(void) {
     jobctl_test_run();
     sig_flag_test_run();
     leak_test_run();
+    mm_vma_test_run();
 
     // kstack_overflow_test_run();   // DESTRUCTIVE: must be last — triggers kernel stack overflow panic
 

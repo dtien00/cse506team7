@@ -486,6 +486,192 @@ static void test_exec_args(us_test_group_t *group) {
     TEST(group, "exec-args: output contains arg1", n > 0 && memcmp(buf, "arg1 arg2 arg3\n", 15) == 0);
 }
 
+/* ── unlink while fd open: data still accessible via fd (xv6 unlinkread) ─── */
+
+static void test_unlinkread(us_test_group_t *group) {
+    const char *path = "/mnt/xv6_unlinkread.txt";
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    TEST(group, "unlinkread: create file", fd >= 0);
+    if (fd < 0) return;
+    write(fd, "still here", 10);
+    close(fd);
+
+    fd = open(path, O_RDONLY);
+    TEST(group, "unlinkread: open for read", fd >= 0);
+    if (fd < 0) return;
+
+    int r = unlink(path);
+    TEST(group, "unlinkread: unlink while fd open returns 0", r == 0);
+
+    /* data must still be readable through the open fd */
+    char buf[16];
+    memset(buf, 0, sizeof(buf));
+    int n = (int)read(fd, buf, sizeof(buf) - 1);
+    TEST(group, "unlinkread: data readable after unlink", n == 10 && memcmp(buf, "still here", 10) == 0);
+    close(fd);
+
+    /* path must be gone */
+    int fd2 = open(path, O_RDONLY);
+    TEST(group, "unlinkread: path gone after close", fd2 < 0);
+    if (fd2 >= 0) close(fd2);
+}
+
+/* ── fork shares file offset (xv6 sharedfd) ────────────────────────────── */
+
+static void test_sharedfd(us_test_group_t *group) {
+    const char *path = "/mnt/xv6_sharedfd.txt";
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    TEST(group, "sharedfd: create file", fd >= 0);
+    if (fd < 0) return;
+    /* write 100 bytes so there's room for both to advance */
+    char zeros[100];
+    memset(zeros, 0, sizeof(zeros));
+    write(fd, zeros, sizeof(zeros));
+    close(fd);
+
+    fd = open(path, O_RDWR);
+    TEST(group, "sharedfd: open rdwr", fd >= 0);
+    if (fd < 0) return;
+
+    /* pipe to synchronize: child writes its offset, parent reads it */
+    int sync[2];
+    pipe(sync);
+    pid_t pid = fork();
+    if (pid == 0) {
+        close(sync[0]);
+        /* child writes 5 bytes, then reports current offset */
+        write(fd, "child", 5);
+        off_t off = lseek(fd, 0, SEEK_CUR);
+        write(sync[1], &off, sizeof(off));
+        close(sync[1]);
+        _exit(0);
+    }
+    close(sync[1]);
+    off_t child_off = 0;
+    read(sync[0], &child_off, sizeof(child_off));
+    close(sync[0]);
+
+    /* parent writes 6 bytes from its own position (which advanced with child's) */
+    write(fd, "parent", 6);
+    off_t parent_off = lseek(fd, 0, SEEK_CUR);
+
+    int status = 0;
+    waitpid(pid, &status, 0);
+    close(fd);
+
+    /* both used the same offset: total advance = 5 + 6 = 11 from start */
+    TEST(group, "sharedfd: parent offset advanced past child write",
+         parent_off >= 11);
+    TEST(group, "sharedfd: child offset was 5 after writing 5 bytes",
+         child_off == 5);
+    (void)parent_off;
+}
+
+/* ── 4 children sharing same fd all write distinct bytes (xv6 fourfiles) ── */
+
+static void test_fourfiles(us_test_group_t *group) {
+#define FF_N 4
+    const char *path = "/mnt/xv6_fourfiles.txt";
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    TEST(group, "fourfiles: create file", fd >= 0);
+    if (fd < 0) return;
+    close(fd);
+
+    /* each child opens its own fd and writes 16 bytes of its letter */
+    pid_t pids[FF_N];
+    char letters[FF_N] = { 'A', 'B', 'C', 'D' };
+    for (int i = 0; i < FF_N; i++) {
+        pids[i] = fork();
+        if (pids[i] == 0) {
+            int cfd = open(path, O_WRONLY | O_APPEND);
+            if (cfd < 0) _exit(1);
+            char buf[16];
+            memset(buf, letters[i], sizeof(buf));
+            write(cfd, buf, sizeof(buf));
+            close(cfd);
+            _exit(0);
+        }
+    }
+    int all_ok = 1;
+    for (int i = 0; i < FF_N; i++) {
+        int st = 0;
+        waitpid(pids[i], &st, 0);
+        if (!WIFEXITED(st) || WEXITSTATUS(st) != 0) all_ok = 0;
+    }
+    TEST(group, "fourfiles: all 4 children exited 0", all_ok);
+
+    /* total file size must be exactly 4*16 = 64 bytes */
+    fd = open(path, O_RDONLY);
+    TEST(group, "fourfiles: reopen for verify", fd >= 0);
+    if (fd >= 0) {
+        char buf[128];
+        int n = (int)read(fd, buf, sizeof(buf));
+        close(fd);
+        TEST(group, "fourfiles: total 64 bytes written", n == 64);
+        /* each letter must appear exactly 16 times */
+        int counts[FF_N] = {0};
+        for (int i = 0; i < n; i++) {
+            for (int j = 0; j < FF_N; j++)
+                if (buf[i] == letters[j]) counts[j]++;
+        }
+        int counts_ok = 1;
+        for (int j = 0; j < FF_N; j++)
+            if (counts[j] != 16) counts_ok = 0;
+        TEST(group, "fourfiles: each letter appears exactly 16 times", counts_ok);
+    }
+#undef FF_N
+}
+
+/* ── kernel VA unreachable from userspace (xv6 kernmem) ─────────────────── */
+
+static void test_kernmem(us_test_group_t *group) {
+    /* KERNBASE on this platform is 0x80000000.
+     * Reading/writing a kernel VA from userspace must fault (child killed). */
+    pid_t pid = fork();
+    if (pid == 0) {
+        volatile char *kp = (volatile char *)0x80000000UL;
+        char c = *kp;   /* should fault → signal → _exit non-zero */
+        (void)c;
+        _exit(0);  /* if we get here, kernmem access wrongly succeeded */
+    }
+    int status = 0;
+    waitpid(pid, &status, 0);
+    /* child must have been killed (signal) or exited non-zero */
+    int killed = (WIFSIGNALED(status)) || (WIFEXITED(status) && WEXITSTATUS(status) != 0);
+    TEST(group, "kernmem: read kernel VA kills child (no escape)", killed);
+
+    /* write path */
+    pid = fork();
+    if (pid == 0) {
+        volatile char *kp = (volatile char *)0x80000000UL;
+        *kp = 0x42;
+        _exit(0);
+    }
+    waitpid(pid, &status, 0);
+    killed = (WIFSIGNALED(status)) || (WIFEXITED(status) && WEXITSTATUS(status) != 0);
+    TEST(group, "kernmem: write kernel VA kills child (no escape)", killed);
+}
+
+/* ── write to PROT_READ-only mmap triggers SIGSEGV (xv6 nowrite) ────────── */
+
+static void test_nowrite(us_test_group_t *group) {
+    /* mmap a read-only anonymous page; writing to it must kill the process */
+    pid_t pid = fork();
+    if (pid == 0) {
+        void *p = mmap(NULL, 4096, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (p == MAP_FAILED) _exit(2);
+        volatile char *cp = (volatile char *)p;
+        *cp = 0x42;   /* write to read-only mapping → SIGSEGV */
+        munmap(p, 4096);
+        _exit(0);   /* must not reach here */
+    }
+    int status = 0;
+    waitpid(pid, &status, 0);
+    int killed = WIFSIGNALED(status) ||
+                 (WIFEXITED(status) && WEXITSTATUS(status) != 0 && WEXITSTATUS(status) != 2);
+    TEST(group, "nowrite: write to PROT_READ mmap kills child", killed);
+}
+
 /* ── public entry point ─────────────────────────────────────────────────── */
 
 /*
@@ -521,6 +707,12 @@ void run_test_xv6_compat(us_test_group_t *group) {
     test_concurrent_children(group);
     test_bad_fd(group);
     test_exec_args(group);
+    /* xv6 usertests: unlinkread, sharedfd, fourfiles, kernmem, nowrite */
+    test_unlinkread(group);
+    test_sharedfd(group);
+    test_fourfiles(group);
+    test_kernmem(group);
+    test_nowrite(group);
 
     ut_group_end(group);
 }
