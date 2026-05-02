@@ -1157,6 +1157,29 @@ int sys_munmap(void *addr, size_t length) {
     uintptr_t unmap_start = (uintptr_t)addr;
     uintptr_t unmap_end   = unmap_start + PGROUNDUP(length);
 
+    /* Flush dirty pages for MAP_SHARED file VMAs before unmapping.
+     * POSIX mmap: modifications to a MAP_SHARED mapping must be propagated
+     * to the underlying object no later than munmap(). PTE_D is set by
+     * hardware on the first store to a page; read it before vmm_unmap clears it. */
+    for (struct vm_area *sv = p->vma_list; sv; sv = sv->next) {
+        if (sv->type != VMA_TYPE_FILE || !(sv->flags & VMA_SHARED) || !sv->file)
+            continue;
+        if (sv->start >= unmap_end || sv->end <= unmap_start)
+            continue;
+        uintptr_t wb_start = sv->start > unmap_start ? sv->start : unmap_start;
+        uintptr_t wb_end   = sv->end   < unmap_end   ? sv->end   : unmap_end;
+        vnode_t *vn = ((file_t *)sv->file)->vnode;
+        if (!vn || !vn->fs_type) continue;
+        for (uintptr_t va = wb_start; va < wb_end; va += PGSIZE) {
+            uint64_t *pte = vmm_walk(p->pagetable, va, 0);
+            if (pte && (*pte & PTE_V) && (*pte & PTE_U) && (*pte & PTE_D)) {
+                uintptr_t pa = PTE_TO_PA(*pte);
+                size_t off   = (size_t)(sv->offset + (va - sv->start));
+                vn->fs_type->ops.write(vn, (void *)pa, off, PGSIZE);
+            }
+        }
+    }
+
     /* Free any physical pages that were demand-faulted in. */
     for (uintptr_t page_va = unmap_start; page_va < unmap_end; page_va += PGSIZE) {
         uint64_t *pte = vmm_walk(p->pagetable, page_va, 0);

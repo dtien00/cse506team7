@@ -291,6 +291,148 @@ static void test_map_shared_eof_sigbus(us_test_group_t *group) {
     munmap(m, 2 * 4096);
 }
 
+/* ── I. MAP_SHARED write → munmap → read() verifies persistence ─────────── */
+/* Tests the sys_munmap writeback path (DEFECT-B fix in syscall.c:1160-1181). */
+
+static void test_map_shared_write_munmap(us_test_group_t *group) {
+    const char *path = "/mnt/mmap_shared_wb_munmap.tmp";
+    char zeros[4096];
+    memset(zeros, 0, sizeof(zeros));
+
+    int fd = open(path, O_RDWR | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) {
+        SKIP(group, "mmap-file/shared-write-munmap: MAP_SHARED write persists after munmap",
+             "cannot create test file on /mnt/");
+        return;
+    }
+    write(fd, zeros, sizeof(zeros));
+
+    void *m = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    close(fd);
+    if (m == MAP_FAILED) {
+        SKIP(group, "mmap-file/shared-write-munmap: MAP_SHARED write persists after munmap",
+             "MAP_SHARED mmap failed");
+        unlink(path);
+        return;
+    }
+
+    memset(m, 0xAB, 4096);
+    munmap(m, 4096);   /* writeback must happen here */
+
+    fd = open(path, O_RDONLY);
+    char buf[4096];
+    int nr = read(fd, buf, sizeof(buf));
+    close(fd);
+    unlink(path);
+
+    int ok = (nr == 4096);
+    for (int i = 0; i < nr && ok; i++)
+        if ((unsigned char)buf[i] != 0xAB) ok = 0;
+
+    TEST(group, "mmap-file/shared-write-munmap: MAP_SHARED write persists after munmap", ok);
+}
+
+/* ── J. MAP_SHARED write → process exit without munmap ──────────────────── */
+/* Tests the proc_destroy writeback path (DEFECT-B fix in process.c:165-184). */
+
+static void test_map_shared_write_exit(us_test_group_t *group) {
+    const char *path = "/mnt/mmap_shared_wb_exit.tmp";
+    char zeros[4096];
+    memset(zeros, 0, sizeof(zeros));
+
+    int fd = open(path, O_RDWR | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) {
+        SKIP(group, "mmap-file/shared-write-exit: MAP_SHARED write persists on exit without munmap",
+             "cannot create test file on /mnt/");
+        return;
+    }
+    write(fd, zeros, sizeof(zeros));
+    close(fd);
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        int cfd = open(path, O_RDWR);
+        if (cfd < 0) _exit(1);
+        void *m = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, cfd, 0);
+        close(cfd);
+        if (m == MAP_FAILED) _exit(2);
+        memset(m, 0xCD, 4096);
+        _exit(0);   /* no munmap — writeback must fire in proc_destroy */
+    }
+    int status = 0;
+    waitpid(pid, &status, 0);
+
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        TEST(group, "mmap-file/shared-write-exit: MAP_SHARED write persists on exit without munmap", 0);
+        unlink(path);
+        return;
+    }
+
+    fd = open(path, O_RDONLY);
+    char buf[4096];
+    int nr = read(fd, buf, sizeof(buf));
+    close(fd);
+    unlink(path);
+
+    int ok = (nr == 4096);
+    for (int i = 0; i < nr && ok; i++)
+        if ((unsigned char)buf[i] != 0xCD) ok = 0;
+
+    TEST(group, "mmap-file/shared-write-exit: MAP_SHARED write persists on exit without munmap", ok);
+}
+
+/* ── K. MAP_SHARED with non-zero file offset ─────────────────────────────── */
+/* Exercises the offset arithmetic: off = vma->offset + (va - vma->start).
+ * A zero-offset-only bug would write to the wrong file position, leaving the
+ * second page with old data and potentially corrupting the first page. */
+
+static void test_map_shared_write_nonzero_offset(us_test_group_t *group) {
+    const char *path = "/mnt/mmap_shared_wb_offset.tmp";
+    char page0[4096], page1[4096];
+    memset(page0, 'A', sizeof(page0));
+    memset(page1, 'B', sizeof(page1));
+
+    int fd = open(path, O_RDWR | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) {
+        SKIP(group, "mmap-file/shared-write-offset: MAP_SHARED writeback respects non-zero mmap offset",
+             "cannot create test file on /mnt/");
+        return;
+    }
+    write(fd, page0, sizeof(page0));  /* page 0: all 'A' */
+    write(fd, page1, sizeof(page1));  /* page 1: all 'B' */
+
+    /* Map only the second page (offset = 4096) */
+    void *m = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 4096);
+    close(fd);
+    if (m == MAP_FAILED) {
+        SKIP(group, "mmap-file/shared-write-offset: MAP_SHARED writeback respects non-zero mmap offset",
+             "MAP_SHARED mmap with offset=4096 failed");
+        unlink(path);
+        return;
+    }
+
+    memset(m, 0xEF, 4096);
+    munmap(m, 4096);
+
+    fd = open(path, O_RDONLY);
+    char buf[8192];
+    int nr = read(fd, buf, sizeof(buf));
+    close(fd);
+    unlink(path);
+
+    int page0_ok = (nr >= 4096);
+    for (int i = 0; i < 4096 && page0_ok; i++)
+        if ((unsigned char)buf[i] != 'A') page0_ok = 0;
+
+    int page1_ok = (nr == 8192);
+    for (int i = 4096; i < 8192 && page1_ok; i++)
+        if ((unsigned char)buf[i] != 0xEF) page1_ok = 0;
+
+    TEST(group, "mmap-file/shared-write-offset: page before mapping unchanged", page0_ok);
+    TEST(group, "mmap-file/shared-write-offset: MAP_SHARED writeback respects non-zero mmap offset",
+         page1_ok);
+}
+
 /* ── public entry point ──────────────────────────────────────────────────── */
 
 void run_test_mmap_file(us_test_group_t *group) {
@@ -304,6 +446,9 @@ void run_test_mmap_file(us_test_group_t *group) {
     test_large_file_mmap(group);
     test_past_eof_zero(group);
     test_map_shared_eof_sigbus(group);
+    test_map_shared_write_munmap(group);
+    test_map_shared_write_exit(group);
+    test_map_shared_write_nonzero_offset(group);
 
     ut_group_end(group);
 }
