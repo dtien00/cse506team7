@@ -488,19 +488,38 @@ static void test_exec_args(us_test_group_t *group) {
 
 /* ── public entry point ─────────────────────────────────────────────────── */
 
-// commented out tests  do not work. May want to revisit
+/*
+ * Formerly-disabled tests re-enabled after block-cache / disk-file audit
+ * (see JC_TESTS.md §1.3).  Summary:
+ *
+ *   test_pipe_data / test_two_children / test_exit_before_wait / test_reparent:
+ *     Fork+pipe+wait combination proven stable by other test suites.
+ *
+ *   test_mmap_anon:
+ *     Lazy allocation and COW are implemented; test_lazy_alloc and test_cow pass.
+ *
+ *   test_open_flags / test_many_writes / test_create_delete:
+ *     Use /mnt/ (ext2 + block cache).  block_cache.c provides a 256-slot LRU
+ *     write-back cache backed by VirtIO.  test_lseek and test_fs_persist already
+ *     exercise the same /mnt/ path and pass.  Block cache confirmed functional.
+ *
+ *   test_sbrk: REMAINS DISABLED.
+ *     sbrk() return-value semantics (old break vs. new break) differ from POSIX
+ *     in the current kernel.  See JC_TESTS.md §1.4.
+ */
 void run_test_xv6_compat(us_test_group_t *group) {
     ut_group_begin(group, "xv6_compat");
 
-    // test_pipe_data(group);
-    // test_two_children(group);
-    // test_exit_before_wait(group);
-    // test_reparent(group);
-    // test_sbrk(group); //don't feel like fixing. Hopefully not tested
-    // test_mmap_anon(group);
-    // test_open_flags(group);
-    // test_many_writes(group);
-    // test_create_delete(group);
+    test_pipe_data(group);
+    test_two_children(group);
+    test_exit_before_wait(group);
+    test_reparent(group);
+    // test_sbrk(group); /* disabled: sbrk return-value semantics gap — JC_TESTS.md §1.4 */
+    test_mmap_anon(group);
+    /* disk-file tests below — backed by block_cache (LRU write-back, VirtIO) */
+    test_open_flags(group);
+    test_many_writes(group);
+    test_create_delete(group);
     test_lseek(group);
     test_concurrent_children(group);
     test_bad_fd(group);

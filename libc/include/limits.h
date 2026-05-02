@@ -10,8 +10,8 @@
 /* ---- Pathname variable limits (enforcement) -------------------------------- */
 /* NOTE: POSIX allows these to vary per filesystem; pathconf() is authoritative.
  * These fixed values reflect the single enforcement limit in SBUnix.
- * PATH_MAX meets _POSIX_PATH_MAX (256) but NOT _XOPEN_PATH_MAX (1024). */
-#define PATH_MAX        256     /* SBUNIX_PATH_MAX  — kernel copy-in buffer size */
+ * PATH_MAX meets both _POSIX_PATH_MAX (256) and _XOPEN_PATH_MAX (1024). */
+#define PATH_MAX        1024    /* SBUNIX_PATH_MAX  — kernel copy-in buffer size */
 #define NAME_MAX        255     /* SBUNIX_NAME_MAX  — VFS dentry name field */
 #define PIPE_BUF        4096    /* SBUNIX_PIPE_BUF  — pipe ring buffer capacity */
 #define LINK_MAX        8       /* SBUNIX_LINK_MAX  — informational */
@@ -74,10 +74,8 @@
 #define _POSIX_TTY_NAME_MAX     9
 
 /* ---- XSI minimum values (Single UNIX Specification extensions) ------------- */
-/* _XOPEN_PATH_MAX = 1024: our PATH_MAX (256) does NOT meet this requirement.
- * Raising PATH_MAX to 1024 requires converting stack path buffers to kmalloc
- * (see §3.6). Do not define _XOPEN_PATH_MAX here until that work is done. */
-/* #define _XOPEN_PATH_MAX    1024  -- NOT YET MET; intentionally omitted */
+/* _XOPEN_PATH_MAX = 1024: our PATH_MAX (1024) now meets this requirement. */
+#define _XOPEN_PATH_MAX     1024    /* met: PATH_MAX = 1024 */
 #define _XOPEN_NAME_MAX     255     /* met: NAME_MAX = 255 */
 
 #endif /* _LIMITS_H */

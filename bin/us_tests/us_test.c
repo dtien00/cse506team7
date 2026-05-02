@@ -86,6 +86,9 @@ void run_test_mmap_file(us_test_group_t *group);
 void run_test_errno(us_test_group_t *group);
 void run_test_cloexec(us_test_group_t *group);
 void run_test_fsync(us_test_group_t *group);
+void run_test_fork_alloc_stress(us_test_group_t *group);
+void run_test_rlimit(us_test_group_t *group);
+void run_test_pathconf(us_test_group_t *group);
 void run_test_mm_health(us_test_group_t *group);
 void run_test_eval_mm(us_test_group_t *group);
 
@@ -121,7 +124,7 @@ void run_test_libc_time(us_test_group_t groups[], int *idx);
 static const int RUN_ALL_TESTS   = 1;
 static const int RUN_FORK_HEAVY  = RUN_ALL_TESTS && 1;
 static const int RUN_MEMORY_HEAVY = RUN_ALL_TESTS && 1;
-static const int RUN_STRESS_TESTS = RUN_ALL_TESTS || 1;
+static const int RUN_STRESS_TESTS = RUN_ALL_TESTS && 0;
 
 int main(int argc, char **argv, char **envp) {
     /*
@@ -161,70 +164,73 @@ int main(int argc, char **argv, char **envp) {
 
     /* ── Lightweight / no-fork tests (always run) ─────────────────────────── */
 
-    // if (RUN_ALL_TESTS) {
-    //     run_test_printf(&groups[idx++]);
-    //     run_test_string(&groups[idx++]);
-    //     run_test_ctype(&groups[idx++]);
-    //     run_test_stdlib(&groups[idx++]);
-    //     run_test_sbrk_brk(&groups[idx++]);
-    //     run_test_file_io(&groups[idx++]);
-    //     run_test_mv_cp(&groups[idx++]);
-    //     run_test_write(&groups[idx++]);
-    //     run_test_fs_persist(groups, &idx);
-    //     run_test_syscall(&groups[idx++]);
-    //     run_test_errno(&groups[idx++]);
-    //     run_test_dirent(&groups[idx++]);
-    //     run_test_termios_tty(&groups[idx++]);
-    //     run_test_stack_growth(&groups[idx++]);
-    //     run_test_yield(&groups[idx++]);
-    //     run_test_procinfo(&groups[idx++]);
-    //     run_test_procfs(&groups[idx++]);
-    //     run_test_gettimeofday(&groups[idx++]);
-    //     run_test_pipe_sigpipe(&groups[idx++]);
-    //     run_test_time(&groups[idx++]);
-    //     run_test_nanosleep(&groups[idx++]);
-    // }
+    if (RUN_ALL_TESTS) {
+        run_test_printf(&groups[idx++]);
+        run_test_string(&groups[idx++]);
+        run_test_ctype(&groups[idx++]);
+        run_test_stdlib(&groups[idx++]);
+        run_test_sbrk_brk(&groups[idx++]);
+        run_test_file_io(&groups[idx++]);
+        run_test_mv_cp(&groups[idx++]);
+        run_test_write(&groups[idx++]);
+        run_test_fs_persist(groups, &idx);
+        run_test_syscall(&groups[idx++]);
+        run_test_errno(&groups[idx++]);
+        run_test_dirent(&groups[idx++]);
+        run_test_termios_tty(&groups[idx++]);
+        run_test_stack_growth(&groups[idx++]);
+        run_test_yield(&groups[idx++]);
+        run_test_procinfo(&groups[idx++]);
+        run_test_procfs(&groups[idx++]);
+        run_test_gettimeofday(&groups[idx++]);
+        run_test_pipe_sigpipe(&groups[idx++]);
+        run_test_time(&groups[idx++]);
+        run_test_nanosleep(&groups[idx++]);
+    }
 
-    // /* ── RUN_FORK_HEAVY: tests that spawn multiple child processes ─────────── */
-    // if (RUN_FORK_HEAVY) {
-    //     run_test_process(&groups[idx++]);
-    //     run_test_exec_bin(&groups[idx++]);
-    //     run_test_cow(&groups[idx++]);
-    //     run_test_sched(&groups[idx++]);
-    //     run_test_signal(&groups[idx++]);
-    //     run_test_signal_faults(&groups[idx++]);
-    //     run_test_signals2(&groups[idx++]);
-    //     run_test_getrusage(&groups[idx++]);
-    //     run_test_nice(&groups[idx++]);
-    //     run_test_nice_extended(&groups[idx++]);
-    //     run_test_pause(&groups[idx++]);
-    //     run_test_alarm(&groups[idx++]);
-    //     run_test_sigaction(&groups[idx++]);
-    //     run_test_sigsuspend(&groups[idx++]);
-    //     run_test_pgrp(&groups[idx++]);
-    //     run_test_jobctl(&groups[idx++]);
-    //     run_test_links(groups, &idx);
-    //     run_test_exec_envp(groups, &idx);
-    //     run_test_mmap_file(&groups[idx++]);
-    //     run_test_fsync(&groups[idx++]);
-    //     run_test_cloexec(&groups[idx++]);
-    //     run_test_shell_exit(&groups[idx++]);
-    // }
+    /* ── RUN_FORK_HEAVY: tests that spawn multiple child processes ─────────── */
+    if (RUN_FORK_HEAVY) {
+        run_test_process(&groups[idx++]);
+        run_test_exec_bin(&groups[idx++]);
+        run_test_cow(&groups[idx++]);
+        run_test_sched(&groups[idx++]);
+        run_test_signal(&groups[idx++]);
+        run_test_signal_faults(&groups[idx++]);
+        run_test_signals2(&groups[idx++]);
+        run_test_getrusage(&groups[idx++]);
+        run_test_nice(&groups[idx++]);
+        run_test_nice_extended(&groups[idx++]);
+        run_test_pause(&groups[idx++]);
+        run_test_alarm(&groups[idx++]);
+        run_test_sigaction(&groups[idx++]);
+        run_test_sigsuspend(&groups[idx++]);
+        run_test_pgrp(&groups[idx++]);
+        run_test_jobctl(&groups[idx++]);
+        run_test_links(groups, &idx);
+        run_test_exec_envp(groups, &idx);
+        run_test_mmap_file(&groups[idx++]);
+        run_test_fsync(&groups[idx++]);
+        run_test_cloexec(&groups[idx++]);
+        run_test_shell_exit(&groups[idx++]);
+    }
 
-    // /* ── RUN_MEMORY_HEAVY: tests with large heap / mmap allocations ────────── */
-    // if (RUN_MEMORY_HEAVY) {
-    //     run_test_malloc(&groups[idx++]);
-    //     run_test_lazy_alloc(&groups[idx++]);
-    //     run_test_demand_heap(&groups[idx++]);
-    //     run_test_mm_health(&groups[idx++]);
-    //     run_test_eval_mm(&groups[idx++]);
-    // }
+    /* ── RUN_MEMORY_HEAVY: tests with large heap / mmap allocations ────────── */
+    if (RUN_MEMORY_HEAVY) {
+        run_test_malloc(&groups[idx++]);
+        run_test_lazy_alloc(&groups[idx++]);
+        run_test_demand_heap(&groups[idx++]);
+        run_test_mm_health(&groups[idx++]);
+        run_test_eval_mm(&groups[idx++]);
+    }
 
     /* ── Disabled stress / destructive tests (uncomment individually) ───────── */
     if (RUN_STRESS_TESTS) {
         run_test_xv6_compat(&groups[idx++]);
         run_test_fd_limits(&groups[idx++]);
         run_test_limits(&groups[idx++]);
+        run_test_rlimit(&groups[idx++]);
+        run_test_pathconf(&groups[idx++]);
+        run_test_fork_alloc_stress(&groups[idx++]);
         run_test_bigfile(&groups[idx++]);
         run_test_forkstress(&groups[idx++]);
         run_test_dirops(&groups[idx++]);

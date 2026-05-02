@@ -156,10 +156,9 @@ static void proc_free_pagetable(struct proc *p) {
 }
 
 /* Full teardown — used by proc_exit().
- * Does NOT free the page table: the zombie must remain mapped until the
- * parent calls waitpid() and proc_free() reaps it.  Freeing the page table
- * here would return its physical pages to the PMM while the scheduler may
- * still switch to them (e.g. for a sibling process). */
+ * Frees the page table, trapframe, FS context, and file descriptors.
+ * VMA list structs are left intact so the zombie remains identifiable until
+ * the parent calls waitpid() and proc_free() reaps them. */
 void proc_destroy(struct proc *p) {
     if (!p) return;
 
@@ -653,6 +652,10 @@ static int build_user_stack(pagetable_t pt, uintptr_t stack_top,
     kfree(argv_va);
     kfree(envp_va);
 
+    /* Sanity: all output pointers must be in user space */
+    if (sp == 0 || sp >= KERNBASE || user_argv >= KERNBASE || user_envp >= KERNBASE)
+        return -1;
+
     *sp_out   = sp;
     *argv_out = user_argv;
     *envp_out = user_envp;
@@ -864,6 +867,12 @@ int exec(const char *path, char *const argv[], char *const envp[]) {
 
     // 8. Write entry point and argument registers into the live trapframe
     //    (set by syscall_handler before calling exec; NULL at boot-time)
+    //
+    // POSIX ENOEXEC: reject ELFs whose entry point lies in kernel space.
+    // Old address space is already freed at this point; cannot return -1.
+    if (ehdr.e_entry == 0 || ehdr.e_entry >= KERNBASE)
+        proc_exit(-ENOEXEC);
+
     if (current->trapframe) {
         current->trapframe->sepc    = ehdr.e_entry;
         current->trapframe->sstatus = (current->trapframe->sstatus & ~SSTATUS_SPP)
