@@ -32,7 +32,6 @@
 #define SYS_getppid  21
 #define SYS_pipe     22
 #define SYS_dup      23
-#define SYS_fcntl    24
 #define SYS_getuid   174  /* Linux RISC-V ABI; matches libc/syscall.S "li a7, 174" */
 #define SYS_geteuid  175
 #define SYS_getegid  177
@@ -160,4 +159,3 @@ int sys_getrlimit(int resource, struct rlimit *user_rlim);
 int sys_setrlimit(int resource, const struct rlimit *user_rlim);
 long pathconf(const char *path, int name);
 long fpathconf(int fd, int name);
-int sys_fcntl(int fd, int cmd, long arg);

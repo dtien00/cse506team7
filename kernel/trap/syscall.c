@@ -486,10 +486,6 @@ void syscall_handler(trap_frame *frame) {
             ret = sys_fpathconf((int)arg0, (int)arg1);
             break;
 
-        case SYS_fcntl:
-            ret = sys_fcntl((int)arg0, (int)arg1, (long)arg2);
-            break;
-
         default:
             // Unknown syscall number from user space will be recognized as delivering SIGSYS (Bad system call)
             // Set a0 = -ENOSYS so masked SIGSYS callers see a defined return value.
@@ -832,33 +828,6 @@ int sys_fcntl(int fd, int cmd, long arg) {
         default:
             return -EINVAL;
     }
-}
-
-#define F_GETFL 3
-#define F_SETFL 4
-
-int sys_fcntl(int fd, int cmd, long arg) {
-    if (!current) return -EBADF;
-    file_t *f = f_get(current, fd);
-    if (!f) return -EBADF;
-
-    int ret;
-    switch (cmd) {
-        case F_GETFL:
-            ret = f->flags;
-            break;
-        case F_SETFL:
-            /* only allow toggling O_NONBLOCK and O_APPEND from userspace */
-            f->flags = (f->flags & ~(O_NONBLOCK | O_APPEND)) |
-                       ((int)arg & (O_NONBLOCK | O_APPEND));
-            ret = 0;
-            break;
-        default:
-            ret = -EINVAL;
-            break;
-    }
-    f_put(f);
-    return ret;
 }
 
 int sys_tcgetattr(int fd, struct termios *termios_p) {

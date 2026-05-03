@@ -25,7 +25,6 @@
 #define SYS_getppid          21
 #define SYS_pipe             22
 #define SYS_dup              23
-#define SYS_fcntl            24
 #define SYS_waitpid          25
 #define SYS_sigprocmask      26
 #define SYS_getcwd           27
@@ -64,6 +63,7 @@
 #define SYS_clock_nanosleep  93
 #define SYS_getitimer        94
 #define SYS_setitimer        95
+#define SYS_fcntl            101
 #define SYS_lstat            107
 #define SYS_getuid           174
 
