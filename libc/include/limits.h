@@ -4,7 +4,7 @@
 #define _LIMITS_H
 
 /* ---- Runtime invariant limits (enforcement) -------------------------------- */
-#define OPEN_MAX        20      /* SBUNIX_OPEN_MAX  — fd table size in kernel */
+#define OPEN_MAX        64      /* SBUNIX_OPEN_MAX  — fd table size in kernel */
 #define CHILD_MAX       64      /* SBUNIX_CHILD_MAX — system-wide (not per-UID) */
 
 /* ---- Pathname variable limits (enforcement) -------------------------------- */

@@ -17,7 +17,7 @@
 #define O_DIRECTORY 0x10000
 #define O_CLOEXEC   0x80000
 #define FD_CLOEXEC  1
-#define MAX_FDS   SBUNIX_OPEN_MAX   /* 20 — meets POSIX _POSIX_OPEN_MAX */
+#define MAX_FDS   SBUNIX_OPEN_MAX   /* 64 — meets POSIX _POSIX_OPEN_MAX */
 #define MAX_PATH  SBUNIX_PATH_MAX   /* 1024 — matches current kernel enforcement */
 
 struct vnode;
