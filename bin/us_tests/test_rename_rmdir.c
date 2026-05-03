@@ -272,6 +272,183 @@ static void test_cp_dir_fails(us_test_group_t *group) {
     rmdir(dir);
 }
 
+/* ── rmdir: empty directory ─────────────────────────────────────────────── */
+
+static void test_rmdir_empty(us_test_group_t *group) {
+    const char *dir = "/mnt/rmdir_empty";
+    rmdir(dir);
+    TEST(group, "rmdir-empty: setup mkdir", mkdir(dir, 0755) == 0);
+
+    char *argv[] = { "rmdir", (char *)dir, NULL };
+    int ret = run(argv);
+    TEST(group, "rmdir-empty: exits 0", ret == 0);
+    TEST(group, "rmdir-empty: dir gone", !file_exists(dir));
+}
+
+/* ── rmdir: nonempty directory fails ────────────────────────────────────── */
+
+static void test_rmdir_nonempty(us_test_group_t *group) {
+    const char *dir  = "/mnt/rmdir_nonempty";
+    const char *file = "/mnt/rmdir_nonempty/f.txt";
+    unlink(file); rmdir(dir);
+
+    TEST(group, "rmdir-nonempty: setup",
+         mkdir(dir, 0755) == 0 && write_file(file, "x\n") == 0);
+
+    char *argv[] = { "rmdir", (char *)dir, NULL };
+    int ret = run(argv);
+    TEST(group, "rmdir-nonempty: fails on nonempty dir", ret != 0);
+    TEST(group, "rmdir-nonempty: dir still exists", dir_exists(dir));
+
+    unlink(file);
+    rmdir(dir);
+}
+
+/* ── rmdir: multiple dirs ───────────────────────────────────────────────── */
+
+static void test_rmdir_multi(us_test_group_t *group) {
+    const char *d1 = "/mnt/rmdir_multi1";
+    const char *d2 = "/mnt/rmdir_multi2";
+    rmdir(d1); rmdir(d2);
+
+    TEST(group, "rmdir-multi: setup",
+         mkdir(d1, 0755) == 0 && mkdir(d2, 0755) == 0);
+
+    char *argv[] = { "rmdir", (char *)d1, (char *)d2, NULL };
+    int ret = run(argv);
+    TEST(group, "rmdir-multi: exits 0", ret == 0);
+    TEST(group, "rmdir-multi: d1 gone", !file_exists(d1));
+    TEST(group, "rmdir-multi: d2 gone", !file_exists(d2));
+}
+
+/* ── rmdir: nonexistent fails ───────────────────────────────────────────── */
+
+static void test_rmdir_noent(us_test_group_t *group) {
+    char *argv[] = { "rmdir", "/mnt/rmdir_no_such_dir_xyz", NULL };
+    int ret = run(argv);
+    TEST(group, "rmdir-noent: fails on missing dir", ret != 0);
+}
+
+/* ── rm -d: empty directory ─────────────────────────────────────────────── */
+
+static void test_rm_d_empty(us_test_group_t *group) {
+    const char *dir = "/mnt/rm_d_empty";
+    rmdir(dir);
+    TEST(group, "rm-d-empty: setup mkdir", mkdir(dir, 0755) == 0);
+
+    char *argv[] = { "rm", "-d", (char *)dir, NULL };
+    int ret = run(argv);
+    TEST(group, "rm-d-empty: exits 0", ret == 0);
+    TEST(group, "rm-d-empty: dir gone", !file_exists(dir));
+}
+
+/* ── rm -d: nonempty directory fails ────────────────────────────────────── */
+
+static void test_rm_d_nonempty(us_test_group_t *group) {
+    const char *dir  = "/mnt/rm_d_nonempty";
+    const char *file = "/mnt/rm_d_nonempty/f.txt";
+    unlink(file); rmdir(dir);
+
+    TEST(group, "rm-d-nonempty: setup",
+         mkdir(dir, 0755) == 0 && write_file(file, "x\n") == 0);
+
+    char *argv[] = { "rm", "-d", (char *)dir, NULL };
+    int ret = run(argv);
+    TEST(group, "rm-d-nonempty: fails on nonempty dir", ret != 0);
+    TEST(group, "rm-d-nonempty: dir still exists", dir_exists(dir));
+
+    unlink(file);
+    rmdir(dir);
+}
+
+/* ── rmdir -p: removes parent chain ────────────────────────────────────── */
+
+static void test_rmdir_p(us_test_group_t *group) {
+    const char *base = "/mnt/rmdir_p_a";
+    const char *sub  = "/mnt/rmdir_p_a/b";
+    rmdir(sub); rmdir(base);
+
+    TEST(group, "rmdir-p: setup",
+         mkdir(base, 0755) == 0 && mkdir(sub, 0755) == 0);
+
+    char *argv[] = { "rmdir", "-p", (char *)sub, NULL };
+    int ret = run(argv);
+    TEST(group, "rmdir-p: exits 0", ret == 0);
+    TEST(group, "rmdir-p: sub gone",  !file_exists(sub));
+    TEST(group, "rmdir-p: base gone", !file_exists(base));
+}
+
+/* ── rmdir -p: stops at nonempty parent ─────────────────────────────────── */
+
+static void test_rmdir_p_nonempty_parent(us_test_group_t *group) {
+    const char *base    = "/mnt/rmdir_p_ne";
+    const char *sub     = "/mnt/rmdir_p_ne/child";
+    const char *sibling = "/mnt/rmdir_p_ne/sibling";
+    unlink(sibling); rmdir(sub); rmdir(base);
+
+    TEST(group, "rmdir-p-nonempty: setup",
+         mkdir(base, 0755) == 0 &&
+         mkdir(sub,  0755) == 0 &&
+         write_file(sibling, "x\n") == 0);
+
+    char *argv[] = { "rmdir", "-p", (char *)sub, NULL };
+    int ret = run(argv);
+    /* child removed, parent not empty → overall failure */
+    TEST(group, "rmdir-p-nonempty: fails nonzero", ret != 0);
+    TEST(group, "rmdir-p-nonempty: child gone",    !file_exists(sub));
+    TEST(group, "rmdir-p-nonempty: parent remains", dir_exists(base));
+
+    unlink(sibling);
+    rmdir(base);
+}
+
+/* ── rm -f: missing file silently succeeds ──────────────────────────────── */
+
+static void test_rm_f_missing(us_test_group_t *group) {
+    char *argv[] = { "rm", "-f", "/mnt/rm_f_no_such_file_xyz", NULL };
+    int ret = run(argv);
+    TEST(group, "rm-f-missing: exits 0", ret == 0);
+}
+
+/* ── rm: continue after error, process remaining operands ──────────────── */
+
+static void test_rm_continue_on_error(us_test_group_t *group) {
+    const char *good = "/mnt/rm_cont_good.txt";
+    unlink(good);
+    TEST(group, "rm-continue: setup good file", write_file(good, "y\n") == 0);
+
+    /* first operand missing, second exists — second should still be removed */
+    char *argv[] = { "rm", "/mnt/rm_cont_no_such_xyz", (char *)good, NULL };
+    int ret = run(argv);
+    TEST(group, "rm-continue: fails due to missing first", ret != 0);
+    TEST(group, "rm-continue: second file still removed", !file_exists(good));
+}
+
+/* ── rm: refuse to remove . and .. ─────────────────────────────────────── */
+
+static void test_rm_dot_rejected(us_test_group_t *group) {
+    char *argv_dot[]    = { "rm", "-rf", ".",  NULL };
+    char *argv_dotdot[] = { "rm", "-rf", "..", NULL };
+    TEST(group, "rm-dot: refuses '.'",  run(argv_dot)    != 0);
+    TEST(group, "rm-dotdot: refuses '..'", run(argv_dotdot) != 0);
+}
+
+/* ── rm -rf: combined flag ──────────────────────────────────────────────── */
+
+static void test_rm_rf_combined(us_test_group_t *group) {
+    const char *dir  = "/mnt/rm_rf_comb";
+    const char *file = "/mnt/rm_rf_comb/f.txt";
+    unlink(file); rmdir(dir);
+
+    TEST(group, "rm-rf-combined: setup",
+         mkdir(dir, 0755) == 0 && write_file(file, "z\n") == 0);
+
+    char *argv[] = { "rm", "-rf", (char *)dir, NULL };
+    int ret = run(argv);
+    TEST(group, "rm-rf-combined: exits 0", ret == 0);
+    TEST(group, "rm-rf-combined: dir gone", !file_exists(dir));
+}
+
 /* ── public entry point ─────────────────────────────────────────────────── */
 
 void run_test_rename_rmdir(us_test_group_t *group) {
@@ -289,6 +466,18 @@ void run_test_rename_rmdir(us_test_group_t *group) {
     test_rm_r_nested(group);
     test_mv_dir(group);
     test_cp_dir_fails(group);
+    test_rmdir_empty(group);
+    test_rmdir_nonempty(group);
+    test_rmdir_multi(group);
+    test_rmdir_noent(group);
+    test_rm_d_empty(group);
+    test_rm_d_nonempty(group);
+    test_rmdir_p(group);
+    test_rmdir_p_nonempty_parent(group);
+    test_rm_f_missing(group);
+    test_rm_continue_on_error(group);
+    test_rm_dot_rejected(group);
+    test_rm_rf_combined(group);
 
     ut_group_end(group);
 }

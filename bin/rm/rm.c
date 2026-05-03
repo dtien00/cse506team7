@@ -4,100 +4,145 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-static int rm_recursive(const char *path);
+static int fflag, rflag, dflag, vflag;
+static int exit_status;
 
-static int rm_dir_contents(const char *path) {
+static void err(const char *msg, const char *path) {
+    if (!fflag)
+        dprintf(STDERR_FILENO, "rm: %s '%s'\n", msg, path);
+    exit_status = 1;
+}
+
+static int is_dot_or_dotdot(const char *path) {
+    const char *base = strrchr(path, '/');
+    base = base ? base + 1 : path;
+    return strcmp(base, ".") == 0 || strcmp(base, "..") == 0;
+}
+
+static void rm_recursive(const char *path);
+
+static void rm_dir_contents(const char *path) {
     DIR *dir = opendir(path);
     if (!dir) {
-        printf("rm: cannot open '%s'\n", path);
-        return 1;
+        err("cannot open directory", path);
+        return;
     }
 
     struct dirent *de;
     char child[512];
-    int err = 0;
     while ((de = readdir(dir)) != NULL) {
         if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0)
             continue;
-        int len = strlen(path);
-        if (len + 1 + (int)strlen(de->d_name) >= (int)sizeof(child)) {
-            printf("rm: path too long\n");
-            err = 1;
+        int plen = strlen(path);
+        int nlen = strlen(de->d_name);
+        if (plen + 1 + nlen >= (int)sizeof(child)) {
+            dprintf(STDERR_FILENO, "rm: path too long\n");
+            exit_status = 1;
             continue;
         }
-        memcpy(child, path, len);
-        child[len] = '/';
-        strcpy(child + len + 1, de->d_name);
-        if (rm_recursive(child) != 0)
-            err = 1;
+        memcpy(child, path, plen);
+        child[plen] = '/';
+        memcpy(child + plen + 1, de->d_name, nlen + 1);
+        rm_recursive(child);
     }
     closedir(dir);
-    return err;
 }
 
-static int rm_recursive(const char *path) {
+static void rm_recursive(const char *path) {
+    /* lstat: don't follow symlinks — remove the link itself */
     struct stat st;
-    if (stat(path, &st) < 0) {
-        printf("rm: cannot stat '%s'\n", path);
-        return 1;
+    if (lstat(path, &st) < 0) {
+        err("cannot stat", path);
+        return;
     }
 
     if (S_ISDIR(st.st_mode)) {
-        if (rm_dir_contents(path) != 0)
-            return 1;
-        if (rmdir(path) < 0) {
-            printf("rm: cannot remove dir '%s'\n", path);
-            return 1;
-        }
+        rm_dir_contents(path);
+        if (rmdir(path) < 0)
+            err("cannot remove directory", path);
+        else if (vflag)
+            printf("removed directory '%s'\n", path);
     } else {
-        if (unlink(path) < 0) {
-            printf("rm: cannot remove '%s'\n", path);
-            return 1;
+        if (unlink(path) < 0)
+            err("cannot remove", path);
+        else if (vflag)
+            printf("removed '%s'\n", path);
+    }
+}
+
+static void parse_flags(const char *s) {
+    for (int i = 1; s[i]; i++) {
+        switch (s[i]) {
+        case 'f': fflag = 1; break;
+        case 'r':
+        case 'R': rflag = 1; break;
+        case 'd': dflag = 1; break;
+        case 'v': vflag = 1; break;
+        default:
+            dprintf(STDERR_FILENO, "rm: illegal option -- %c\n", s[i]);
+            _exit(1);
         }
     }
-    return 0;
 }
 
 int main(int argc, char *argv[]) {
-    if (argc < 2) {
-        write(STDERR_FILENO, "rm: missing operand\n", 20);
-        return 1;
-    }
-
-    int recursive = 0;
     int first_arg = 1;
 
-    if (argc >= 2 && strcmp(argv[1], "-r") == 0) {
-        recursive = 1;
-        first_arg = 2;
+    for (int i = 1; i < argc; i++) {
+        if (argv[i][0] != '-' || argv[i][1] == '\0')
+            break;
+        if (strcmp(argv[i], "--") == 0) { first_arg = i + 1; goto done_opts; }
+        parse_flags(argv[i]);
+        first_arg = i + 1;
     }
+done_opts:
 
     if (first_arg >= argc) {
-        write(STDERR_FILENO, "rm: missing operand\n", 20);
-        return 1;
+        if (!fflag) {
+            dprintf(STDERR_FILENO, "rm: missing operand\n");
+            return 1;
+        }
+        return 0;
     }
 
     for (int i = first_arg; i < argc; i++) {
+        const char *path = argv[i];
+
+        /* POSIX: refuse to remove . or .. */
+        if (is_dot_or_dotdot(path)) {
+            dprintf(STDERR_FILENO, "rm: refusing to remove '.' or '..'\n");
+            exit_status = 1;
+            continue;
+        }
+
         struct stat st;
-        if (stat(argv[i], &st) < 0) {
-            printf("rm: cannot stat '%s'\n", argv[i]);
-            return 1;
+        if (lstat(path, &st) < 0) {
+            if (!fflag) {
+                dprintf(STDERR_FILENO, "rm: cannot remove '%s'\n", path);
+                exit_status = 1;
+            }
+            continue;
         }
 
         if (S_ISDIR(st.st_mode)) {
-            if (!recursive) {
-                printf("rm: cannot remove '%s': is a directory\n", argv[i]);
-                return 1;
+            if (rflag) {
+                rm_recursive(path);
+            } else if (dflag) {
+                if (rmdir(path) < 0)
+                    err("cannot remove directory", path);
+                else if (vflag)
+                    printf("removed directory '%s'\n", path);
+            } else {
+                dprintf(STDERR_FILENO, "rm: cannot remove '%s': Is a directory\n", path);
+                exit_status = 1;
             }
-            if (rm_recursive(argv[i]) != 0)
-                return 1;
         } else {
-            if (unlink(argv[i]) < 0) {
-                printf("rm: cannot remove '%s'\n", argv[i]);
-                return 1;
-            }
+            if (unlink(path) < 0)
+                err("cannot remove", path);
+            else if (vflag)
+                printf("removed '%s'\n", path);
         }
     }
 
-    return 0;
+    return exit_status;
 }
