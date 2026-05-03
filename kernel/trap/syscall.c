@@ -33,6 +33,12 @@ long sys_fpathconf(int fd, int name);
 #define MAP_ANONYMOUS 0x20
 #define MAP_FIXED     0x10
 
+#define F_DUPFD  0
+#define F_GETFD  1
+#define F_SETFD  2
+#define F_GETFL  3
+#define F_SETFL  4
+
 #define USER_HEAP_START 0x11000000UL
 #define USER_HEAP_END   MAXVA  /* Sv39 user VA ceiling; device VMAs block kernel/MMIO ranges */
 /* mmap allocations start well above the heap so that sbrk growth and
@@ -295,6 +301,10 @@ void syscall_handler(trap_frame *frame) {
             ret = sys_dup((int) arg0);
             break;
 
+        case SYS_fcntl:
+            ret = sys_fcntl((int)arg0, (int)arg1, (long)arg2);
+            break;
+
         case SYS_dup2:
             ret = sys_dup2((int) arg0, (int) arg1);
             break;
@@ -522,6 +532,7 @@ pid_t sys_fork(void) {
     // Inherit parent's open files (including stdio) and bump file refs.
     for (int i = 0; i < MAX_FDS; i++) {
         child->fds.files[i] = current->fds.files[i];
+        child->fds.fd_flags[i] = current->fds.fd_flags[i];
         if (child->fds.files[i])
             file_ref(child->fds.files[i]);  // bump refcount if vfs supports it
     }
@@ -721,6 +732,7 @@ int sys_pipe(int pipefd[2]) {
     int write_fd = fd_alloc(&current->fds, write_end);
     if (write_fd < 0) {
         current->fds.files[read_fd] = NULL;
+        current->fds.fd_flags[read_fd] = 0;
         kfree(write_end);
         kfree(read_end);
         kfree(p);
@@ -748,6 +760,7 @@ int sys_dup(int oldfd) {
         return -EMFILE;
     }
 
+    current->fds.fd_flags[newfd] = 0;
     return newfd;
 }
 
@@ -768,7 +781,51 @@ int sys_dup2(int oldfd, int newfd) {
     }
 
     current->fds.files[newfd] = f;
+    current->fds.fd_flags[newfd] = 0;
     return newfd;
+}
+
+int sys_fcntl(int fd, int cmd, long arg) {
+    if (!current || fd < 0 || fd >= MAX_FDS)
+        return -EBADF;
+
+    file_t *f = fd_get(&current->fds, fd);
+    if (!f)
+        return -EBADF;
+
+    switch (cmd) {
+        case F_DUPFD: {
+            if (arg < 0 || arg >= MAX_FDS)
+                return -EINVAL;
+            file_ref(f);
+            int newfd = fd_alloc_from(&current->fds, f, (int)arg);
+            if (newfd < 0) {
+                f_put(f);
+                return newfd;
+            }
+            current->fds.fd_flags[newfd] = 0;
+            return newfd;
+        }
+
+        case F_GETFD:
+            return current->fds.fd_flags[fd] & FD_CLOEXEC;
+
+        case F_SETFD:
+            current->fds.fd_flags[fd] = ((int)arg & FD_CLOEXEC) ? FD_CLOEXEC : 0;
+            return 0;
+
+        case F_GETFL:
+            return f->flags & ~O_CLOEXEC;
+
+        case F_SETFL: {
+            int settable = O_APPEND | O_NONBLOCK;
+            f->flags = (f->flags & ~settable) | ((int)arg & settable);
+            return 0;
+        }
+
+        default:
+            return -EINVAL;
+    }
 }
 
 int sys_tcgetattr(int fd, struct termios *termios_p) {

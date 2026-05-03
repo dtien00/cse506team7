@@ -32,6 +32,7 @@
 #define SYS_getppid  21
 #define SYS_pipe     22
 #define SYS_dup      23
+#define SYS_fcntl    24
 #define SYS_getuid   174  /* Linux RISC-V ABI; matches libc/syscall.S "li a7, 174" */
 #define SYS_waitpid  25
 #define SYS_sigprocmask 26
@@ -109,6 +110,7 @@ int sys_sync(void);
 int sys_pipe(int pipefd[2]);
 int sys_dup(int oldfd);
 int sys_dup2(int oldfd, int newfd);
+int sys_fcntl(int fd, int cmd, long arg);
 int sys_tcgetattr(int fd, struct termios *termios_p);
 int sys_tcsetattr(int fd, int action, const struct termios *termios_p);
 int sys_kill(pid_t pid, int sig);

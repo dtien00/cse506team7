@@ -25,6 +25,7 @@
 #define SYS_getppid          21
 #define SYS_pipe             22
 #define SYS_dup              23
+#define SYS_fcntl            24
 #define SYS_waitpid          25
 #define SYS_sigprocmask      26
 #define SYS_getcwd           27

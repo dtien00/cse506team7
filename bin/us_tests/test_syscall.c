@@ -130,6 +130,38 @@ void run_test_syscall(us_test_group_t *group) {
     int r = kill(getpid(), 0);
     TEST(group, "kill(getpid(), 0): returns 0",   r == 0);
 
+    /* ── fcntl / nonblocking pipe ──────────────────────────────────── */
+    {
+        int pfd[2];
+        if (pipe(pfd) < 0) {
+            SKIP(group, "fcntl(F_GETFL): returns pipe status flags", "pipe failed");
+            SKIP(group, "fcntl(F_SETFL,O_NONBLOCK): updates pipe status flags", "pipe failed");
+            SKIP(group, "nonblocking pipe read: empty pipe returns -1 (errno=EAGAIN)", "pipe failed");
+            SKIP(group, "fcntl(F_DUPFD): duplicates fd at or above minimum", "pipe failed");
+        } else {
+            errno = 0;
+            int fl = fcntl(pfd[0], F_GETFL);
+            TEST(group, "fcntl(F_GETFL): returns pipe status flags", fl >= 0);
+
+            int setfl = fcntl(pfd[0], F_SETFL, fl | O_NONBLOCK);
+            int nfl = fcntl(pfd[0], F_GETFL);
+            TEST(group, "fcntl(F_SETFL,O_NONBLOCK): updates pipe status flags",
+                 setfl == 0 && (nfl & O_NONBLOCK));
+
+            char ch;
+            errno = 0;
+            int nr = read(pfd[0], &ch, 1);
+            TEST(group, "nonblocking pipe read: empty pipe returns -1 (errno=EAGAIN)",
+                 nr == -1 && errno == EAGAIN);
+
+            int dupfd = fcntl(pfd[0], F_DUPFD, 5);
+            TEST(group, "fcntl(F_DUPFD): duplicates fd at or above minimum", dupfd >= 5);
+            if (dupfd >= 0) close(dupfd);
+            close(pfd[0]);
+            close(pfd[1]);
+        }
+    }
+
     /* ── termios ─────────────────────────────────────────────────────── */
     struct termios oldt;
     int tr = tcgetattr(STDIN_FILENO, &oldt);

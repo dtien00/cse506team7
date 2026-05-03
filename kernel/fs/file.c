@@ -30,6 +30,7 @@ void fd_init(fd_table_t *table) {
 
     for (int i = 0; i < MAX_FDS; i++) {
         table->files[i] = NULL;
+        table->fd_flags[i] = 0;
     }
 
     // Allocate stdin (fd 0)
@@ -43,6 +44,7 @@ void fd_init(fd_table_t *table) {
         stdin_file->ref_count = 1;
         stdin_file->flags = 0;
         table->files[0] = stdin_file;
+        table->fd_flags[0] = 0;
     }
 
     // Allocate stdout (fd 1)
@@ -56,6 +58,7 @@ void fd_init(fd_table_t *table) {
         stdout_file->ref_count = 1;
         stdout_file->flags = 1;
         table->files[1] = stdout_file;
+        table->fd_flags[1] = 0;
     }
 
     // Allocate stderr (fd 2) - same as stdout for now
@@ -69,6 +72,7 @@ void fd_init(fd_table_t *table) {
         stderr_file->ref_count = 1;
         stderr_file->flags = 1;
         table->files[2] = stderr_file;
+        table->fd_flags[2] = 0;
     }
 }
 
@@ -77,8 +81,10 @@ void fd_init(fd_table_t *table) {
 // Finds the first free slot in the fd table, assigns the file, and returns
 // the fd number. Returns -1 if the table is full.
 // -----------------------------------------------------------------------------
-int fd_alloc(fd_table_t *table, file_t *f) {
+int fd_alloc_from(fd_table_t *table, file_t *f, int min_fd) {
     if (!table || !f)
+        return -1;
+    if (min_fd < 0)
         return -1;
 
     /* RLIMIT_NOFILE caps the highest allowable fd + 1. */
@@ -89,14 +95,22 @@ int fd_alloc(fd_table_t *table, file_t *f) {
             limit = soft;
     }
 
-    for (int i = 0; i < limit; i++) {
+    if (min_fd >= limit)
+        return -EMFILE;
+
+    for (int i = min_fd; i < limit; i++) {
         if (table->files[i] == NULL) {
             table->files[i] = f;
+            table->fd_flags[i] = (f->flags & O_CLOEXEC) ? 1 : 0;
             return i;
         }
     }
 
     return -EMFILE;
+}
+
+int fd_alloc(fd_table_t *table, file_t *f) {
+    return fd_alloc_from(table, f, 0);
 }
 
 // -----------------------------------------------------------------------------
@@ -123,6 +137,7 @@ void fd_close(fd_table_t *table, int fd) {
         return;
 
     table->files[fd] = NULL;
+    table->fd_flags[fd] = 0;
     file_release(f);
 }
 
@@ -271,6 +286,7 @@ int file_close(int fd) {
         return -EBADF;
 
     current->fds.files[fd] = NULL;
+    current->fds.fd_flags[fd] = 0;
     file_release(f);
     return 0;
 }
@@ -350,6 +366,8 @@ int file_read(int fd, void *buf, size_t len) {
                 while (p->count == 0) {
                     if (p->writers <= 0)
                         return (int) nread; // EOF — all writers closed
+                    if (f->flags & O_NONBLOCK)
+                        return nread > 0 ? (int)nread : -EAGAIN;
                     proc_sleep(p);
                 }
                 dst[nread] = p->buffer[p->read_pos];
@@ -416,6 +434,8 @@ int file_write(int fd, const void *buf, size_t len) {
                         current->pending_signals |= (1U << KERNEL_SIGPIPE);
                         return nwritten > 0 ? (int) nwritten : -EPIPE;
                     }
+                    if (f->flags & O_NONBLOCK)
+                        return nwritten > 0 ? (int)nwritten : -EAGAIN;
                     proc_sleep(p);
                 }
                 p->buffer[p->write_pos] = src[nwritten];
