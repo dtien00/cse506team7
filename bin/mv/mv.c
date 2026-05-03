@@ -1,33 +1,18 @@
+#include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
-int main(int argc, char *argv[]) {
-    struct stat src_stat;
-    struct stat dst_stat;
-
-    if (argc != 3) {
-        write(STDERR_FILENO, "mv: usage: mv src dest\n", 24);
-        return 1;
-    }
-
-    if (strcmp(argv[1], argv[2]) == 0)
-        return 0;
-
-    if (stat(argv[1], &src_stat) == 0 && stat(argv[2], &dst_stat) == 0) {
-        if (src_stat.st_dev == dst_stat.st_dev && src_stat.st_ino == dst_stat.st_ino)
-            return 0;
-    }
-
-    int src_fd = open(argv[1], O_RDONLY);
+static int copy_and_delete(const char *src, const char *dst) {
+    int src_fd = open(src, O_RDONLY);
     if (src_fd < 0) {
-        write(STDERR_FILENO, "mv: cannot open source\n", 24);
+        write(STDERR_FILENO, "mv: cannot open source\n", 23);
         return 1;
     }
 
-    int dst_fd = open(argv[2], O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    int dst_fd = open(dst, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (dst_fd < 0) {
         close(src_fd);
         write(STDERR_FILENO, "mv: cannot create destination\n", 30);
@@ -43,7 +28,7 @@ int main(int argc, char *argv[]) {
             if (w <= 0) {
                 close(src_fd);
                 close(dst_fd);
-                unlink(argv[2]);
+                unlink(dst);
                 write(STDERR_FILENO, "mv: write error\n", 16);
                 return 1;
             }
@@ -51,21 +36,46 @@ int main(int argc, char *argv[]) {
         }
     }
 
+    close(src_fd);
+    close(dst_fd);
+
     if (n < 0) {
-        close(src_fd);
-        close(dst_fd);
-        unlink(argv[2]);
+        unlink(dst);
         write(STDERR_FILENO, "mv: read error\n", 15);
         return 1;
     }
 
-    close(src_fd);
-    close(dst_fd);
-
-    if (unlink(argv[1]) < 0) {
-        write(STDERR_FILENO, "mv: cannot remove source\n", 26);
+    if (unlink(src) < 0) {
+        write(STDERR_FILENO, "mv: cannot remove source\n", 25);
         return 1;
     }
 
     return 0;
+}
+
+int main(int argc, char *argv[]) {
+    if (argc != 3) {
+        write(STDERR_FILENO, "mv: usage: mv src dest\n", 23);
+        return 1;
+    }
+
+    if (strcmp(argv[1], argv[2]) == 0)
+        return 0;
+
+    /* Try atomic rename first */
+    if (rename(argv[1], argv[2]) == 0)
+        return 0;
+
+    /* EXDEV = cross-device: fall back to copy+delete (files only) */
+    if (errno == EXDEV) {
+        struct stat st;
+        if (stat(argv[1], &st) == 0 && S_ISDIR(st.st_mode)) {
+            write(STDERR_FILENO, "mv: cannot move directory across devices\n", 41);
+            return 1;
+        }
+        return copy_and_delete(argv[1], argv[2]);
+    }
+
+    printf("mv: cannot rename '%s': error %d\n", argv[1], errno);
+    return 1;
 }

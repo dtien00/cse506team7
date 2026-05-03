@@ -759,6 +759,104 @@ static int tmpfs_mkdir(mount_t *mnt, const char *path, uint32_t mode) {
     return 0;
 }
 
+/*
+ * tmpfs_rename — POSIX rename within a tmpfs mount.
+ * Both paths are relative to the mount root (no leading /).
+ *
+ * POSIX guarantees:
+ *   - Atomic: if newpath exists it is replaced in one step (no window where
+ *     neither name exists).
+ *   - src == dst (same relative path): handled by vfs_rename before we arrive.
+ *   - Replacing a dir: newpath must be an empty directory.
+ *   - Replacing a file: newpath must be a regular file (not a dir).
+ *   - Moving a dir: update ".." in the moved dir to point at new parent.
+ */
+static int tmpfs_rename(mount_t *mnt, const char *oldpath, const char *newpath) {
+    if (!mnt || !mnt->fs_data || !oldpath || !newpath) return -EINVAL;
+
+    tmpfs_mount_data_t *mnt_data = (tmpfs_mount_data_t *)mnt->fs_data;
+
+    /* --- resolve src --- */
+    char src_parent_path[TMPFS_MAX_FILENAME];
+    char src_name[TMPFS_MAX_FILENAME];
+    if (tmpfs_split_path(oldpath, src_parent_path, src_name, TMPFS_MAX_FILENAME) < 0)
+        return -ENAMETOOLONG;
+
+    tmpfs_inode_t *src_parent = tmpfs_find_inode(mnt_data->root, src_parent_path);
+    if (!src_parent || src_parent->type != TMPFS_TYPE_DIR)
+        return -ENOENT;
+
+    tmpfs_inode_t *src = NULL;
+    for (tmpfs_inode_t *c = src_parent->children; c; c = c->next) {
+        if (strcmp(c->name, src_name) == 0) { src = c; break; }
+    }
+    if (!src) return -ENOENT;
+
+    /* --- resolve dst parent --- */
+    char dst_parent_path[TMPFS_MAX_FILENAME];
+    char dst_name[TMPFS_MAX_FILENAME];
+    if (tmpfs_split_path(newpath, dst_parent_path, dst_name, TMPFS_MAX_FILENAME) < 0)
+        return -ENAMETOOLONG;
+
+    tmpfs_inode_t *dst_parent = tmpfs_find_inode(mnt_data->root, dst_parent_path);
+    if (!dst_parent || dst_parent->type != TMPFS_TYPE_DIR)
+        return -ENOENT;
+
+    /* --- check for dst collision --- */
+    tmpfs_inode_t *dst = NULL;
+    for (tmpfs_inode_t *c = dst_parent->children; c; c = c->next) {
+        if (strcmp(c->name, dst_name) == 0) { dst = c; break; }
+    }
+
+    if (dst) {
+        tmpfs_inode_t *dst_body = dst->inode_body ? dst->inode_body : dst;
+        tmpfs_inode_t *src_body = src->inode_body ? src->inode_body : src;
+
+        /* Same inode — same-name rename already handled above; hard-link alias. */
+        if (src_body == dst_body)
+            return 0;
+
+        /* Type compatibility: POSIX EISDIR / ENOTDIR */
+        if (src_body->type == TMPFS_TYPE_DIR && dst_body->type != TMPFS_TYPE_DIR)
+            return -ENOTDIR;
+        if (src_body->type != TMPFS_TYPE_DIR && dst_body->type == TMPFS_TYPE_DIR)
+            return -EISDIR;
+
+        /* Replacing a directory: it must be empty. */
+        if (dst_body->type == TMPFS_TYPE_DIR && dst_body->children != NULL)
+            return -ENOTEMPTY;
+
+        /* Atomically remove dst from dst_parent. */
+        tmpfs_remove_child(dst_parent, dst);
+        dst_body->nlink--;
+        if (dst->inode_body) {
+            mnt_data->file_count--;
+            kfree(dst);
+            if (dst_body->nlink == 0) {
+                if (dst_body->data) kfree(dst_body->data);
+                mnt_data->file_count--;
+                kfree(dst_body);
+            }
+        } else {
+            if (dst_body->nlink == 0)
+                tmpfs_free_inode(mnt_data, dst_body);
+        }
+    }
+
+    /* --- move: detach src from old parent, rename, attach to dst parent --- */
+    tmpfs_remove_child(src_parent, src);
+    strncpy(src->name, dst_name, TMPFS_MAX_FILENAME - 1);
+    src->name[TMPFS_MAX_FILENAME - 1] = '\0';
+    tmpfs_add_child(dst_parent, src);
+
+    /* --- if moving a directory, update its ".." back-pointer --- */
+    tmpfs_inode_t *src_body = src->inode_body ? src->inode_body : src;
+    if (src_body->type == TMPFS_TYPE_DIR)
+        src_body->parent = dst_parent;
+
+    return 0;
+}
+
 // -----------------------------------------------------------------------------
 // tmpfs filesystem type registration
 // -----------------------------------------------------------------------------
@@ -776,6 +874,7 @@ static fs_type_t tmpfs_type = {.name = "tmpfs",
                                                .mkdir = tmpfs_mkdir,
                                                .rmdir = tmpfs_unlink,
                                                .readdir = tmpfs_readdir,
+                                               .rename = tmpfs_rename,
                                                .link = tmpfs_link,
                                                .symlink = tmpfs_symlink,
                                                .readlink = tmpfs_readlink,

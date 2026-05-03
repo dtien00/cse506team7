@@ -41,6 +41,7 @@
 .global pause
 .global procinfo
 .global rmdir
+.global rename
 .global gettimeofday
 .global alarm
 .global sigaction
@@ -209,6 +210,11 @@ mkdir:
 
 rmdir:
     li a7, 54    /* SYS_rmdir — was 52, moved to avoid conflict with SYS_setsid */
+    ecall
+    j __syscall_ret
+
+rename:
+    li a7, 56
     ecall
     j __syscall_ret
 

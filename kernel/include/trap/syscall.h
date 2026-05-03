@@ -60,6 +60,7 @@
 #define SYS_setsid   52
 #define SYS_getpgid  53
 #define SYS_rmdir    54    /* was 52; moved to avoid conflict with SYS_setsid */
+#define SYS_rename   56
 #define SYS_fs_getdents  61
 #define SYS_stat     79
 #define SYS_fstat    80
@@ -127,6 +128,7 @@ int sys_lstat(const char *upath, struct stat *ustat);
 int sys_chmod(const char *upath, mode_t mode);
 int sys_fchmod(int fd, mode_t mode);
 int sys_rmdir(const char *path);
+int sys_rename(const char *uoldpath, const char *unewpath);
 int sys_link(const char *oldpath, const char *newpath);
 int sys_symlink(const char *target, const char *linkpath);
 ssize_t sys_readlink(const char *path, char *buf, size_t bufsiz);

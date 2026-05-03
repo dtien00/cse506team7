@@ -65,6 +65,7 @@ typedef struct filesystem_operations {
                    uint32_t *entries_out);
     int (*chmod)(struct mount *mnt, vnode_t *vnode, mode_t mode);
     int (*rmdir)(struct mount *mnt, const char *path);
+    int (*rename)(struct mount *mnt, const char *oldpath, const char *newpath);
     int (*link)(struct mount *mnt, const char *oldpath, const char *newpath);
     int (*symlink)(struct mount *mnt, const char *target, const char *linkpath);
     int (*readlink)(vnode_t *vnode, char *buf, size_t size);
@@ -117,6 +118,7 @@ int vfs_fchmod(vnode_t *vn, mode_t mode);
 int vfs_rmdir(const char *path);
 int vfs_chdir(const char *kpath);
 int vfs_readdir(dentry_t *dentry, uint32_t start_idx, void *buf, uint32_t bufsize, uint32_t *entries_out);
+int vfs_rename(const char *oldpath, const char *newpath);
 int vfs_link(const char *oldpath, const char *newpath);
 int vfs_symlink(const char *target, const char *linkpath);
 ssize_t vfs_readlink(const char *path, char *buf, size_t size);

@@ -18,6 +18,11 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
+    if (S_ISDIR(src_stat.st_mode)) {
+        write(STDERR_FILENO, "cp: cannot copy directories\n", 28);
+        return 1;
+    }
+
     if (stat(argv[2], &dst_stat) == 0) {
         if (src_stat.st_dev == dst_stat.st_dev && src_stat.st_ino == dst_stat.st_ino) {
             return 0;

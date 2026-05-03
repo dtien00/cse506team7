@@ -1685,6 +1685,186 @@ static uint32_t ext2_get_nlink(vnode_t *vnode) {
     return fresh.i_links_count;
 }
 
+/*
+ * ext2_rename — atomic rename within the same ext2 mount.
+ * Both oldpath and newpath are relative to the mount root (no leading /).
+ * Handles file→file and dir→dir renames. If newpath exists it is atomically
+ * replaced (per POSIX), provided it is the same type as oldpath.
+ */
+static int ext2_rename(mount_t *mnt, const char *oldpath, const char *newpath) {
+    if (!mnt || !mnt->fs_data || !oldpath || !newpath) return -EINVAL;
+    ext2_mount_data_t *ext2_mnt = (ext2_mount_data_t *)mnt->fs_data;
+
+    /* --- resolve src --- */
+    vnode_t *src_vn = ext2_lookup(mnt, oldpath);
+    if (!src_vn) return -ENOENT;
+    uint32_t src_ino  = (uint32_t)src_vn->ino;
+    int      src_is_dir = (src_vn->type == VNODE_DIR);
+    uint8_t  ft = src_is_dir ? EXT2_FT_DIR : EXT2_FT_REG_FILE;
+    kfree(src_vn->fs_data); kfree(src_vn);
+
+    /* --- check dst --- */
+    uint32_t dst_ino = 0;
+    vnode_t *dst_vn = ext2_lookup(mnt, newpath);
+    if (dst_vn) {
+        if (src_is_dir && dst_vn->type != VNODE_DIR) {
+            kfree(dst_vn->fs_data); kfree(dst_vn);
+            return -ENOTDIR;
+        }
+        if (!src_is_dir && dst_vn->type == VNODE_DIR) {
+            kfree(dst_vn->fs_data); kfree(dst_vn);
+            return -EISDIR;
+        }
+        dst_ino = (uint32_t)dst_vn->ino;
+        kfree(dst_vn->fs_data); kfree(dst_vn);
+    }
+
+    /* --- parse paths into parent + name --- */
+    char *old_copy = kmalloc(strlen(oldpath) + 1);
+    char *new_copy = kmalloc(strlen(newpath) + 1);
+    if (!old_copy || !new_copy) { kfree(old_copy); kfree(new_copy); return -ENOMEM; }
+    strcpy(old_copy, oldpath);
+    strcpy(new_copy, newpath);
+
+    char *old_slash = NULL, *new_slash = NULL;
+    for (char *p = old_copy; *p; p++) if (*p == '/') old_slash = p;
+    for (char *p = new_copy; *p; p++) if (*p == '/') new_slash = p;
+
+    char *old_name, *old_parent_path;
+    char *new_name, *new_parent_path;
+
+    if (old_slash) { *old_slash = '\0'; old_name = old_slash + 1; old_parent_path = (*old_copy ? old_copy : "/"); }
+    else           { old_name = old_copy; old_parent_path = "/"; }
+
+    if (new_slash) { *new_slash = '\0'; new_name = new_slash + 1; new_parent_path = (*new_copy ? new_copy : "/"); }
+    else           { new_name = new_copy; new_parent_path = "/"; }
+
+    /* --- look up parent directories --- */
+    vnode_t *src_parent = ext2_lookup(mnt, old_parent_path);
+    if (!src_parent) { kfree(old_copy); kfree(new_copy); return -ENOENT; }
+
+    vnode_t *dst_parent = ext2_lookup(mnt, new_parent_path);
+    if (!dst_parent) {
+        kfree(src_parent->fs_data); kfree(src_parent);
+        kfree(old_copy); kfree(new_copy);
+        return -ENOENT;
+    }
+
+    ext2_inode_t *sp_inode = (ext2_inode_t *)src_parent->fs_data;
+    ext2_inode_t *dp_inode = (ext2_inode_t *)dst_parent->fs_data;
+
+    uint8_t *block_buf = kmalloc(ext2_mnt->block_size);
+    if (!block_buf) {
+        kfree(src_parent->fs_data); kfree(src_parent);
+        kfree(dst_parent->fs_data); kfree(dst_parent);
+        kfree(old_copy); kfree(new_copy);
+        return -ENOMEM;
+    }
+
+    /* --- if dst exists, remove its dirent from dst parent first --- */
+    if (dst_ino) {
+        size_t dn_len = strlen(new_name);
+        uint32_t dp_blocks = (dp_inode->i_size + ext2_mnt->block_size - 1) / ext2_mnt->block_size;
+        for (uint32_t bi = 0; bi < dp_blocks && bi < EXT2_NDIR_BLOCKS; bi++) {
+            if (dp_inode->i_block[bi] == 0) continue;
+            if (block_cache_read(dp_inode->i_block[bi], block_buf) != 0) continue;
+            uint32_t offset = 0;
+            while (offset + 8 <= ext2_mnt->block_size) {
+                ext2_dirent_t *de = (ext2_dirent_t *)(block_buf + offset);
+                if (de->rec_len == 0) break;
+                if (de->inode != 0 && de->name_len == dn_len &&
+                    strncmp(de->name, new_name, dn_len) == 0) {
+                    de->inode = 0;
+                    block_cache_write(dp_inode->i_block[bi], block_buf);
+                    break;
+                }
+                offset += de->rec_len;
+            }
+        }
+        /* Decrement link count on old dst inode */
+        ext2_inode_t old_dst_inode;
+        if (ext2_read_inode(ext2_mnt, dst_ino, &old_dst_inode) == 0) {
+            if (old_dst_inode.i_links_count > 0) old_dst_inode.i_links_count--;
+            if (old_dst_inode.i_links_count == 0) old_dst_inode.i_dtime = 1;
+            ext2_write_inode(ext2_mnt, dst_ino, &old_dst_inode);
+        }
+    }
+
+    /* --- add new dirent in dst parent --- */
+    if (dp_inode->i_block[0] == 0 ||
+        block_cache_read(dp_inode->i_block[0], block_buf) != 0) {
+        kfree(block_buf);
+        kfree(src_parent->fs_data); kfree(src_parent);
+        kfree(dst_parent->fs_data); kfree(dst_parent);
+        kfree(old_copy); kfree(new_copy);
+        return -EIO;
+    }
+    if (ext2_dirent_append(block_buf, ext2_mnt->block_size, src_ino, new_name, ft) != 0) {
+        kfree(block_buf);
+        kfree(src_parent->fs_data); kfree(src_parent);
+        kfree(dst_parent->fs_data); kfree(dst_parent);
+        kfree(old_copy); kfree(new_copy);
+        return -ENOSPC;
+    }
+    block_cache_write(dp_inode->i_block[0], block_buf);
+
+    /* --- remove old dirent from src parent --- */
+    size_t on_len = strlen(old_name);
+    uint32_t sp_blocks = (sp_inode->i_size + ext2_mnt->block_size - 1) / ext2_mnt->block_size;
+    for (uint32_t bi = 0; bi < sp_blocks && bi < EXT2_NDIR_BLOCKS; bi++) {
+        if (sp_inode->i_block[bi] == 0) continue;
+        if (block_cache_read(sp_inode->i_block[bi], block_buf) != 0) continue;
+        uint32_t offset = 0;
+        int found = 0;
+        while (offset + 8 <= ext2_mnt->block_size) {
+            ext2_dirent_t *de = (ext2_dirent_t *)(block_buf + offset);
+            if (de->rec_len == 0) break;
+            if (de->inode != 0 && de->name_len == on_len &&
+                strncmp(de->name, old_name, on_len) == 0) {
+                de->inode = 0;
+                block_cache_write(sp_inode->i_block[bi], block_buf);
+                found = 1;
+                break;
+            }
+            offset += de->rec_len;
+        }
+        if (found) break;
+    }
+
+    /* --- for dir rename: update .. in the moved dir to point to new parent --- */
+    if (src_is_dir) {
+        ext2_inode_t src_inode;
+        if (ext2_read_inode(ext2_mnt, src_ino, &src_inode) == 0 &&
+            src_inode.i_block[0] != 0 &&
+            block_cache_read(src_inode.i_block[0], block_buf) == 0) {
+
+            uint32_t dst_parent_ino = (uint32_t)dst_parent->ino;
+            uint32_t offset = 0;
+            while (offset + 8 <= ext2_mnt->block_size) {
+                ext2_dirent_t *de = (ext2_dirent_t *)(block_buf + offset);
+                if (de->rec_len == 0) break;
+                if (de->inode != 0 && de->name_len == 2 &&
+                    de->name[0] == '.' && de->name[1] == '.') {
+                    de->inode = dst_parent_ino;
+                    block_cache_write(src_inode.i_block[0], block_buf);
+                    break;
+                }
+                offset += de->rec_len;
+            }
+        }
+    }
+
+    kfree(block_buf);
+    kfree(src_parent->fs_data); kfree(src_parent);
+    kfree(dst_parent->fs_data); kfree(dst_parent);
+    kfree(old_copy); kfree(new_copy);
+
+    ext2_write_superblock(ext2_mnt);
+    ext2_write_gdt(ext2_mnt);
+    block_cache_flush();
+    return 0;
+}
+
 // Initialize ext2 filesystem type
 void ext2_init(void) {
     ext2_fs_type.name = "ext2";
@@ -1700,6 +1880,7 @@ void ext2_init(void) {
     ext2_fs_type.ops.readdir  = ext2_readdir;
     ext2_fs_type.ops.chmod    = ext2_chmod;
     ext2_fs_type.ops.rmdir    = ext2_rmdir;
+    ext2_fs_type.ops.rename   = ext2_rename;
     ext2_fs_type.ops.link     = ext2_link;
     ext2_fs_type.ops.symlink  = ext2_symlink;
     ext2_fs_type.ops.readlink = ext2_readlink;

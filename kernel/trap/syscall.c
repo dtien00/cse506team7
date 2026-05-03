@@ -422,7 +422,11 @@ void syscall_handler(trap_frame *frame) {
         case SYS_rmdir:
             ret = sys_rmdir((const char *)arg0);
             break;
-            
+
+        case SYS_rename:
+            ret = sys_rename((const char *)arg0, (const char *)arg1);
+            break;
+
         case SYS_alarm:
             ret = sys_alarm((unsigned int) arg0);
             break;
@@ -1435,6 +1439,10 @@ int sys_unlink(const char *path) {
     if (!kpath) return -ENOMEM;
     if (strncpy_from_user(kpath, path, MAX_PATH - 1) < 0) { kfree(kpath); return -EFAULT; }
     kpath[MAX_PATH - 1] = '\0';
+    if (dentry_normalize_path(current->fs->cwd, vfs_get_root(),
+                              kpath, kpath, MAX_PATH) < 0) {
+        kfree(kpath); return -ENAMETOOLONG;
+    }
     int ret = vfs_unlink(kpath);
     kfree(kpath);
     return ret;
@@ -1462,6 +1470,32 @@ int sys_link(const char *uoldpath, const char *unewpath) {
     }
 
     int ret = vfs_link(kold, knew);
+    kfree(kold); kfree(knew);
+    return ret;
+}
+
+int sys_rename(const char *uoldpath, const char *unewpath) {
+    if (!current) return -1;
+
+    char *kold = kmalloc(MAX_PATH);
+    char *knew = kmalloc(MAX_PATH);
+    if (!kold || !knew) { kfree(kold); kfree(knew); return -ENOMEM; }
+
+    if (strncpy_from_user(kold, uoldpath, MAX_PATH - 1) < 0) { kfree(kold); kfree(knew); return -EFAULT; }
+    kold[MAX_PATH - 1] = '\0';
+    if (strncpy_from_user(knew, unewpath, MAX_PATH - 1) < 0) { kfree(kold); kfree(knew); return -EFAULT; }
+    knew[MAX_PATH - 1] = '\0';
+
+    if (dentry_normalize_path(current->fs->cwd, vfs_get_root(),
+                              kold, kold, MAX_PATH) < 0) {
+        kfree(kold); kfree(knew); return -ENAMETOOLONG;
+    }
+    if (dentry_normalize_path(current->fs->cwd, vfs_get_root(),
+                              knew, knew, MAX_PATH) < 0) {
+        kfree(kold); kfree(knew); return -ENAMETOOLONG;
+    }
+
+    int ret = vfs_rename(kold, knew);
     kfree(kold); kfree(knew);
     return ret;
 }

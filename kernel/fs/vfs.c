@@ -735,6 +735,10 @@ int vfs_unlink(const char *path) {
         dentry_put(d);
         return -ENOENT;
     }
+    if (d->d_vnode && d->d_vnode->type == VNODE_DIR) {
+        dentry_put(d);
+        return -EISDIR;
+    }
     if (!mnt->fs_type->ops.unlink) {
         dentry_put(d);
         return -ENOSYS;
@@ -1008,6 +1012,75 @@ int vfs_link(const char *oldpath, const char *newpath) {
 
     kfree(old_rel);
     dentry_put(old_d);
+    return ret;
+}
+
+int vfs_rename(const char *oldpath, const char *newpath) {
+    if (!oldpath || !newpath) return -EINVAL;
+
+    /* POSIX: rename(x, x) is a no-op that always succeeds. */
+    if (strcmp(oldpath, newpath) == 0)
+        return 0;
+
+    dentry_t *old_d = NULL;
+    int err = vfs_lookup_nofollow(
+        current && current->fs ? current->fs->cwd : vfs_root,
+        oldpath, &old_d);
+    if (err) return err;
+
+    mount_t *mnt = old_d->d_vnode ? old_d->d_vnode->mount : NULL;
+    if (!mnt) { dentry_put(old_d); return -ENOENT; }
+    if (!mnt->fs_type->ops.rename) { dentry_put(old_d); return -ENOSYS; }
+
+    /* Cross-device check: newpath must be on the same mount */
+    size_t mp_len = strlen(mnt->mountpoint);
+    if (strncmp(newpath, mnt->mountpoint, mp_len) != 0) {
+        dentry_put(old_d);
+        return -EXDEV;
+    }
+
+    char *old_rel = kmalloc(MAX_PATH);
+    if (!old_rel) { dentry_put(old_d); return -ENOMEM; }
+    if (dentry_build_path(old_d, mnt->root, old_rel, MAX_PATH) != 0) {
+        kfree(old_rel); dentry_put(old_d); return -ENAMETOOLONG;
+    }
+    const char *or = old_rel[0] == '/' ? old_rel + 1 : old_rel;
+
+    const char *nr = newpath + mp_len;
+    if (*nr == '/') nr++;
+
+    /*
+     * Look up the destination before calling into the fs so we can evict
+     * its dentry cache entry on success.  It may not exist; that is fine.
+     */
+    dentry_t *new_d = NULL;
+    vfs_lookup_nofollow(
+        current && current->fs ? current->fs->cwd : vfs_root,
+        newpath, &new_d);
+
+    int ret = mnt->fs_type->ops.rename(mnt, or, nr);
+
+    if (ret == 0) {
+        /* Evict src dentry so future lookups hit the fs again */
+        if (!(old_d->d_flags & (DENTRY_ROOT | DENTRY_COVER)))
+            dentry_detach(old_d);
+        dentry_put(old_d);
+        dentry_prune(old_d);
+
+        /* Evict dst dentry so it isn't served stale from cache */
+        if (new_d) {
+            if (!(new_d->d_flags & (DENTRY_ROOT | DENTRY_COVER)))
+                dentry_detach(new_d);
+            dentry_put(new_d);
+            dentry_prune(new_d);
+        }
+    } else {
+        dentry_put(old_d);
+        if (new_d)
+            dentry_put(new_d);
+    }
+
+    kfree(old_rel);
     return ret;
 }
 

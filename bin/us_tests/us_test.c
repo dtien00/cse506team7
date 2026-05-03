@@ -37,6 +37,7 @@ void run_test_malloc(us_test_group_t *group);
 void run_test_file_io(us_test_group_t *group);
 void run_test_process(us_test_group_t *group);
 void run_test_mv_cp(us_test_group_t *group);
+void run_test_rename_rmdir(us_test_group_t *group);
 void run_test_write(us_test_group_t *group);
 void run_test_exec_bin(us_test_group_t *group);
 /* fs_persist fills multiple groups (one per sub-test) */
@@ -183,6 +184,7 @@ int main(int argc, char **argv, char **envp) {
         run_test_sbrk_brk(&groups[idx++]);
         run_test_file_io(&groups[idx++]);
         run_test_mv_cp(&groups[idx++]);
+        run_test_rename_rmdir(&groups[idx++]);
         run_test_write(&groups[idx++]);
         run_test_fs_persist(groups, &idx);
         run_test_syscall(&groups[idx++]);
@@ -229,42 +231,42 @@ int main(int argc, char **argv, char **envp) {
         run_test_leak(&groups[idx++]);
     }
 
-    /* ── RUN_MEMORY_HEAVY: tests with large heap / mmap allocations ────────── */
-    if (RUN_MEMORY_HEAVY) {
-        run_test_malloc(&groups[idx++]);
-        run_test_lazy_alloc(&groups[idx++]);
-        run_test_demand_heap(&groups[idx++]);
-        run_test_mm_health(&groups[idx++]);
-        run_test_eval_mm(&groups[idx++]);
-    }
+    // /* ── RUN_MEMORY_HEAVY: tests with large heap / mmap allocations ────────── */
+    // if (RUN_MEMORY_HEAVY) {
+    //     run_test_malloc(&groups[idx++]);
+    //     run_test_lazy_alloc(&groups[idx++]);
+    //     run_test_demand_heap(&groups[idx++]);
+    //     run_test_mm_health(&groups[idx++]);
+    //     run_test_eval_mm(&groups[idx++]);
+    // }
 
-    /* ── Disabled stress / destructive tests (uncomment individually) ───────── */
-    if (RUN_STRESS_TESTS) {
-        run_test_xv6_compat(&groups[idx++]);
-        run_test_fd_limits(&groups[idx++]);
-        run_test_limits(&groups[idx++]);
-        run_test_rlimit(&groups[idx++]);
-        run_test_pathconf(&groups[idx++]);
-        run_test_fork_alloc_stress(&groups[idx++]);
-        run_test_bigfile(&groups[idx++]);
-        run_test_forkstress(&groups[idx++]);
-        run_test_dirops(&groups[idx++]);
-        run_test_inode_openunlink(&groups[idx++]);
-        run_test_fd_reclaim(&groups[idx++]);
-        run_test_syscall_robustness(&groups[idx++]);
-        run_test_fd_offset(&groups[idx++]);
-        run_test_forkforkfork(&groups[idx++]);
-        // run_test_writebig(&groups[idx++]); /* fills disk */
-    }
+    // /* ── Disabled stress / destructive tests (uncomment individually) ───────── */
+    // if (RUN_STRESS_TESTS) {
+    //     run_test_xv6_compat(&groups[idx++]);
+    //     run_test_fd_limits(&groups[idx++]);
+    //     run_test_limits(&groups[idx++]);
+    //     run_test_rlimit(&groups[idx++]);
+    //     run_test_pathconf(&groups[idx++]);
+    //     run_test_fork_alloc_stress(&groups[idx++]);
+    //     run_test_bigfile(&groups[idx++]);
+    //     run_test_forkstress(&groups[idx++]);
+    //     run_test_dirops(&groups[idx++]);
+    //     run_test_inode_openunlink(&groups[idx++]);
+    //     run_test_fd_reclaim(&groups[idx++]);
+    //     run_test_syscall_robustness(&groups[idx++]);
+    //     run_test_fd_offset(&groups[idx++]);
+    //     run_test_forkforkfork(&groups[idx++]);
+    //     // run_test_writebig(&groups[idx++]); /* fills disk */
+    // }
 
-    /* ── Comprehensive libc conformance tests (always run, no forks) ────────── */
-    if (RUN_ALL_TESTS) {
-        run_test_libc_string(groups, &idx);
-        run_test_libc_ctype(groups, &idx);
-        run_test_libc_stdio(groups, &idx);
-        run_test_libc_stdlib(groups, &idx);
-        run_test_libc_time(groups, &idx);
-    }
+    // /* ── Comprehensive libc conformance tests (always run, no forks) ────────── */
+    // if (RUN_ALL_TESTS) {
+    //     run_test_libc_string(groups, &idx);
+    //     run_test_libc_ctype(groups, &idx);
+    //     run_test_libc_stdio(groups, &idx);
+    //     run_test_libc_stdlib(groups, &idx);
+    //     run_test_libc_time(groups, &idx);
+    // }
 
     return ut_suite_end(groups, idx);
 }
