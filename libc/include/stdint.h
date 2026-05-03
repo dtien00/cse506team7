@@ -18,6 +18,10 @@
 #define UINT32_MAX 0xffffffffU
 #define UINT64_MAX 0xffffffffffffffffULL
 
+#define INTMAX_MIN INT64_MIN
+#define INTMAX_MAX INT64_MAX
+#define UINTMAX_MAX UINT64_MAX
+
 #define INTPTR_MIN  INT64_MIN
 #define INTPTR_MAX  INT64_MAX
 #define UINTPTR_MAX UINT64_MAX

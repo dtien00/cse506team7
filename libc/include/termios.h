@@ -4,6 +4,7 @@
 #include "types.h"
 
 typedef uint32_t tcflag_t;
+typedef uint32_t speed_t;
 typedef uint8_t cc_t;
 
 #define ICRNL   (1u << 0)

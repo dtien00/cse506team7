@@ -10,11 +10,13 @@
 #define O_ACCMODE   0x0003
 #define O_CREAT     0x0040
 #define O_EXCL      0x0080
+#define O_NOCTTY    0x0100
 #define O_TRUNC     0x0200
 #define O_APPEND    0x0400
 #define O_NONBLOCK  0x0800
 #define O_DIRECTORY 0x10000
 #define O_CLOEXEC   0x80000
+#define FD_CLOEXEC  1
 #define MAX_FDS   SBUNIX_OPEN_MAX   /* 20 — meets POSIX _POSIX_OPEN_MAX */
 #define MAX_PATH  SBUNIX_PATH_MAX   /* 1024 — matches current kernel enforcement */
 
@@ -63,6 +65,7 @@ typedef struct file {
 // File descriptor table (lives in process_t)
 typedef struct fd_table {
     file_t *files[MAX_FDS];
+    int fd_flags[MAX_FDS];
 } fd_table_t;
 
 struct stat {
@@ -80,6 +83,7 @@ struct stat {
 
 // Function declarations
 int fd_alloc(fd_table_t *table, file_t *f); // returns fd number
+int fd_alloc_from(fd_table_t *table, file_t *f, int min_fd);
 file_t *fd_get(fd_table_t *table, int fd);
 void fd_close(fd_table_t *table, int fd);
 void fd_destroy(fd_table_t *table);

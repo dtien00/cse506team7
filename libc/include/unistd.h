@@ -10,9 +10,11 @@ extern char **environ;
 #define STDOUT_FILENO 1
 #define STDERR_FILENO 2
 
+#ifndef SEEK_SET
 #define SEEK_SET 0
 #define SEEK_CUR 1
 #define SEEK_END 2
+#endif
 
 /* access() mode flags */
 #define F_OK 0
@@ -99,7 +101,7 @@ ssize_t readlink(const char *pathname, char *buf, size_t bufsiz);
 
 int pause(void);   /* suspend until signal; always returns -1 (EINTR) */
 
-int alarm(unsigned int seconds);
+unsigned int alarm(unsigned int seconds);
 
 long sysconf(int name);
 

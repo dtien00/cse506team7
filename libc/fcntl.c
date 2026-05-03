@@ -1,6 +1,7 @@
 #include "fcntl.h"
 #include "stdarg.h"
 #include "errno.h"
+#include "sys/syscall.h"
 
 int open(const char *pathname, int flags, ...);
 long __syscall_fcntl(int fd, int cmd, long arg);
