@@ -17,9 +17,14 @@ static int rmdir_p(const char *dir) {
         buf[--len] = '\0';
 
     do {
+        /* direct root child (e.g. "/mnt"): failure is a silent stop, not an error */
+        int is_root_child = (buf[0] == '/' && strchr(buf + 1, '/') == NULL);
         if (rmdir(buf) < 0) {
-            dprintf(STDERR_FILENO, "rmdir: failed to remove '%s'\n", buf);
-            return 1;
+            if (!is_root_child) {
+                dprintf(STDERR_FILENO, "rmdir: failed to remove '%s'\n", buf);
+                return 1;
+            }
+            break;
         }
         /* strip last component to get parent */
         while (len > 0 && buf[len - 1] != '/')
@@ -28,7 +33,7 @@ static int rmdir_p(const char *dir) {
         while (len > 1 && buf[len - 1] == '/')
             len--;
         buf[len] = '\0';
-    } while (len > 0);
+    } while (len > 1);
 
     return 0;
 }
