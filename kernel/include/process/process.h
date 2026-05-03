@@ -12,6 +12,8 @@
 #define MAX_PROCS   SBUNIX_CHILD_MAX        /* 64 */
 #define MAX_NAME    SBUNIX_LOGIN_NAME_MAX   /* 16 */
 #define MAX_HANDLERS  SBUNIX_NSIG   /* 32 */
+#define SHEBANG_MAX_DEPTH   4     /* ELOOP if shebang nesting exceeds this */
+#define SHEBANG_LINE_MAX    256   /* max bytes read from first line */
 
 // Kernel-internal signal numbers (mirrors libc/include/signal.h).
 // These are POSIX signal numbers (1-31), NOT RISC-V exception cause codes.
