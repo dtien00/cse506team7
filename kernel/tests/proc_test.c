@@ -96,6 +96,12 @@ void proc_test_run(void) {
     // RUN_TESTS executes before entering schedule(), so children created by
     // sys_fork() will not run unless we explicitly schedule. Validate fork
     // metadata, then simulate child exit so sys_wait() is non-blocking.
+    //
+    // sys_fork() enforces RLIMIT_NPROC by counting live (non-UNUSED,
+    // non-ZOMBIE) processes.  At this point only init and at most a handful
+    // of scheduler-test processes occupy the table — well under the limit of
+    // SBUNIX_CHILD_MAX (64).  If fork returns -EAGAIN here, the RLIMIT_NPROC
+    // counter is incorrectly including PROC_UNUSED slots.
     printk("=== Fork() Tests ===\n");
 
     struct proc *fork_saved = current;
@@ -242,6 +248,8 @@ void proc_test_run(void) {
 
     // Same constraint as above: no scheduler handoff in RUN_TESTS mode.
     // Reuse init as parent, fork, then mark child ZOMBIE before wait.
+    // The first fork test's child was fully reaped by sys_wait; the exec
+    // test process was freed by proc_free — the proc table is clean.
     struct proc *live_saved = current;
     current = proc_find(1);
 

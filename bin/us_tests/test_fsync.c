@@ -7,7 +7,7 @@
 #define TESTFILE "/tmp/fsync_test.txt"
 
 static void test_fsync_basic(us_test_group_t *group) {
-    int fd = open(TESTFILE, O_WRONLY | O_CREAT | O_TRUNC);
+    int fd = open(TESTFILE, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     TEST(group, "fsync-basic: open writable file", fd >= 0);
     if (fd < 0) return;
 
@@ -43,7 +43,7 @@ static void test_fsync_pipe(us_test_group_t *group) {
 }
 
 static void test_fdatasync_basic(us_test_group_t *group) {
-    int fd = open(TESTFILE, O_WRONLY | O_CREAT | O_TRUNC);
+    int fd = open(TESTFILE, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     TEST(group, "fdatasync-basic: open writable file", fd >= 0);
     if (fd < 0) return;
 

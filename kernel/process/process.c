@@ -43,7 +43,7 @@ struct proc* proc_alloc(void) {
     for (int i = 0; i < MAX_PROCS; i++) {
         if (proctab[i].state == PROC_UNUSED) {
             memset(&proctab[i], 0, sizeof(proctab[i]));
-            proctab[i].state = PROC_CREATED;   // mark as taken immediately
+            proctab[i].state = PROC_CREATED;
             return &proctab[i];
         }
     }
@@ -99,6 +99,20 @@ struct proc* proc_create(const char *name) {
 
     memset(p, 0, sizeof(*p));
 
+    /* Default resource limits — sys_fork() overwrites these with the parent's values. */
+    p->rlimits[RLIMIT_NOFILE].rlim_cur = SBUNIX_OPEN_MAX;
+    p->rlimits[RLIMIT_NOFILE].rlim_max = SBUNIX_OPEN_MAX;
+    p->rlimits[RLIMIT_NPROC].rlim_cur  = SBUNIX_CHILD_MAX;
+    p->rlimits[RLIMIT_NPROC].rlim_max  = SBUNIX_CHILD_MAX;
+    p->rlimits[RLIMIT_STACK].rlim_cur  = SBUNIX_STACK_MAX;
+    p->rlimits[RLIMIT_STACK].rlim_max  = SBUNIX_STACK_MAX;
+    p->rlimits[RLIMIT_AS].rlim_cur     = RLIM_INFINITY;
+    p->rlimits[RLIMIT_AS].rlim_max     = RLIM_INFINITY;
+    p->rlimits[RLIMIT_DATA].rlim_cur   = RLIM_INFINITY;
+    p->rlimits[RLIMIT_DATA].rlim_max   = RLIM_INFINITY;
+    p->rlimits[RLIMIT_CORE].rlim_cur   = 0;
+    p->rlimits[RLIMIT_CORE].rlim_max   = 0;
+
     p->pid = next_pid++;
     /* Each new process starts as its own group and session leader.
      * sys_fork() overwrites these with the parent's pgid/sid. */
@@ -142,12 +156,32 @@ static void proc_free_pagetable(struct proc *p) {
 }
 
 /* Full teardown — used by proc_exit().
- * Does NOT free the page table: the zombie must remain mapped until the
- * parent calls waitpid() and proc_free() reaps it.  Freeing the page table
- * here would return its physical pages to the PMM while the scheduler may
- * still switch to them (e.g. for a sibling process). */
+ * Frees the page table, trapframe, FS context, and file descriptors.
+ * VMA list structs are left intact so the zombie remains identifiable until
+ * the parent calls waitpid() and proc_free() reaps them. */
 void proc_destroy(struct proc *p) {
     if (!p) return;
+
+    /* Flush dirty MAP_SHARED file pages before the page table is torn down.
+     * POSIX mmap: a process that exits without calling munmap() must still
+     * propagate writes to the underlying file object.  PTE_D is only readable
+     * while the page table exists, so this must run before proc_free_pagetable. */
+    if (p->pagetable) {
+        for (struct vm_area *v = p->vma_list; v; v = v->next) {
+            if (v->type != VMA_TYPE_FILE || !(v->flags & VMA_SHARED) || !v->file)
+                continue;
+            vnode_t *vn = ((file_t *)v->file)->vnode;
+            if (!vn || !vn->fs_type) continue;
+            for (uintptr_t va = v->start; va < v->end; va += PGSIZE) {
+                uint64_t *pte = vmm_walk(p->pagetable, va, 0);
+                if (pte && (*pte & PTE_V) && (*pte & PTE_U) && (*pte & PTE_D)) {
+                    uintptr_t pa = PTE_TO_PA(*pte);
+                    size_t off   = (size_t)(v->offset + (va - v->start));
+                    vn->fs_type->ops.write(vn, (void *)pa, off, PGSIZE);
+                }
+            }
+        }
+    }
 
     proc_free_pagetable(p);
 
@@ -639,6 +673,10 @@ static int build_user_stack(pagetable_t pt, uintptr_t stack_top,
     kfree(argv_va);
     kfree(envp_va);
 
+    /* Sanity: all output pointers must be in user space */
+    if (sp == 0 || sp >= KERNBASE || user_argv >= KERNBASE || user_envp >= KERNBASE)
+        return -1;
+
     *sp_out   = sp;
     *argv_out = user_argv;
     *envp_out = user_envp;
@@ -646,33 +684,73 @@ static int build_user_stack(pagetable_t pt, uintptr_t stack_top,
     return 0;
 }
 
-int exec(const char *path, char *const argv[], char *const envp[]) {
+static int exec_internal(const char *path, char *const argv[],
+                         char *const envp[], int depth) {
     dentry_t *exec_dentry = NULL;
     int lookup_rc = vfs_lookup_from(current->fs->cwd, path, &exec_dentry);
     if (lookup_rc < 0)
-        return -1;
+        return lookup_rc;
     int exec_perm_rc = vfs_may_access(exec_dentry->d_vnode, VFS_PERM_EXEC | VFS_PERM_READ);
     dentry_put(exec_dentry);
     if (exec_perm_rc < 0)
-        return -1;
+        return -EACCES;
 
     // 1. Open the binary
     int fd = file_open(path);
-    if (fd < 0) return -1;
+    if (fd < 0) return fd;
 
     // 2. Read and validate the ELF64 header
     elf_header_t ehdr;
-    if (file_read(fd, &ehdr, sizeof(ehdr)) != (int)sizeof(ehdr))
-        goto fail_file;
-    if (ehdr.e_ident[0] != 0x7F || ehdr.e_ident[1] != 'E' ||
+    int ehdr_nread = file_read(fd, &ehdr, sizeof(ehdr));
+    if (ehdr_nread < 2)
+        goto fail_enoexec;
+    if (ehdr_nread != (int)sizeof(ehdr) ||
+        ehdr.e_ident[0] != 0x7F || ehdr.e_ident[1] != 'E' ||
         ehdr.e_ident[2] != 'L'  || ehdr.e_ident[3] != 'F' ||
         ehdr.e_ident[4] != 2 /* ELFCLASS64 */) {
-        goto fail_file;
+        /* Not an ELF — try shebang interpreter redirect */
+        if (depth >= SHEBANG_MAX_DEPTH) { file_close(fd); return -ELOOP; }
+        char shebang_line[SHEBANG_LINE_MAX];
+        if (file_lseek(fd, 0, SEEK_SET) < 0) goto fail_enoexec;
+        int nr = file_read(fd, shebang_line, SHEBANG_LINE_MAX - 1);
+        if (nr < 2 || shebang_line[0] != '#' || shebang_line[1] != '!')
+            goto fail_enoexec;
+        shebang_line[nr] = '\0';
+        for (int si = 2; si < nr; si++) {
+            if (shebang_line[si] == '\n') { shebang_line[si] = '\0'; break; }
+        }
+        char *interp = shebang_line + 2;
+        while (*interp == ' ' || *interp == '\t') interp++;
+        if (*interp == '\0') goto fail_enoexec;
+        char *interp_end = interp;
+        while (*interp_end && *interp_end != ' ' && *interp_end != '\t') interp_end++;
+        char *opt_arg = NULL;
+        if (*interp_end) {
+            *interp_end = '\0';
+            opt_arg = interp_end + 1;
+            while (*opt_arg == ' ' || *opt_arg == '\t') opt_arg++;
+            if (*opt_arg == '\0') opt_arg = NULL;
+        }
+        int orig_argc = 0;
+        while (argv[orig_argc]) orig_argc++;
+        int new_argc = 1 + (opt_arg ? 1 : 0) + 1 + (orig_argc > 0 ? orig_argc - 1 : 0);
+        char **new_argv = kmalloc((new_argc + 1) * sizeof(char *));
+        if (!new_argv) { file_close(fd); return -ENOMEM; }
+        int ai = 0;
+        new_argv[ai++] = interp;
+        if (opt_arg) new_argv[ai++] = opt_arg;
+        new_argv[ai++] = (char *)path;
+        for (int aj = 1; aj < orig_argc; aj++) new_argv[ai++] = argv[aj];
+        new_argv[ai] = NULL;
+        file_close(fd);
+        int sret = exec_internal(interp, new_argv, envp, depth + 1);
+        kfree(new_argv);
+        return sret;
     }
 
     // 3. Create a fresh page table and VMA list for the new image
     pagetable_t new_pt = vmm_create_pagetable();
-    if (!new_pt) goto fail_file;
+    if (!new_pt) { file_close(fd); return -ENOMEM; }
     struct vm_area *new_vma_list = NULL;
     vma_init(&new_vma_list);
 
@@ -824,9 +902,9 @@ int exec(const char *path, char *const argv[], char *const envp[]) {
             }
         }
     }
-    // POSIX: close all FDs marked O_CLOEXEC before the new image starts.
+    // POSIX: close all FDs marked FD_CLOEXEC before the new image starts.
     for (int i = 0; i < MAX_FDS; i++) {
-        if (current->fds.files[i] && (current->fds.files[i]->flags & O_CLOEXEC))
+        if (current->fds.files[i] && (current->fds.fd_flags[i] & FD_CLOEXEC))
             fd_close(&current->fds, i);
     }
     pagetable_t old_pt = current->pagetable;
@@ -850,6 +928,12 @@ int exec(const char *path, char *const argv[], char *const envp[]) {
 
     // 8. Write entry point and argument registers into the live trapframe
     //    (set by syscall_handler before calling exec; NULL at boot-time)
+    //
+    // POSIX ENOEXEC: reject ELFs whose entry point lies in kernel space.
+    // Old address space is already freed at this point; cannot return -1.
+    if (ehdr.e_entry == 0 || ehdr.e_entry >= KERNBASE)
+        proc_exit(-ENOEXEC);
+
     if (current->trapframe) {
         current->trapframe->sepc    = ehdr.e_entry;
         current->trapframe->sstatus = (current->trapframe->sstatus & ~SSTATUS_SPP)
@@ -875,7 +959,13 @@ fail_vma:
     vma_free_all(new_vma_list);
 fail_pt:
     vmm_free_pagetable(new_pt);
-fail_file:
     file_close(fd);
-    return -1;
+    return -ENOMEM;
+fail_enoexec:
+    file_close(fd);
+    return -ENOEXEC;
+}
+
+int exec(const char *path, char *const argv[], char *const envp[]) {
+    return exec_internal(path, argv, envp, 0);
 }

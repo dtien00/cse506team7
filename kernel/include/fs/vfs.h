@@ -2,6 +2,7 @@
 #pragma once
 #include "fs/file.h"
 #include "kernel/types.h"
+#include "kernel/limits.h"
 
 // Forward declarations
 struct vnode;
@@ -20,7 +21,7 @@ typedef enum {
 #define VFS_PERM_WRITE 0x2
 #define VFS_PERM_READ  0x4
 
-#define PIPE_CAPACITY 4096
+#define PIPE_CAPACITY  SBUNIX_PIPE_BUF   /* 4096 */
 #define PIPE_END_READ 0x1
 #define PIPE_END_WRITE 0x2
 
@@ -68,6 +69,7 @@ typedef struct filesystem_operations {
     int (*symlink)(struct mount *mnt, const char *target, const char *linkpath);
     int (*readlink)(vnode_t *vnode, char *buf, size_t size);
     uint32_t (*get_nlink)(vnode_t *vnode); // optional: return fresh nlink from fs
+    int (*release)(vnode_t *vnode); // optional: called when last fd referencing vnode closes
 } fs_ops_t;
 
 typedef struct fs_struct {

@@ -528,6 +528,24 @@ void page_fault_handler(trap_frame *frame) {
                 return;
             }
 
+            /* Enforce RLIMIT_STACK: reject growth that would push the stack
+             * beyond the process's soft limit.  vma_stack_floor() uses the
+             * compile-time USTACK_SIZE constant; this check honours the
+             * per-process value which may differ if setrlimit(RLIMIT_STACK)
+             * was called.  Both checks are needed: the floor check above
+             * handles the hard architectural ceiling; this one handles the
+             * per-process soft limit. */
+            if (current) {
+                uint64_t rlim_stack = current->rlimits[RLIMIT_STACK].rlim_cur;
+                uintptr_t rlim_floor = (stack_vma->end > (uintptr_t)rlim_stack)
+                                       ? stack_vma->end - (uintptr_t)rlim_stack
+                                       : 0;
+                if (faulting_va < rlim_floor) {
+                    kill_current(frame, "stack overflow: exceeds RLIMIT_STACK");
+                    return;
+                }
+            }
+
             uintptr_t new_page   = PGROUNDDOWN(faulting_va);
             stack_vma->start     = new_page;   /* extend VMA downward */
 

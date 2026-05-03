@@ -5,11 +5,15 @@
 #include "trap/trap.h"
 #include "fs/file.h"
 #include "fs/vfs.h"
+#include "kernel/limits.h"
+#include "kernel/resource.h"
 
-#define MAX_PROCS 64
-#define MAX_NAME 16
 #define KSTACK_SIZE 4096
-#define MAX_HANDLERS 32
+#define MAX_PROCS   SBUNIX_CHILD_MAX        /* 64 */
+#define MAX_NAME    SBUNIX_LOGIN_NAME_MAX   /* 16 */
+#define MAX_HANDLERS  SBUNIX_NSIG   /* 32 */
+#define SHEBANG_MAX_DEPTH   4     /* ELOOP if shebang nesting exceeds this */
+#define SHEBANG_LINE_MAX    256   /* max bytes read from first line */
 
 // Kernel-internal signal numbers (mirrors libc/include/signal.h).
 // These are POSIX signal numbers (1-31), NOT RISC-V exception cause codes.
@@ -192,6 +196,8 @@ struct proc {
     uint8_t cont_unreported;
     uint8_t stop_signal;        // which signal caused the stop (for WSTOPSIG)
     uint8_t auto_reap;          // SA_NOCLDWAIT: free without zombie on exit
+
+    struct rlimit rlimits[RLIM_NLIMITS];
 
     uintptr_t copy_fault_recover; // 0 when not inside a copy function; set by copy_{to,from}_user
 };

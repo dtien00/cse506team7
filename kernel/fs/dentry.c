@@ -11,6 +11,8 @@ POOL_DECLARE(dentry_pool);
 
 void dentry_pool_init(void) { POOL_INIT(dentry_pool, dentry_t, MAX_DENTRIES); }
 
+size_t dentry_pool_used(void) { return dentry_pool.used; }
+
 // ── Lifecycle ────────────────────────────────────────────────────
 
 dentry_t *dentry_alloc(const char *name, vnode_t *vnode) {

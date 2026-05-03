@@ -20,9 +20,12 @@
  * are clearly marked SKIP so it's easy to enable them later.
  */
 
+#pragma GCC diagnostic ignored "-Wunused-function"
+#pragma GCC diagnostic ignored "-Wunused-const-variable"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <signal.h>
 #include "us_test_common.h"
 
 void run_test_printf(us_test_group_t *group);
@@ -66,12 +69,15 @@ void run_test_pipe_sigpipe(us_test_group_t *group);
 void run_test_nanosleep(us_test_group_t *group);
 void run_test_xv6_compat(us_test_group_t *group);
 void run_test_fd_limits(us_test_group_t *group);
+void run_test_shell_exit(us_test_group_t *group);
+void run_test_limits(us_test_group_t *group);
 void run_test_bigfile(us_test_group_t *group);
 void run_test_forkstress(us_test_group_t *group);
 void run_test_dirops(us_test_group_t *group);
 void run_test_lazy_alloc(us_test_group_t *group);
 void run_test_demand_heap(us_test_group_t *group);
 void run_test_inode_openunlink(us_test_group_t *group);
+void run_test_fd_reclaim(us_test_group_t *group);
 void run_test_syscall_robustness(us_test_group_t *group);
 void run_test_fd_offset(us_test_group_t *group);
 void run_test_forkforkfork(us_test_group_t *group);
@@ -81,6 +87,15 @@ void run_test_mmap_file(us_test_group_t *group);
 void run_test_errno(us_test_group_t *group);
 void run_test_cloexec(us_test_group_t *group);
 void run_test_fsync(us_test_group_t *group);
+void run_test_fork_alloc_stress(us_test_group_t *group);
+void run_test_rlimit(us_test_group_t *group);
+void run_test_pathconf(us_test_group_t *group);
+void run_test_mm_health(us_test_group_t *group);
+void run_test_eval_mm(us_test_group_t *group);
+void run_test_exec_shebang(us_test_group_t *group);
+void run_test_exec_errno(us_test_group_t *group);
+void run_test_posix_compliance(us_test_group_t *group);
+void run_test_leak(us_test_group_t *group);
 
 /* comprehensive libc conformance suites (each fills multiple groups) */
 void run_test_libc_string(us_test_group_t groups[], int *idx);
@@ -112,9 +127,9 @@ void run_test_libc_time(us_test_group_t groups[], int *idx);
  *                   malloc, lazy_alloc (8 MB mmap, 4 MB sbrk regions)
  */
 static const int RUN_ALL_TESTS   = 1;
-static const int RUN_FORK_HEAVY  = RUN_ALL_TESTS && 0;
-static const int RUN_MEMORY_HEAVY = RUN_ALL_TESTS && 0;
-static const int RUN_STRESS_TESTS = RUN_ALL_TESTS || 1;
+static const int RUN_FORK_HEAVY  = RUN_ALL_TESTS && 1;
+static const int RUN_MEMORY_HEAVY = RUN_ALL_TESTS && 1;
+static const int RUN_STRESS_TESTS = RUN_ALL_TESTS && 0;
 
 int main(int argc, char **argv, char **envp) {
     /*
@@ -137,6 +152,12 @@ int main(int argc, char **argv, char **envp) {
     }
     if (argc >= 2 && strcmp(argv[1], "--envp-empty") == 0) {
         return (getenv("SBX_SENTINEL") == NULL) ? 0 : 4;
+    }
+    /* Probe for execve-resets-sighandler test: raise SIGUSR1 with SIG_DFL.
+     * If exec() correctly reset the handler, this kills us with SIGUSR1. */
+    if (argc >= 2 && strcmp(argv[1], "--posix-sigusr1-probe") == 0) {
+        raise(SIGUSR1);
+        return 0; /* only reached if SIGUSR1 was ignored / blocked */
     }
     (void)envp; /* not used in normal test mode; environ is the live copy */
 
@@ -201,6 +222,11 @@ int main(int argc, char **argv, char **envp) {
         run_test_mmap_file(&groups[idx++]);
         run_test_fsync(&groups[idx++]);
         run_test_cloexec(&groups[idx++]);
+        run_test_shell_exit(&groups[idx++]);
+        run_test_exec_shebang(&groups[idx++]);
+        run_test_exec_errno(&groups[idx++]);
+        run_test_posix_compliance(&groups[idx++]);
+        run_test_leak(&groups[idx++]);
     }
 
     /* ── RUN_MEMORY_HEAVY: tests with large heap / mmap allocations ────────── */
@@ -208,19 +234,26 @@ int main(int argc, char **argv, char **envp) {
         run_test_malloc(&groups[idx++]);
         run_test_lazy_alloc(&groups[idx++]);
         run_test_demand_heap(&groups[idx++]);
+        run_test_mm_health(&groups[idx++]);
+        run_test_eval_mm(&groups[idx++]);
     }
 
     /* ── Disabled stress / destructive tests (uncomment individually) ───────── */
     if (RUN_STRESS_TESTS) {
         run_test_xv6_compat(&groups[idx++]);
         run_test_fd_limits(&groups[idx++]);
-        // run_test_bigfile(&groups[idx++]);
-        // run_test_forkstress(&groups[idx++]);
-        // run_test_dirops(&groups[idx++]);
-        // run_test_inode_openunlink(&groups[idx++]);
-        // run_test_syscall_robustness(&groups[idx++]);
-        // run_test_fd_offset(&groups[idx++]);
-        // run_test_forkforkfork(&groups[idx++]);
+        run_test_limits(&groups[idx++]);
+        run_test_rlimit(&groups[idx++]);
+        run_test_pathconf(&groups[idx++]);
+        run_test_fork_alloc_stress(&groups[idx++]);
+        run_test_bigfile(&groups[idx++]);
+        run_test_forkstress(&groups[idx++]);
+        run_test_dirops(&groups[idx++]);
+        run_test_inode_openunlink(&groups[idx++]);
+        run_test_fd_reclaim(&groups[idx++]);
+        run_test_syscall_robustness(&groups[idx++]);
+        run_test_fd_offset(&groups[idx++]);
+        run_test_forkforkfork(&groups[idx++]);
         // run_test_writebig(&groups[idx++]); /* fills disk */
     }
 

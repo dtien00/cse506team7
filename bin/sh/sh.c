@@ -542,15 +542,58 @@ static int execute_pipeline(char *line) {
     return last_status;
 }
 
-int main(void) {
+int main(int argc, char **argv) {
     char line[MAX_LINE];
     int n;
+    int last_status = 0;
     signal(SIGINT,  SIG_IGN);
     signal(SIGTSTP, SIG_IGN);
     signal(SIGTTIN, SIG_IGN);
     signal(SIGTTOU, SIG_IGN);
-    signal(SIGCHLD, SIG_IGN); 
+    signal(SIGCHLD, SIG_IGN);
 
+    if (argc >= 3 && strcmp(argv[1], "-c") == 0) {
+        strncpy(line, argv[2], sizeof(line) - 1);
+        line[sizeof(line) - 1] = '\0';
+        return execute_pipeline(line);
+    }
+
+    /* Script file mode: sh [-flags] scriptfile [args...]
+     * Scan past any leading flag arguments (e.g. -e from #!/bin/sh -e)
+     * to find the script file path.  Flags are accepted but not acted on;
+     * the shell is simple and does not implement -e/-x/-u etc. */
+    if (argc >= 2) {
+        int script_idx = 1;
+        while (script_idx < argc && argv[script_idx][0] == '-')
+            script_idx++;
+        if (script_idx >= argc)
+            goto interactive;   /* only flags given — fall through to interactive */
+        int sfd = open(argv[script_idx], O_RDONLY);
+        if (sfd < 0) {
+            dprintf(STDERR_FILENO, "sh: %s: not found\n", argv[script_idx]);
+            return 127;
+        }
+        char ch;
+        int pos = 0;
+        while (read(sfd, &ch, 1) == 1) {
+            if (ch == '\n') {
+                line[pos] = '\0';
+                if (pos > 0 && line[0] != '#')
+                    last_status = execute_pipeline(line);
+                pos = 0;
+            } else if (pos < (int)sizeof(line) - 1) {
+                line[pos++] = ch;
+            }
+        }
+        if (pos > 0 && line[0] != '#') {
+            line[pos] = '\0';
+            last_status = execute_pipeline(line);
+        }
+        close(sfd);
+        return last_status;
+    }
+
+interactive:
     while (1) {
         job_reap_done();
         write(STDOUT_FILENO, "$ ", 2);
@@ -563,10 +606,10 @@ int main(void) {
 
         if (line[0] == '\n' || line[0] == '\0') continue;
 
-        execute_pipeline(line);
+        last_status = execute_pipeline(line);
     }
 
-    return 0;
+    return last_status;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

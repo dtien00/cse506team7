@@ -3,13 +3,57 @@
 #include <unistd.h>
 #include <signal.h>
 #include <sys/wait.h>
+#include <sys/syscall.h>
+#include <sys/mman.h>
 #include <fcntl.h>
 #include <termios.h>
 #include <errno.h>
 #include "us_test_common.h"
 
+#define PAGE_SIZE 4096
+
 void run_test_syscall(us_test_group_t *group) {
     ut_group_begin(group, "syscall");
+
+    TEST(group, "sys/syscall.h: SYS_getpid matches ABI", SYS_getpid == 9);
+    TEST(group, "sys/syscall.h: SYS_execve alias matches exec syscall", SYS_execve == SYS_exec);
+
+    {
+        pid_t mmap_child = fork();
+        if (mmap_child < 0) {
+            SKIP(group, "mmap-fixed: device overlap rejected, safe page zero-filled",
+                 "fork failed");
+        } else if (mmap_child == 0) {
+            char *dev = mmap((void *)0x40000000UL, PAGE_SIZE,
+                             PROT_READ | PROT_WRITE,
+                             MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED, -1, 0);
+            if (dev != MAP_FAILED)
+                _exit(1);
+
+            char *p = mmap((void *)0x50000000UL, PAGE_SIZE,
+                           PROT_READ | PROT_WRITE,
+                           MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED, -1, 0);
+            if (p == MAP_FAILED)
+                _exit(2);
+
+            for (int i = 0; i < PAGE_SIZE; i++)
+                if (p[i] != 0)
+                    _exit(3);
+
+            p[0] = 0x5a;
+            p[PAGE_SIZE - 1] = 0x33;
+            if (p[0] != 0x5a || p[PAGE_SIZE - 1] != 0x33)
+                _exit(4);
+
+            munmap(p, PAGE_SIZE);
+            _exit(0);
+        } else {
+            int mmap_status = 0;
+            waitpid(mmap_child, &mmap_status, 0);
+            TEST(group, "mmap-fixed: device overlap rejected, safe page zero-filled",
+                 WIFEXITED(mmap_status) && WEXITSTATUS(mmap_status) == 0);
+        }
+    }
 
     /* ── uptime ─────────────────────────────────────────────────────── */
     int t1 = uptime();
@@ -85,6 +129,38 @@ void run_test_syscall(us_test_group_t *group) {
 
     int r = kill(getpid(), 0);
     TEST(group, "kill(getpid(), 0): returns 0",   r == 0);
+
+    /* ── fcntl / nonblocking pipe ──────────────────────────────────── */
+    {
+        int pfd[2];
+        if (pipe(pfd) < 0) {
+            SKIP(group, "fcntl(F_GETFL): returns pipe status flags", "pipe failed");
+            SKIP(group, "fcntl(F_SETFL,O_NONBLOCK): updates pipe status flags", "pipe failed");
+            SKIP(group, "nonblocking pipe read: empty pipe returns -1 (errno=EAGAIN)", "pipe failed");
+            SKIP(group, "fcntl(F_DUPFD): duplicates fd at or above minimum", "pipe failed");
+        } else {
+            errno = 0;
+            int fl = fcntl(pfd[0], F_GETFL);
+            TEST(group, "fcntl(F_GETFL): returns pipe status flags", fl >= 0);
+
+            int setfl = fcntl(pfd[0], F_SETFL, fl | O_NONBLOCK);
+            int nfl = fcntl(pfd[0], F_GETFL);
+            TEST(group, "fcntl(F_SETFL,O_NONBLOCK): updates pipe status flags",
+                 setfl == 0 && (nfl & O_NONBLOCK));
+
+            char ch;
+            errno = 0;
+            int nr = read(pfd[0], &ch, 1);
+            TEST(group, "nonblocking pipe read: empty pipe returns -1 (errno=EAGAIN)",
+                 nr == -1 && errno == EAGAIN);
+
+            int dupfd = fcntl(pfd[0], F_DUPFD, 5);
+            TEST(group, "fcntl(F_DUPFD): duplicates fd at or above minimum", dupfd >= 5);
+            if (dupfd >= 0) close(dupfd);
+            close(pfd[0]);
+            close(pfd[1]);
+        }
+    }
 
     /* ── termios ─────────────────────────────────────────────────────── */
     struct termios oldt;

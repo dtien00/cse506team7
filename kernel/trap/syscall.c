@@ -15,6 +15,13 @@
 #include "fs/block_cache.h"
 #include "signal.h"
 #include "tty/term.h"
+#include "kernel/limits.h"
+/* _SC_* not included here: use SBUNIX_SC_* from kernel/limits.h in sys_sysconf */
+
+/* Forward declarations for functions defined later in this file */
+static long pathconf_query(int name);
+long sys_pathconf(const char *upath, int name);
+long sys_fpathconf(int fd, int name);
 
 
 #define MAP_FAILED ((void *) -1)
@@ -26,13 +33,20 @@
 #define MAP_ANONYMOUS 0x20
 #define MAP_FIXED     0x10
 
+#define F_DUPFD  0
+#define F_GETFD  1
+#define F_SETFD  2
+#define F_GETFL  3
+#define F_SETFL  4
+
 #define USER_HEAP_START 0x11000000UL
 #define USER_HEAP_END   MAXVA  /* Sv39 user VA ceiling; device VMAs block kernel/MMIO ranges */
 /* mmap allocations start well above the heap so that sbrk growth and
  * anonymous/file mmap regions never share the same VA range.
- * 0x40000000 = 1 GB; gives ~768 MB of heap space (0x11000000..0x40000000)
- * and the full remainder of user VA space for mmap. */
-#define USER_MMAP_START 0x40000000UL
+ * The PCI MMIO reservation ends at 0x50000000; leave the first post-device
+ * range available for explicit MAP_FIXED callers instead of consuming it with
+ * automatic mmap placement. */
+#define USER_MMAP_START 0x51000000UL
 
 #define MAX_ARGS 64
 #define KARG_MAX 256
@@ -129,12 +143,30 @@ void syscall_handler(trap_frame *frame) {
             if (!kargv[argc]) {
                 clear_csr_bit(sstatus, SSTATUS_SUM);
                 for (int i = 0; i < argc; i++) kfree(kargv[i]);
-                frame->a0 = (uint64_t)-1LL;
+                frame->a0 = (uint64_t)(int64_t)(-ENOMEM);
                 return;
             }
             strncpy(kargv[argc], uarg, KARG_MAX - 1);
+            /* E2BIG: string was truncated — it has >= KARG_MAX-1 characters */
+            if (kargv[argc][KARG_MAX - 2] != '\0') {
+                clear_csr_bit(sstatus, SSTATUS_SUM);
+                kfree(kargv[argc]);
+                for (int i = 0; i < argc; i++) kfree(kargv[i]);
+                frame->a0 = (uint64_t)(int64_t)(-E2BIG);
+                return;
+            }
             kargv[argc][KARG_MAX - 1] = '\0';
             argc++;
+        }
+        /* E2BIG: more args exist beyond the MAX_ARGS-1 limit */
+        if (argc == MAX_ARGS - 1 && uargv) {
+            char *extra = uargv[argc];
+            if (extra && (uint64_t)extra < KERNBASE) {
+                clear_csr_bit(sstatus, SSTATUS_SUM);
+                for (int i = 0; i < argc; i++) kfree(kargv[i]);
+                frame->a0 = (uint64_t)(int64_t)(-E2BIG);
+                return;
+            }
         }
         kargv[argc] = NULL;
 
@@ -149,12 +181,32 @@ void syscall_handler(trap_frame *frame) {
                 clear_csr_bit(sstatus, SSTATUS_SUM);
                 for (int i = 0; i < argc; i++) kfree(kargv[i]);
                 for (int i = 0; i < envc; i++) kfree(kenvp[i]);
-                frame->a0 = (uint64_t)-1LL;
+                frame->a0 = (uint64_t)(int64_t)(-ENOMEM);
                 return;
             }
             strncpy(kenvp[envc], uenv, KARG_MAX - 1);
+            /* E2BIG: string was truncated */
+            if (kenvp[envc][KARG_MAX - 2] != '\0') {
+                clear_csr_bit(sstatus, SSTATUS_SUM);
+                kfree(kenvp[envc]);
+                for (int i = 0; i < argc; i++) kfree(kargv[i]);
+                for (int i = 0; i < envc; i++) kfree(kenvp[i]);
+                frame->a0 = (uint64_t)(int64_t)(-E2BIG);
+                return;
+            }
             kenvp[envc][KARG_MAX - 1] = '\0';
             envc++;
+        }
+        /* E2BIG: more env vars exist beyond the MAX_ARGS-1 limit */
+        if (envc == MAX_ARGS - 1 && uenvp) {
+            char *extra = uenvp[envc];
+            if (extra && (uint64_t)extra < KERNBASE) {
+                clear_csr_bit(sstatus, SSTATUS_SUM);
+                for (int i = 0; i < argc; i++) kfree(kargv[i]);
+                for (int i = 0; i < envc; i++) kfree(kenvp[i]);
+                frame->a0 = (uint64_t)(int64_t)(-E2BIG);
+                return;
+            }
         }
         kenvp[envc] = NULL;
 
@@ -166,7 +218,7 @@ void syscall_handler(trap_frame *frame) {
 
         if (rc < 0) {
             printk("[exec] exec(%s) failed rc=%d argc=%d\n", kpath, rc, argc);
-            frame->a0 = (uint64_t)-1LL;
+            frame->a0 = (uint64_t)(int64_t)rc;   /* -ENOENT, -EACCES, -ENOEXEC, etc. */
         } else {
             // Update process name to the basename of the executed binary
             const char *base = kpath;
@@ -285,6 +337,10 @@ void syscall_handler(trap_frame *frame) {
 
         case SYS_dup:
             ret = sys_dup((int) arg0);
+            break;
+
+        case SYS_fcntl:
+            ret = sys_fcntl((int)arg0, (int)arg1, (long)arg2);
             break;
 
         case SYS_dup2:
@@ -429,12 +485,18 @@ void syscall_handler(trap_frame *frame) {
                                 (struct itimerval_k *)arg2);
             break;
 
+        case SYS_sysconf:
+            ret = sys_sysconf((int)arg0);
+            break;
+
         /* Single-user kernel: all processes run as UID/GID 0 (root). */
         case SYS_getuid:
+        case SYS_geteuid:
             ret = 0;
             break;
 
         case SYS_getgid:
+        case SYS_getegid:
             ret = 0;
             break;
 
@@ -444,6 +506,22 @@ void syscall_handler(trap_frame *frame) {
 
         case SYS_fdatasync:
             ret = sys_fdatasync((int)arg0);
+            break;
+
+        case SYS_getrlimit:
+            ret = sys_getrlimit((int)arg0, (struct rlimit *)arg1);
+            break;
+
+        case SYS_setrlimit:
+            ret = sys_setrlimit((int)arg0, (const struct rlimit *)arg1);
+            break;
+
+        case SYS_pathconf:
+            ret = sys_pathconf((const char *)arg0, (int)arg1);
+            break;
+
+        case SYS_fpathconf:
+            ret = sys_fpathconf((int)arg0, (int)arg1);
             break;
 
         default:
@@ -475,6 +553,18 @@ void sys_exit(int status) {
 pid_t sys_fork(void) {
     if (!current) return -1;
 
+    /* Count live (non-ZOMBIE, non-UNUSED) processes to enforce RLIMIT_NPROC. */
+    /* Note: this enforces a system-wide count. POSIX defines `RLIMIT_NPROC` per real user ID,
+        but since SBUnix has no multi-user support, a system-wide count is a reasonable
+        approximation and exercises the enforcement path. */
+    int live = 0;
+    for (int i = 0; i < MAX_PROCS; i++) {
+        struct proc *p = &proctab[i];
+        if (p->state != PROC_UNUSED && p->state != PROC_ZOMBIE) live++;
+    }
+    if ((uint64_t)live >= current->rlimits[RLIMIT_NPROC].rlim_cur)
+        return -EAGAIN;
+
     // Allocate and initialize new process (assigns pid, stack, context)
     struct proc *child = proc_create(current->name);
     if (!child) return -ENOMEM;
@@ -482,6 +572,7 @@ pid_t sys_fork(void) {
     // Inherit parent's open files (including stdio) and bump file refs.
     for (int i = 0; i < MAX_FDS; i++) {
         child->fds.files[i] = current->fds.files[i];
+        child->fds.fd_flags[i] = current->fds.fd_flags[i];
         if (child->fds.files[i])
             file_ref(child->fds.files[i]);  // bump refcount if vfs supports it
     }
@@ -507,6 +598,10 @@ pid_t sys_fork(void) {
     // Child also inherits parent's process group and session IDs
     child->pgid = current->pgid;
     child->sid = current->sid;
+
+    /* Child inherits parent's resource limits (POSIX). */
+    memcpy(child->rlimits, current->rlimits, sizeof(current->rlimits));
+
     /* Child starts one level below the parent so a timer-preempted parent
      * re-enters at the same level as the child; LIFO insertion then keeps
      * the parent at the head of that level so it finishes forking remaining
@@ -621,11 +716,13 @@ ssize_t sys_write(int fd, const void *buf, size_t count) {
 int sys_open(const char *path, int flags, mode_t mode) {
     if (!current || !path) return -EINVAL;
 
-    char kpath[MAX_PATH];
-    if (strncpy_from_user(kpath, path, MAX_PATH - 1) < 0) return -EFAULT;
+    char *kpath = kmalloc(MAX_PATH);
+    if (!kpath) return -ENOMEM;
+    if (strncpy_from_user(kpath, path, MAX_PATH - 1) < 0) { kfree(kpath); return -EFAULT; }
     kpath[MAX_PATH - 1] = '\0';
-
-    return file_open_with_flags(kpath, flags, mode);
+    int ret = file_open_with_flags(kpath, flags, mode);
+    kfree(kpath);
+    return ret;
 }
 
 int sys_close(int fd) {
@@ -675,6 +772,7 @@ int sys_pipe(int pipefd[2]) {
     int write_fd = fd_alloc(&current->fds, write_end);
     if (write_fd < 0) {
         current->fds.files[read_fd] = NULL;
+        current->fds.fd_flags[read_fd] = 0;
         kfree(write_end);
         kfree(read_end);
         kfree(p);
@@ -702,6 +800,7 @@ int sys_dup(int oldfd) {
         return -EMFILE;
     }
 
+    current->fds.fd_flags[newfd] = 0;
     return newfd;
 }
 
@@ -722,7 +821,51 @@ int sys_dup2(int oldfd, int newfd) {
     }
 
     current->fds.files[newfd] = f;
+    current->fds.fd_flags[newfd] = 0;
     return newfd;
+}
+
+int sys_fcntl(int fd, int cmd, long arg) {
+    if (!current || fd < 0 || fd >= MAX_FDS)
+        return -EBADF;
+
+    file_t *f = fd_get(&current->fds, fd);
+    if (!f)
+        return -EBADF;
+
+    switch (cmd) {
+        case F_DUPFD: {
+            if (arg < 0 || arg >= MAX_FDS)
+                return -EINVAL;
+            file_ref(f);
+            int newfd = fd_alloc_from(&current->fds, f, (int)arg);
+            if (newfd < 0) {
+                f_put(f);
+                return newfd;
+            }
+            current->fds.fd_flags[newfd] = 0;
+            return newfd;
+        }
+
+        case F_GETFD:
+            return current->fds.fd_flags[fd] & FD_CLOEXEC;
+
+        case F_SETFD:
+            current->fds.fd_flags[fd] = ((int)arg & FD_CLOEXEC) ? FD_CLOEXEC : 0;
+            return 0;
+
+        case F_GETFL:
+            return f->flags & ~O_CLOEXEC;
+
+        case F_SETFL: {
+            int settable = O_APPEND | O_NONBLOCK;
+            f->flags = (f->flags & ~settable) | ((int)arg & settable);
+            return 0;
+        }
+
+        default:
+            return -EINVAL;
+    }
 }
 
 int sys_tcgetattr(int fd, struct termios *termios_p) {
@@ -1007,14 +1150,47 @@ void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t off
     size_t pages     = (length + PGSIZE - 1) / PGSIZE;
     size_t alloc_size = pages * PGSIZE;
 
+    /* Enforce RLIMIT_AS: reject mappings that would push total virtual address
+     * space usage over the soft limit.  Default is RLIM_INFINITY, so this is
+     * a no-op unless the process calls setrlimit(RLIMIT_AS, ...).
+     * POSIX: mmap() shall fail with ENOMEM if the limit would be exceeded. */
+    if (p->rlimits[RLIMIT_AS].rlim_cur != RLIM_INFINITY) {
+        uint64_t current_as = 0;
+        for (struct vm_area *v = p->vma_list; v; v = v->next) {
+            if (v->type & VMA_TYPE_DEVICE) continue; /* exclude kernel guard/MMIO reservations */
+            current_as += v->end - v->start;
+        }
+        if (current_as + alloc_size > p->rlimits[RLIMIT_AS].rlim_cur) {
+            if (mmap_file) f_put(mmap_file);
+            /* POSIX: mmap() sets errno=ENOMEM when RLIMIT_AS is exceeded.
+             * Return -ENOMEM so __syscall_ret encodes the correct errno;
+             * userspace still receives MAP_FAILED (a0=-1). */
+            return (void *)(intptr_t)(-ENOMEM);
+        }
+    }
+
     uintptr_t va;
 
     if ((flags & MAP_FIXED) && addr != NULL) {
         va = (uintptr_t)addr;
-        if (va < USER_HEAP_START || va + alloc_size > USER_HEAP_END) {
+        if (va < USER_HEAP_START || va + alloc_size > USER_HEAP_END ||
+            va + alloc_size < va) {
             if (mmap_file) f_put(mmap_file);
             printk("sys_mmap: fixed address out of range\n");
             return MAP_FAILED;
+        }
+        if (vma_find_overlap(p->vma_list, va, va + alloc_size)) {
+            if (mmap_file) f_put(mmap_file);
+            printk("sys_mmap: fixed address overlaps existing VMA\n");
+            return MAP_FAILED;
+        }
+        for (uintptr_t page = va; page < va + alloc_size; page += PGSIZE) {
+            uint64_t *pte = vmm_walk(p->pagetable, page, 0);
+            if (pte && (*pte & PTE_V) && !(*pte & PTE_U)) {
+                if (mmap_file) f_put(mmap_file);
+                printk("sys_mmap: fixed address overlaps kernel mapping\n");
+                return MAP_FAILED;
+            }
         }
     } else {
         /* Find a free gap in the VMA list rather than bumping p->sz.
@@ -1078,6 +1254,29 @@ int sys_munmap(void *addr, size_t length) {
     uintptr_t unmap_start = (uintptr_t)addr;
     uintptr_t unmap_end   = unmap_start + PGROUNDUP(length);
 
+    /* Flush dirty pages for MAP_SHARED file VMAs before unmapping.
+     * POSIX mmap: modifications to a MAP_SHARED mapping must be propagated
+     * to the underlying object no later than munmap(). PTE_D is set by
+     * hardware on the first store to a page; read it before vmm_unmap clears it. */
+    for (struct vm_area *sv = p->vma_list; sv; sv = sv->next) {
+        if (sv->type != VMA_TYPE_FILE || !(sv->flags & VMA_SHARED) || !sv->file)
+            continue;
+        if (sv->start >= unmap_end || sv->end <= unmap_start)
+            continue;
+        uintptr_t wb_start = sv->start > unmap_start ? sv->start : unmap_start;
+        uintptr_t wb_end   = sv->end   < unmap_end   ? sv->end   : unmap_end;
+        vnode_t *vn = ((file_t *)sv->file)->vnode;
+        if (!vn || !vn->fs_type) continue;
+        for (uintptr_t va = wb_start; va < wb_end; va += PGSIZE) {
+            uint64_t *pte = vmm_walk(p->pagetable, va, 0);
+            if (pte && (*pte & PTE_V) && (*pte & PTE_U) && (*pte & PTE_D)) {
+                uintptr_t pa = PTE_TO_PA(*pte);
+                size_t off   = (size_t)(sv->offset + (va - sv->start));
+                vn->fs_type->ops.write(vn, (void *)pa, off, PGSIZE);
+            }
+        }
+    }
+
     /* Free any physical pages that were demand-faulted in. */
     for (uintptr_t page_va = unmap_start; page_va < unmap_end; page_va += PGSIZE) {
         uint64_t *pte = vmm_walk(p->pagetable, page_va, 0);
@@ -1137,6 +1336,15 @@ int sys_brk(void *addr) {
     }
 
     if (new_break > old_break) {
+        /* Enforce RLIMIT_DATA: heap size = new_break - USER_HEAP_START.
+         * Default is RLIM_INFINITY; only active if process calls setrlimit.
+         * POSIX: brk() sets errno=ENOMEM when RLIMIT_DATA is exceeded. */
+        if (p->rlimits[RLIMIT_DATA].rlim_cur != RLIM_INFINITY) {
+            uint64_t new_heap_size = new_break - USER_HEAP_START;
+            if (new_heap_size > p->rlimits[RLIMIT_DATA].rlim_cur)
+                return -ENOMEM;
+        }
+
         uintptr_t new_end = PGROUNDUP(new_break);
 
         if (heap_vma) {
@@ -1208,7 +1416,9 @@ void *sys_sbrk(intptr_t increment) {
     }
 
     if (sys_brk((void*)new_break) != 0) {
-        return (void *) -1;
+        /* Propagate ENOMEM so __syscall_ret sets errno correctly.
+         * userspace sbrk() receives (void*)-1 either way. */
+        return (void *)(intptr_t)(-ENOMEM);
     }
 
     return old_break;
@@ -1221,11 +1431,13 @@ off_t sys_lseek(int fd, off_t offset, int whence) {
 int sys_unlink(const char *path) {
     if (!current) return -1;
 
-    char kpath[MAX_PATH];
-    if (strncpy_from_user(kpath, path, MAX_PATH - 1) < 0) return -EFAULT;
+    char *kpath = kmalloc(MAX_PATH);
+    if (!kpath) return -ENOMEM;
+    if (strncpy_from_user(kpath, path, MAX_PATH - 1) < 0) { kfree(kpath); return -EFAULT; }
     kpath[MAX_PATH - 1] = '\0';
-
-    return vfs_unlink(kpath);
+    int ret = vfs_unlink(kpath);
+    kfree(kpath);
+    return ret;
 }
 
 int sys_link(const char *uoldpath, const char *unewpath) {
@@ -1305,19 +1517,22 @@ ssize_t sys_readlink(const char *upath, char *ubuf, size_t bufsiz) {
 int sys_mkdir(const char *path, mode_t mode) {
     if (!current) return -1;
 
-    char kpath[MAX_PATH];
-    if (strncpy_from_user(kpath, path, MAX_PATH - 1) < 0) return -EFAULT;
+    char *_pathbufs = kmalloc(2 * MAX_PATH);
+    if (!_pathbufs) return -ENOMEM;
+    char *kpath    = _pathbufs;
+    char *resolved = _pathbufs + MAX_PATH;
+    if (strncpy_from_user(kpath, path, MAX_PATH - 1) < 0) { kfree(_pathbufs); return -EFAULT; }
     kpath[MAX_PATH - 1] = '\0';
 
     /* vfs_mkdir uses vfs_find_mount() prefix matching, so it needs a
      * normalized absolute path.  dentry_normalize_path handles ".", "..",
      * double slashes, and relative-to-cwd expansion. */
-    char resolved[MAX_PATH];
     if (dentry_normalize_path(current->fs->cwd, vfs_get_root(),
-                              kpath, resolved, sizeof(resolved)) < 0)
-        return -ENAMETOOLONG;
+                              kpath, resolved, MAX_PATH) < 0) { kfree(_pathbufs); return -ENAMETOOLONG; }
 
-    return vfs_mkdir(resolved, mode);
+    int ret = vfs_mkdir(resolved, mode);
+    kfree(_pathbufs);
+    return ret;
 }
 
 int sys_sync(void) {
@@ -1375,26 +1590,28 @@ int sys_sigprocmask(int how, const uint32_t *set, uint32_t *oldset) {
 int sys_chdir(const char *path) {
     if (!current || !path) return -EINVAL;
 
-    char kpath[MAX_PATH];
-    if (strncpy_from_user(kpath, path, MAX_PATH - 1) < 0) return -EFAULT;
+    char *kpath = kmalloc(MAX_PATH);
+    if (!kpath) return -ENOMEM;
+    if (strncpy_from_user(kpath, path, MAX_PATH - 1) < 0) { kfree(kpath); return -EFAULT; }
     kpath[MAX_PATH - 1] = '\0';
-
-    return vfs_chdir(kpath);   // VFS owns everything below
+    int ret = vfs_chdir(kpath);
+    kfree(kpath);
+    return ret;
 }
 
 char *sys_getcwd(char *buf, size_t size) {
     if (!current || !buf || size == 0 || !current->fs) return NULL;
 
     // Build the absolute path from the cwd dentry chain
-    char kbuf[MAX_PATH];
-    if (fs_struct_get_cwd(current->fs, kbuf, MAX_PATH) < 0)
-        return NULL;
+    char *kbuf = kmalloc(MAX_PATH);
+    if (!kbuf) return NULL;
+    if (fs_struct_get_cwd(current->fs, kbuf, MAX_PATH) < 0) { kfree(kbuf); return NULL; }
 
     size_t cwd_len = strlen(kbuf);
-    if (cwd_len + 1 > size) return NULL;   // user buffer too small
+    if (cwd_len + 1 > size) { kfree(kbuf); return NULL; }   // user buffer too small
 
     copy_to_user(buf, kbuf, cwd_len + 1);
-
+    kfree(kbuf);
     return buf;
 }
 
@@ -1589,12 +1806,14 @@ int sys_stat(const char *upath, struct stat *ustat)
 {
     if (!current || !upath || !ustat) return -EINVAL;
 
-    char kpath[MAX_PATH];
-    if (strncpy_from_user(kpath, upath, MAX_PATH - 1) < 0) return -EFAULT;
+    char *kpath = kmalloc(MAX_PATH);
+    if (!kpath) return -ENOMEM;
+    if (strncpy_from_user(kpath, upath, MAX_PATH - 1) < 0) { kfree(kpath); return -EFAULT; }
     kpath[MAX_PATH - 1] = '\0';
 
     struct stat kst;
     int ret = file_stat(kpath, &kst);
+    kfree(kpath);
     if (ret != 0) return ret;
 
     if (copy_to_user(ustat, &kst, sizeof(struct stat)) < 0) return -EFAULT;
@@ -1605,12 +1824,14 @@ int sys_lstat(const char *upath, struct stat *ustat)
 {
     if (!current || !upath || !ustat) return -EINVAL;
 
-    char kpath[MAX_PATH];
-    if (strncpy_from_user(kpath, upath, MAX_PATH - 1) < 0) return -EFAULT;
+    char *kpath = kmalloc(MAX_PATH);
+    if (!kpath) return -ENOMEM;
+    if (strncpy_from_user(kpath, upath, MAX_PATH - 1) < 0) { kfree(kpath); return -EFAULT; }
     kpath[MAX_PATH - 1] = '\0';
 
     struct stat kst;
     int ret = file_lstat(kpath, &kst);
+    kfree(kpath);
     if (ret != 0) return ret;
 
     if (copy_to_user(ustat, &kst, sizeof(struct stat)) < 0) return -EFAULT;
@@ -1632,16 +1853,19 @@ int sys_fstat(int fd, struct stat *ustat)
 int sys_chmod(const char *upath, mode_t mode) {
     if (!current || !upath) return -EINVAL;
 
-    char kpath[MAX_PATH];
-    if (strncpy_from_user(kpath, upath, MAX_PATH - 1) < 0) return -EFAULT;
+    char *_pathbufs = kmalloc(2 * MAX_PATH);
+    if (!_pathbufs) return -ENOMEM;
+    char *kpath    = _pathbufs;
+    char *resolved = _pathbufs + MAX_PATH;
+    if (strncpy_from_user(kpath, upath, MAX_PATH - 1) < 0) { kfree(_pathbufs); return -EFAULT; }
     kpath[MAX_PATH - 1] = '\0';
 
-    char resolved[MAX_PATH];
     if (dentry_normalize_path(current->fs->cwd, vfs_get_root(),
-                              kpath, resolved, sizeof(resolved)) < 0)
-        return -ENAMETOOLONG;
+                              kpath, resolved, MAX_PATH) < 0) { kfree(_pathbufs); return -ENAMETOOLONG; }
 
-    return vfs_chmod(resolved, mode);
+    int ret = vfs_chmod(resolved, mode);
+    kfree(_pathbufs);
+    return ret;
 }
 
 int sys_fchmod(int fd, mode_t mode) {
@@ -1657,16 +1881,19 @@ int sys_fchmod(int fd, mode_t mode) {
 int sys_rmdir(const char *path) {
     if (!current || !path) return -EINVAL;
 
-    char kpath[MAX_PATH];
-    if (strncpy_from_user(kpath, path, MAX_PATH - 1) < 0) return -EFAULT;
+    char *_pathbufs = kmalloc(2 * MAX_PATH);
+    if (!_pathbufs) return -ENOMEM;
+    char *kpath    = _pathbufs;
+    char *resolved = _pathbufs + MAX_PATH;
+    if (strncpy_from_user(kpath, path, MAX_PATH - 1) < 0) { kfree(_pathbufs); return -EFAULT; }
     kpath[MAX_PATH - 1] = '\0';
 
-    char resolved[MAX_PATH];
     if (dentry_normalize_path(current->fs->cwd, vfs_get_root(),
-                              kpath, resolved, sizeof(resolved)) < 0)
-        return -ENAMETOOLONG;
+                              kpath, resolved, MAX_PATH) < 0) { kfree(_pathbufs); return -ENAMETOOLONG; }
 
-    return vfs_rmdir(resolved);
+    int ret = vfs_rmdir(resolved);
+    kfree(_pathbufs);
+    return ret;
 }
 
 unsigned int sys_alarm(unsigned int seconds) {
@@ -2115,4 +2342,107 @@ int sys_setitimer(int which, const struct itimerval_k *new_value,
     }
 
     return 0;
+}
+
+long sys_sysconf(int name) {
+    switch (name) {
+    case SBUNIX_SC_OPEN_MAX:          return SBUNIX_OPEN_MAX;
+    case SBUNIX_SC_CHILD_MAX:         return SBUNIX_CHILD_MAX;
+    case SBUNIX_SC_CLK_TCK:           return SBUNIX_CLK_TCK;
+    case SBUNIX_SC_PAGESIZE:          return SBUNIX_PAGESIZE;   /* _SC_PAGE_SIZE == _SC_PAGESIZE == 6 */
+    case SBUNIX_SC_ARG_MAX:           return SBUNIX_ARG_MAX;
+    case SBUNIX_SC_NGROUPS_MAX:       return SBUNIX_NGROUPS_MAX;
+    case SBUNIX_SC_LOGIN_NAME_MAX:    return SBUNIX_LOGIN_NAME_MAX;
+    case SBUNIX_SC_SIGQUEUE_MAX:      return SBUNIX_NSIG - 1;
+    case SBUNIX_SC_STREAM_MAX:        return SBUNIX_OPEN_MAX;   /* stdio streams ≤ OPEN_MAX */
+    case SBUNIX_SC_NPROCESSORS_CONF:  return 1;   /* single-core QEMU */
+    case SBUNIX_SC_NPROCESSORS_ONLN:  return 1;
+    case SBUNIX_SC_PHYS_PAGES:        return (0x88000000UL - 0x80000000UL) / SBUNIX_PAGESIZE;
+    case SBUNIX_SC_HOST_NAME_MAX:     return SBUNIX_HOST_NAME_MAX;
+    case SBUNIX_SC_SYMLOOP_MAX:       return SBUNIX_SYMLOOP_MAX;
+    case SBUNIX_SC_VERSION:           return 200809L;
+    default:
+        return -EINVAL;
+    }
+}
+
+int sys_getrlimit(int resource, struct rlimit *user_rlim) {
+    if (resource < 0 || resource >= RLIM_NLIMITS) return -EINVAL;
+    return copy_to_user(user_rlim, &current->rlimits[resource],
+                        sizeof(struct rlimit));
+}
+
+int sys_setrlimit(int resource, const struct rlimit *user_rlim) {
+    if (resource < 0 || resource >= RLIM_NLIMITS) return -EINVAL;
+    struct rlimit new_rlim;
+    if (copy_from_user(&new_rlim, user_rlim, sizeof(struct rlimit)) < 0)
+        return -EFAULT;
+    /* Unprivileged: may not raise soft limit above hard limit. */
+    if (new_rlim.rlim_cur > current->rlimits[resource].rlim_max) return -EPERM;
+    /* May not raise hard limit (no CAP_SYS_RESOURCE). */
+    if (new_rlim.rlim_max > current->rlimits[resource].rlim_max) return -EPERM;
+    current->rlimits[resource] = new_rlim;
+    return 0;
+}
+
+/*
+ * sys_pathconf_query -- shared helper for pathconf(2) and fpathconf(2).
+ *
+ * SBUnix uses fixed, filesystem-independent limits, so the path/fd argument
+ * only needs to be validated for existence; the returned value is the same
+ * for every path or fd.  Returns the limit value (>= 0) or -EINVAL for
+ * unknown names.
+ *
+ * _PC_* values match the Linux POSIX ABI (same as the libc/include/unistd.h
+ * definitions).
+ */
+static long pathconf_query(int name) {
+    switch (name) {
+    case 0:  /* _PC_LINK_MAX */         return SBUNIX_LINK_MAX;
+    case 1:  /* _PC_MAX_CANON */        return SBUNIX_MAX_CANON;
+    case 2:  /* _PC_MAX_INPUT */        return SBUNIX_MAX_INPUT;
+    case 3:  /* _PC_NAME_MAX */         return SBUNIX_NAME_MAX;
+    case 4:  /* _PC_PATH_MAX */         return SBUNIX_PATH_MAX;
+    case 5:  /* _PC_PIPE_BUF */         return SBUNIX_PIPE_BUF;
+    case 6:  /* _PC_CHOWN_RESTRICTED */ return 0;   /* no multi-user; chown unrestricted */
+    case 7:  /* _PC_NO_TRUNC */         return 1;   /* long names return ENAMETOOLONG */
+    case 8:  /* _PC_VDISABLE */         return 0;   /* no terminal disable character */
+    case 9:  /* _PC_SYNC_IO */          return 1;
+    case 10: /* _PC_ASYNC_IO */         return -1;  /* not supported; -1 = indeterminate */
+    case 11: /* _PC_PRIO_IO */          return -1;  /* not supported */
+    case 13: /* _PC_FILESIZEBITS */     return 32;  /* ext2 max file size: 2 GB */
+    case 19: /* _PC_SYMLINK_MAX */      return SBUNIX_SYMLINK_MAX;
+    case 20: /* _PC_2_SYMLINKS */       return 1;   /* symbolic links are supported */
+    default:
+        return -EINVAL;
+    }
+}
+
+/*
+ * pathconf(2): query a filesystem limit by pathname.
+ * The path must resolve to an existing entry; the returned value is the same
+ * regardless of which filesystem the path resides on (SBUnix uses fixed limits).
+ */
+long sys_pathconf(const char *upath, int name) {
+    char *kpath = kmalloc(MAX_PATH);
+    if (!kpath) return -ENOMEM;
+    if (strncpy_from_user(kpath, upath, MAX_PATH) < 0) { kfree(kpath); return -EFAULT; }
+    kpath[MAX_PATH - 1] = '\0';
+
+    dentry_t *de = NULL;
+    if (vfs_lookup(kpath, &de) < 0 || !de) { kfree(kpath); return -ENOENT; }
+    dentry_put(de);
+    kfree(kpath);
+
+    return pathconf_query(name);
+}
+
+/*
+ * fpathconf(2): query a filesystem limit by open file descriptor.
+ * The fd must be open; the returned value is the same for every file.
+ */
+long sys_fpathconf(int fd, int name) {
+    if (fd < 0 || fd >= MAX_FDS) return -EBADF;
+    if (!current || !current->fds.files[fd]) return -EBADF;
+    return pathconf_query(name);
 }

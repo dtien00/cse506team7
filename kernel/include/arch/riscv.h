@@ -1,6 +1,7 @@
 #pragma once
 
 #include "kernel/types.h"
+#include "kernel/limits.h"
 
 // Supervisor Status Register (sstatus)
 #define SSTATUS_SIE (1UL << 1) // Supervisor Interrupt Enable
@@ -84,6 +85,11 @@
 #define USTACK_SIZE (256 * PGSIZE)
 #define TRAMPOLINE (MAXVA - PGSIZE)
 #define TRAPFRAME (TRAMPOLINE - PGSIZE)
+
+_Static_assert(PGSIZE == SBUNIX_PAGESIZE,
+    "PGSIZE in riscv.h must match SBUNIX_PAGESIZE in limits.h");
+_Static_assert(USTACK_SIZE == SBUNIX_STACK_MAX,
+    "USTACK_SIZE in riscv.h must match SBUNIX_STACK_MAX in limits.h");
 
 // CSR read/write inline functions
 static inline uint64_t r_satp(void) {

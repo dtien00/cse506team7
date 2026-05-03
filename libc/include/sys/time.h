@@ -1,11 +1,11 @@
 #ifndef _SYS_TIME_H
 #define _SYS_TIME_H
 
-#include "types.h"
+#include "sys/types.h"
 
 struct timeval {
     time_t      tv_sec;
-    long        tv_usec;
+    suseconds_t tv_usec;
 };
 
 struct timezone {

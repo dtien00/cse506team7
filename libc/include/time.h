@@ -28,7 +28,7 @@ struct timespec {
 #define TIMER_ABSTIME 1
 
 time_t time(time_t *tloc);
-int clock_gettime(int clk_id, struct timespec *tp);
+int clock_gettime(clockid_t clock_id, struct timespec *tp);
 struct tm* localtime(const time_t *timep);
 struct tm* gmtime(const time_t *timep);
 time_t mktime(struct tm *tm);
@@ -37,7 +37,7 @@ char* ctime(const time_t *timep);
 size_t strftime(char *s, size_t max, const char *format, const struct tm *tm);
 
 int nanosleep(const struct timespec *req, struct timespec *rem);
-int clock_nanosleep(int clockid, int flags,
+int clock_nanosleep(clockid_t clock_id, int flags,
                     const struct timespec *req, struct timespec *rem);
 
 #endif

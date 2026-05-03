@@ -35,6 +35,10 @@ static struct proc test_proc;
 static void test_setup_proc(void) {
     memset(&test_proc, 0, sizeof(test_proc));
     test_proc.pid = 99;
+    /* Without rlimits, fd_alloc enforces a limit of 0 and every open/pipe/dup
+     * call fails with -EMFILE.  Set the soft and hard limits to the system max. */
+    test_proc.rlimits[RLIMIT_NOFILE].rlim_cur = SBUNIX_OPEN_MAX;
+    test_proc.rlimits[RLIMIT_NOFILE].rlim_max = SBUNIX_OPEN_MAX;
     fd_init(&test_proc.fds);   // sets up FILE_STDIN/FILE_STDOUT entries
     test_proc.fs = fs_struct_alloc();
     fs_struct_set_root(test_proc.fs, "/");

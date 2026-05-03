@@ -6,6 +6,7 @@
 typedef int pid_t;
 typedef int uid_t;
 typedef int gid_t;
+typedef int id_t;
 typedef int64_t off_t;
 typedef unsigned int mode_t;
 typedef unsigned long dev_t;
@@ -15,5 +16,8 @@ typedef long blksize_t;
 typedef long blkcnt_t;
 typedef long time_t;
 typedef long clock_t;
+typedef int clockid_t;
+typedef int timer_t;
+typedef long suseconds_t;
 
 #endif

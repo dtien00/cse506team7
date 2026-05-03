@@ -10,4 +10,5 @@ void *kmalloc(size_t size);
 void *kzalloc(size_t size);  // Allocate and zero
 void *krealloc(void *ptr, size_t size);
 void  kfree(void *ptr);
-void  kmalloc_stats(void);   // Print allocator statistics
+void   kmalloc_stats(void);       // Print allocator statistics
+size_t kmalloc_used_bytes(void);  // Currently live bytes (alloc - freed)

@@ -33,6 +33,8 @@
 #define SYS_pipe     22
 #define SYS_dup      23
 #define SYS_getuid   174  /* Linux RISC-V ABI; matches libc/syscall.S "li a7, 174" */
+#define SYS_geteuid  175
+#define SYS_getegid  177
 #define SYS_waitpid  25
 #define SYS_sigprocmask 26
 #define SYS_getcwd   27
@@ -73,6 +75,12 @@
 #define SYS_clock_nanosleep 93
 #define SYS_getitimer       94
 #define SYS_setitimer       95
+#define SYS_sysconf   96   /* long sysconf(int name) */
+#define SYS_getrlimit   97   /* int getrlimit(int resource, struct rlimit *rlim) */
+#define SYS_setrlimit   98   /* int setrlimit(int resource, const struct rlimit *rlim) */
+#define SYS_pathconf    99   /* long pathconf(const char *path, int name) */
+#define SYS_fpathconf   100  /* long fpathconf(int fd, int name) */
+#define SYS_fcntl       101  /* int fcntl(int fd, int cmd, long arg) */
 
 // Initialize syscall subsystem
 void syscall_init(void);
@@ -104,6 +112,7 @@ int sys_sync(void);
 int sys_pipe(int pipefd[2]);
 int sys_dup(int oldfd);
 int sys_dup2(int oldfd, int newfd);
+int sys_fcntl(int fd, int cmd, long arg);
 int sys_tcgetattr(int fd, struct termios *termios_p);
 int sys_tcsetattr(int fd, int action, const struct termios *termios_p);
 int sys_kill(pid_t pid, int sig);
@@ -143,3 +152,10 @@ int sys_clock_nanosleep(clockid_t clockid, int flags,
 int sys_getitimer(int which, struct itimerval_k *curr_value);
 int sys_setitimer(int which, const struct itimerval_k *new_value,
                   struct itimerval_k *old_value);
+int sys_fsync(int fildes);
+int sys_fdatasync(int fildes);
+long sys_sysconf(int name);
+int sys_getrlimit(int resource, struct rlimit *user_rlim);
+int sys_setrlimit(int resource, const struct rlimit *user_rlim);
+long pathconf(const char *path, int name);
+long fpathconf(int fd, int name);
