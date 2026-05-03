@@ -16,6 +16,9 @@
  * 10. kill(-pgid, sig) does NOT affect processes outside the target group.
  * 11. setpgid on a session leader is rejected (EPERM).
  * 12. getpgid on a non-existent pid returns an error.
+ * 13. kill(-pgid, sig) where the sender is IN the target group: all members
+ *     (c1 group-leader, c2 bystander, c3 sender) must be killed; the observer
+ *     (test runner, different group) reaps all three to verify.
  */
 
 #include <unistd.h>
@@ -325,6 +328,79 @@ void run_test_pgrp(us_test_group_t *group) {
     {
         pid_t r = getpgid(9999);
         TEST(group, "getpgid(9999) returns -1 (ESRCH)", r == -1);
+    }
+
+    /* ── 13. kill(-pgid, sig) where sender IS in the target group ─────────────
+     * Verifies that every group member receives the signal even when the
+     * sender belongs to the group it kills.  A buggy kernel would exit the
+     * sender (c3) part-way through the group iteration, leaving c1 or c2 alive.
+     *
+     * Three children are placed into a new group by the test runner (parent):
+     *   c1 — group leader; spins in sleep
+     *   c2 — bystander; spins in sleep
+     *   c3 — sender; calls kill(-pgid, SIGKILL) from inside the group
+     * A synchronisation pipe gates c3 until the parent has set all three pgids.
+     * The test runner (in a different group) reaps all three and checks each
+     * died by SIGKILL.
+     */
+    {
+        int pipefd[2];
+        int pok = (pipe(pipefd) == 0);
+
+        pid_t c1 = pok ? fork() : -1;
+        if (c1 == 0) {
+            close(pipefd[0]); close(pipefd[1]);
+            for (;;) sleep(1);
+        }
+
+        pid_t c2 = (pok && c1 > 0) ? fork() : -1;
+        if (c2 == 0) {
+            close(pipefd[0]); close(pipefd[1]);
+            for (;;) sleep(1);
+        }
+
+        pid_t c3 = (pok && c1 > 0 && c2 > 0) ? fork() : -1;
+        if (c3 == 0) {
+            /* Sender: wait for parent to finish setting up pgids, then kill group */
+            close(pipefd[1]);
+            char dummy;
+            read(pipefd[0], &dummy, 1);
+            close(pipefd[0]);
+            kill(-getpgid(0), SIGKILL); /* kills entire group, including self */
+            _exit(42);                  /* unreachable if signal delivered */
+        }
+
+        if (pok && c1 > 0 && c2 > 0 && c3 > 0) {
+            /* Place all three into one new group (c1 as leader) before releasing c3 */
+            setpgid(c1, c1);
+            setpgid(c2, c1);
+            setpgid(c3, c1);
+            close(pipefd[0]);
+            write(pipefd[1], "x", 1);
+            close(pipefd[1]);
+
+            int s1 = 0, s2 = 0, s3 = 0;
+            waitpid(c1, &s1, 0);
+            waitpid(c2, &s2, 0);
+            waitpid(c3, &s3, 0);
+
+            TEST(group, "kill(-pgid) sender-in-group: bystander c1 killed by signal",
+                 WIFSIGNALED(s1) && WTERMSIG(s1) == SIGKILL);
+            TEST(group, "kill(-pgid) sender-in-group: bystander c2 killed by signal",
+                 WIFSIGNALED(s2) && WTERMSIG(s2) == SIGKILL);
+            TEST(group, "kill(-pgid) sender-in-group: sender c3 self-terminated",
+                 WIFSIGNALED(s3) && WTERMSIG(s3) == SIGKILL);
+        } else {
+            if (pok)  { close(pipefd[0]); close(pipefd[1]); }
+            if (c1 > 0) { kill(c1, SIGKILL); waitpid(c1, NULL, 0); }
+            if (c2 > 0) { kill(c2, SIGKILL); waitpid(c2, NULL, 0); }
+            SKIP(group, "kill(-pgid) sender-in-group: bystander c1 killed by signal",
+                 "fork/pipe failed");
+            SKIP(group, "kill(-pgid) sender-in-group: bystander c2 killed by signal",
+                 "fork/pipe failed");
+            SKIP(group, "kill(-pgid) sender-in-group: sender c3 self-terminated",
+                 "fork/pipe failed");
+        }
     }
 
     ut_group_end(group);
