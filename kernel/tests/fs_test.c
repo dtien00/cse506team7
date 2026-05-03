@@ -297,10 +297,10 @@ void tmpfs_test(void) {
     ret = vfs_unlink("/tmp/testdir");
     TEST("unlink non-empty dir returns error", ret < 0);
 
-    // 18. Unlink empty directory succeeds
+    // 18. Rmdir empty directory succeeds
     ret = vfs_mkdir("/tmp/emptydir", 0755);
     if (ret == 0) {
-        ret = vfs_unlink("/tmp/emptydir");
+        ret = vfs_rmdir("/tmp/emptydir");
         TEST("unlink empty dir succeeds", ret == 0);
         int gone = file_open("/tmp/emptydir");
         TEST("unlinked empty dir not accessible", gone < 0);
