@@ -20,6 +20,11 @@
  *     b. Unblocked pending signal (SIGINT) does NOT appear in sigpending.
  *     c. Masked signal with nothing pending → not in sigpending output.
  *     d. Edge: sigpending on a fresh child (no pending signals) returns 0.
+ *
+ *  5. Blocked signal stays pending until unmask (liveness probe via pipe):
+ *     child blocks SIGTERM, sends to self, writes 'A' to pipe (alive), then
+ *     unblocks — the pending SIGTERM must fire before the child writes 'B'.
+ *     Parent reads exactly one byte ('A') and confirms child died by SIGTERM.
  */
 
 #include <sys/wait.h>
@@ -261,6 +266,60 @@ void run_test_signal(us_test_group_t *group) {
             waitpid(pid, &status, 0);
             TEST(group, "sigpending-multi: SIGTERM and SIGINT both appear",
                  WIFEXITED(status) && WEXITSTATUS(status) == 0);
+        }
+    }
+
+    /* ── 5. Blocked signal stays pending until unmask (Issue B regression) ────
+     * A pipe provides a liveness witness: the child writes 'A' after the
+     * masked kill() call (proving it survived), then unblocks SIGTERM.
+     * The kernel must deliver the pending signal at that unmask point, killing
+     * the child before it can write 'B'.  Reading exactly one byte ('A') from
+     * the pipe confirms the signal did not fire while masked.
+     *
+     * The child inherits SIGTERM blocked from the parent (left over from tests
+     * 2–4), so the sigprocmask(SIG_BLOCK) call here is a no-op — SIGTERM is
+     * already masked.  This is intentional: it means the test exercises the
+     * path where a signal is sent to a process whose mask already blocks it,
+     * and relies on the unmask to trigger delivery.  The child's pending_signals
+     * are clear at fork (POSIX), so the only pending SIGTERM is the one the
+     * child sends to itself at step 2.
+     */
+    {
+        int pfd[2];
+        int pok = (pipe(pfd) == 0);
+
+        pid_t pid = pok ? fork() : -1;
+        if (pid == 0) {
+            close(pfd[0]);
+            sigset_t set;
+            sigemptyset(&set);
+            sigaddset(&set, SIGTERM);
+            sigprocmask(SIG_BLOCK, &set, NULL);   /* ensure SIGTERM blocked */
+            kill(getpid(), SIGTERM);              /* queue it (mask keeps it pending) */
+            write(pfd[1], "A", 1);               /* alive: signal did not fire */
+            sigprocmask(SIG_UNBLOCK, &set, NULL); /* must die here */
+            write(pfd[1], "B", 1);               /* unreachable if masking correct */
+            close(pfd[1]);
+            _exit(0);
+        }
+
+        if (pid > 0) {
+            close(pfd[1]);
+            char buf[4] = {0};
+            int n = (int)read(pfd[0], buf, sizeof(buf));
+            close(pfd[0]);
+            int status = 0;
+            waitpid(pid, &status, 0);
+            TEST(group, "mask-then-kill: alive after masked kill (wrote A, not B)",
+                 n == 1 && buf[0] == 'A');
+            TEST(group, "mask-then-kill: killed by pending SIGTERM after unmask",
+                 WIFSIGNALED(status) && WTERMSIG(status) == SIGTERM);
+        } else {
+            if (pok) { close(pfd[0]); close(pfd[1]); }
+            SKIP(group, "mask-then-kill: alive after masked kill (wrote A, not B)",
+                 "pipe/fork failed");
+            SKIP(group, "mask-then-kill: killed by pending SIGTERM after unmask",
+                 "pipe/fork failed");
         }
     }
 
