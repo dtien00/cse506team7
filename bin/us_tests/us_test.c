@@ -91,6 +91,7 @@ void run_test_rlimit(us_test_group_t *group);
 void run_test_pathconf(us_test_group_t *group);
 void run_test_mm_health(us_test_group_t *group);
 void run_test_eval_mm(us_test_group_t *group);
+void run_test_exec_shebang(us_test_group_t *group);
 
 /* comprehensive libc conformance suites (each fills multiple groups) */
 void run_test_libc_string(us_test_group_t groups[], int *idx);
@@ -212,6 +213,7 @@ int main(int argc, char **argv, char **envp) {
         run_test_fsync(&groups[idx++]);
         run_test_cloexec(&groups[idx++]);
         run_test_shell_exit(&groups[idx++]);
+        run_test_exec_shebang(&groups[idx++]);
     }
 
     /* ── RUN_MEMORY_HEAVY: tests with large heap / mmap allocations ────────── */

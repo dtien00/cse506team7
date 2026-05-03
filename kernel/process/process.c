@@ -684,7 +684,8 @@ static int build_user_stack(pagetable_t pt, uintptr_t stack_top,
     return 0;
 }
 
-int exec(const char *path, char *const argv[], char *const envp[]) {
+static int exec_internal(const char *path, char *const argv[],
+                         char *const envp[], int depth) {
     dentry_t *exec_dentry = NULL;
     int lookup_rc = vfs_lookup_from(current->fs->cwd, path, &exec_dentry);
     if (lookup_rc < 0)
@@ -700,12 +701,51 @@ int exec(const char *path, char *const argv[], char *const envp[]) {
 
     // 2. Read and validate the ELF64 header
     elf_header_t ehdr;
-    if (file_read(fd, &ehdr, sizeof(ehdr)) != (int)sizeof(ehdr))
-        goto fail_file;
-    if (ehdr.e_ident[0] != 0x7F || ehdr.e_ident[1] != 'E' ||
+    int ehdr_nread = file_read(fd, &ehdr, sizeof(ehdr));
+    if (ehdr_nread < 2)
+        goto fail_file;   /* file too short to be ELF or shebang */
+    if (ehdr_nread != (int)sizeof(ehdr) ||
+        ehdr.e_ident[0] != 0x7F || ehdr.e_ident[1] != 'E' ||
         ehdr.e_ident[2] != 'L'  || ehdr.e_ident[3] != 'F' ||
         ehdr.e_ident[4] != 2 /* ELFCLASS64 */) {
-        goto fail_file;
+        /* Not an ELF — try shebang interpreter redirect */
+        if (depth >= SHEBANG_MAX_DEPTH) { file_close(fd); return -ELOOP; }
+        char shebang_line[SHEBANG_LINE_MAX];
+        if (file_lseek(fd, 0, SEEK_SET) < 0) goto fail_file;
+        int nr = file_read(fd, shebang_line, SHEBANG_LINE_MAX - 1);
+        if (nr < 2 || shebang_line[0] != '#' || shebang_line[1] != '!')
+            goto fail_file;
+        shebang_line[nr] = '\0';
+        for (int si = 2; si < nr; si++) {
+            if (shebang_line[si] == '\n') { shebang_line[si] = '\0'; break; }
+        }
+        char *interp = shebang_line + 2;
+        while (*interp == ' ' || *interp == '\t') interp++;
+        if (*interp == '\0') goto fail_file;
+        char *interp_end = interp;
+        while (*interp_end && *interp_end != ' ' && *interp_end != '\t') interp_end++;
+        char *opt_arg = NULL;
+        if (*interp_end) {
+            *interp_end = '\0';
+            opt_arg = interp_end + 1;
+            while (*opt_arg == ' ' || *opt_arg == '\t') opt_arg++;
+            if (*opt_arg == '\0') opt_arg = NULL;
+        }
+        int orig_argc = 0;
+        while (argv[orig_argc]) orig_argc++;
+        int new_argc = 1 + (opt_arg ? 1 : 0) + 1 + (orig_argc > 0 ? orig_argc - 1 : 0);
+        char **new_argv = kmalloc((new_argc + 1) * sizeof(char *));
+        if (!new_argv) { file_close(fd); return -ENOMEM; }
+        int ai = 0;
+        new_argv[ai++] = interp;
+        if (opt_arg) new_argv[ai++] = opt_arg;
+        new_argv[ai++] = (char *)path;
+        for (int aj = 1; aj < orig_argc; aj++) new_argv[ai++] = argv[aj];
+        new_argv[ai] = NULL;
+        file_close(fd);
+        int sret = exec_internal(interp, new_argv, envp, depth + 1);
+        kfree(new_argv);
+        return sret;
     }
 
     // 3. Create a fresh page table and VMA list for the new image
@@ -922,4 +962,8 @@ fail_pt:
 fail_file:
     file_close(fd);
     return -1;
+}
+
+int exec(const char *path, char *const argv[], char *const envp[]) {
+    return exec_internal(path, argv, envp, 0);
 }
