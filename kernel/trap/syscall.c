@@ -143,12 +143,30 @@ void syscall_handler(trap_frame *frame) {
             if (!kargv[argc]) {
                 clear_csr_bit(sstatus, SSTATUS_SUM);
                 for (int i = 0; i < argc; i++) kfree(kargv[i]);
-                frame->a0 = (uint64_t)-1LL;
+                frame->a0 = (uint64_t)(int64_t)(-ENOMEM);
                 return;
             }
             strncpy(kargv[argc], uarg, KARG_MAX - 1);
+            /* E2BIG: string was truncated — it has >= KARG_MAX-1 characters */
+            if (kargv[argc][KARG_MAX - 2] != '\0') {
+                clear_csr_bit(sstatus, SSTATUS_SUM);
+                kfree(kargv[argc]);
+                for (int i = 0; i < argc; i++) kfree(kargv[i]);
+                frame->a0 = (uint64_t)(int64_t)(-E2BIG);
+                return;
+            }
             kargv[argc][KARG_MAX - 1] = '\0';
             argc++;
+        }
+        /* E2BIG: more args exist beyond the MAX_ARGS-1 limit */
+        if (argc == MAX_ARGS - 1 && uargv) {
+            char *extra = uargv[argc];
+            if (extra && (uint64_t)extra < KERNBASE) {
+                clear_csr_bit(sstatus, SSTATUS_SUM);
+                for (int i = 0; i < argc; i++) kfree(kargv[i]);
+                frame->a0 = (uint64_t)(int64_t)(-E2BIG);
+                return;
+            }
         }
         kargv[argc] = NULL;
 
@@ -163,12 +181,32 @@ void syscall_handler(trap_frame *frame) {
                 clear_csr_bit(sstatus, SSTATUS_SUM);
                 for (int i = 0; i < argc; i++) kfree(kargv[i]);
                 for (int i = 0; i < envc; i++) kfree(kenvp[i]);
-                frame->a0 = (uint64_t)-1LL;
+                frame->a0 = (uint64_t)(int64_t)(-ENOMEM);
                 return;
             }
             strncpy(kenvp[envc], uenv, KARG_MAX - 1);
+            /* E2BIG: string was truncated */
+            if (kenvp[envc][KARG_MAX - 2] != '\0') {
+                clear_csr_bit(sstatus, SSTATUS_SUM);
+                kfree(kenvp[envc]);
+                for (int i = 0; i < argc; i++) kfree(kargv[i]);
+                for (int i = 0; i < envc; i++) kfree(kenvp[i]);
+                frame->a0 = (uint64_t)(int64_t)(-E2BIG);
+                return;
+            }
             kenvp[envc][KARG_MAX - 1] = '\0';
             envc++;
+        }
+        /* E2BIG: more env vars exist beyond the MAX_ARGS-1 limit */
+        if (envc == MAX_ARGS - 1 && uenvp) {
+            char *extra = uenvp[envc];
+            if (extra && (uint64_t)extra < KERNBASE) {
+                clear_csr_bit(sstatus, SSTATUS_SUM);
+                for (int i = 0; i < argc; i++) kfree(kargv[i]);
+                for (int i = 0; i < envc; i++) kfree(kenvp[i]);
+                frame->a0 = (uint64_t)(int64_t)(-E2BIG);
+                return;
+            }
         }
         kenvp[envc] = NULL;
 
@@ -180,7 +218,7 @@ void syscall_handler(trap_frame *frame) {
 
         if (rc < 0) {
             printk("[exec] exec(%s) failed rc=%d argc=%d\n", kpath, rc, argc);
-            frame->a0 = (uint64_t)-1LL;
+            frame->a0 = (uint64_t)(int64_t)rc;   /* -ENOENT, -EACCES, -ENOEXEC, etc. */
         } else {
             // Update process name to the basename of the executed binary
             const char *base = kpath;

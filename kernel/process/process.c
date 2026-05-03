@@ -689,21 +689,21 @@ static int exec_internal(const char *path, char *const argv[],
     dentry_t *exec_dentry = NULL;
     int lookup_rc = vfs_lookup_from(current->fs->cwd, path, &exec_dentry);
     if (lookup_rc < 0)
-        return -1;
+        return lookup_rc;
     int exec_perm_rc = vfs_may_access(exec_dentry->d_vnode, VFS_PERM_EXEC | VFS_PERM_READ);
     dentry_put(exec_dentry);
     if (exec_perm_rc < 0)
-        return -1;
+        return -EACCES;
 
     // 1. Open the binary
     int fd = file_open(path);
-    if (fd < 0) return -1;
+    if (fd < 0) return fd;
 
     // 2. Read and validate the ELF64 header
     elf_header_t ehdr;
     int ehdr_nread = file_read(fd, &ehdr, sizeof(ehdr));
     if (ehdr_nread < 2)
-        goto fail_file;   /* file too short to be ELF or shebang */
+        goto fail_enoexec;
     if (ehdr_nread != (int)sizeof(ehdr) ||
         ehdr.e_ident[0] != 0x7F || ehdr.e_ident[1] != 'E' ||
         ehdr.e_ident[2] != 'L'  || ehdr.e_ident[3] != 'F' ||
@@ -711,17 +711,17 @@ static int exec_internal(const char *path, char *const argv[],
         /* Not an ELF — try shebang interpreter redirect */
         if (depth >= SHEBANG_MAX_DEPTH) { file_close(fd); return -ELOOP; }
         char shebang_line[SHEBANG_LINE_MAX];
-        if (file_lseek(fd, 0, SEEK_SET) < 0) goto fail_file;
+        if (file_lseek(fd, 0, SEEK_SET) < 0) goto fail_enoexec;
         int nr = file_read(fd, shebang_line, SHEBANG_LINE_MAX - 1);
         if (nr < 2 || shebang_line[0] != '#' || shebang_line[1] != '!')
-            goto fail_file;
+            goto fail_enoexec;
         shebang_line[nr] = '\0';
         for (int si = 2; si < nr; si++) {
             if (shebang_line[si] == '\n') { shebang_line[si] = '\0'; break; }
         }
         char *interp = shebang_line + 2;
         while (*interp == ' ' || *interp == '\t') interp++;
-        if (*interp == '\0') goto fail_file;
+        if (*interp == '\0') goto fail_enoexec;
         char *interp_end = interp;
         while (*interp_end && *interp_end != ' ' && *interp_end != '\t') interp_end++;
         char *opt_arg = NULL;
@@ -750,7 +750,7 @@ static int exec_internal(const char *path, char *const argv[],
 
     // 3. Create a fresh page table and VMA list for the new image
     pagetable_t new_pt = vmm_create_pagetable();
-    if (!new_pt) goto fail_file;
+    if (!new_pt) { file_close(fd); return -ENOMEM; }
     struct vm_area *new_vma_list = NULL;
     vma_init(&new_vma_list);
 
@@ -959,9 +959,11 @@ fail_vma:
     vma_free_all(new_vma_list);
 fail_pt:
     vmm_free_pagetable(new_pt);
-fail_file:
     file_close(fd);
-    return -1;
+    return -ENOMEM;
+fail_enoexec:
+    file_close(fd);
+    return -ENOEXEC;
 }
 
 int exec(const char *path, char *const argv[], char *const envp[]) {
