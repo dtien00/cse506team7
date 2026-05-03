@@ -72,11 +72,14 @@ int ut_suite_end(const us_test_group_t *groups, int count) {
     printf("TOTAL: pass=%d fail=%d skip=%d\n", g_total_passed, g_total_failed, g_total_skipped);
 
     if (g_fail_count > 0) {
-        printf("\n---------------- failed tests ----------------------\n");
-        for (i = 0; i < g_fail_count; i++)
+        int show = g_fail_count < 25 ? g_fail_count : 25;
+        printf("\n---------------- failed tests (showing %d of %d) ----\n", show, g_fail_count);
+        for (i = 0; i < show; i++)
             printf("  [FAIL] %s: %s (%s:%d)\n",
                    g_fail_log[i].group, g_fail_log[i].test,
                    g_fail_log[i].file, g_fail_log[i].line);
+        if (g_fail_count > 25)
+            printf("  ... and %d more\n", g_fail_count - 25);
         printf("---------------------------------------------------\n");
     }
 

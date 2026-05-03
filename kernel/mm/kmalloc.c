@@ -200,6 +200,10 @@ void *krealloc(void *ptr, size_t size) {
   return new_ptr;
 }
 
+size_t kmalloc_used_bytes(void) {
+  return total_allocated - total_freed;
+}
+
 void kmalloc_stats(void) {
   printk("kmalloc statistics:\n");
   printk("  Total allocated: %d bytes\n", total_allocated);
