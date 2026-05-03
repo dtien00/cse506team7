@@ -1,6 +1,9 @@
 #pragma once
 
+#define TEST_MAX_FAILURES 25
+
 void test_record(int passed_case);
+void test_record_failure(const char *name, const char *file, int line);
 void test_summary_reset(void);
 void test_summary_report(void);
 
@@ -15,7 +18,7 @@ void test_summary_report(void);
             printk("  [FAIL] %s  (%s:%d)\n", name,       \
                     __FILE__, __LINE__);                    \
             failed++;                                       \
-            test_record(0);                                 \
+            test_record_failure(name, __FILE__, __LINE__); \
         }                                                   \
     } while (0)
 
@@ -45,3 +48,5 @@ void rtc_test_run(void);
 void jobctl_test_run(void);
 void sig_flag_test_run(void);
 void kstack_overflow_test_run(void);
+void leak_test_run(void);
+void mm_vma_test_run(void);

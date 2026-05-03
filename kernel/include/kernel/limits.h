@@ -12,7 +12,7 @@
 /* Maximum open file descriptors per process.
  * POSIX minimum (_POSIX_OPEN_MAX) = 20. We use 20 to meet the minimum.
  * To increase: also update fd_table_t in kernel/include/fs/file.h. */
-#define SBUNIX_OPEN_MAX         20
+#define SBUNIX_OPEN_MAX         64
 
 /* Maximum length of a pathname (bytes, including NUL terminator).
  * POSIX minimum (_POSIX_PATH_MAX) = 256. Kernel currently enforces 1024.

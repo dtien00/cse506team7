@@ -22,7 +22,8 @@ typedef struct dentry {
 
 // Lifecycle
 // Pool / lifecycle
-void dentry_pool_init(void);
+void   dentry_pool_init(void);
+size_t dentry_pool_used(void);  // live dentry count (for leak detection)
 dentry_t *dentry_alloc(const char *name, struct vnode *vnode);
 void dentry_free(dentry_t *d);
 

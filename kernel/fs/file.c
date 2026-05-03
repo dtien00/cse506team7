@@ -295,9 +295,11 @@ static void file_release(file_t *f) {
             vn->mount->fs_type->ops.release &&
             vn->ref_count == 1) // about to drop to 0 via dentry_put below
             vn->mount->fs_type->ops.release(vn);
-        dentry_put(f->dentry); // the only type that owns a dentry ref
+        dentry_t *closing_d = f->dentry;
         f->dentry = NULL;
         f->vnode = NULL;
+        dentry_put(closing_d);
+        dentry_prune(closing_d); // free if last ref and already detached
     } else if (f->type == FILE_PIPE && f->pipe) {
         pipe_t *p = f->pipe;
         if (f->pipe_flags & PIPE_END_READ) {

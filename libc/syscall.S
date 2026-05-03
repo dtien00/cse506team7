@@ -13,6 +13,8 @@
 .global getppid
 .global getuid
 .global getgid
+.global geteuid
+.global getegid
 .global lseek
 .global sync
 .global pipe
@@ -63,6 +65,7 @@
 .global setrlimit
 .global pathconf
 .global fpathconf
+.global __syscall_fcntl
 
 mmap:
     li a7, 14
@@ -136,6 +139,16 @@ getuid:
 
 getgid:
     li a7, 47
+    ecall
+    j __syscall_ret
+
+geteuid:
+    li a7, 175   // Linux RISC-V ABI SYS_geteuid
+    ecall
+    j __syscall_ret
+
+getegid:
+    li a7, 177   // Linux RISC-V ABI SYS_getegid
     ecall
     j __syscall_ret
 
@@ -387,6 +400,11 @@ pathconf:
 
 fpathconf:
     li a7, 100
+    ecall
+    j __syscall_ret
+
+__syscall_fcntl:
+    li a7, 101
     ecall
     j __syscall_ret
 

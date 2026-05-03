@@ -33,6 +33,8 @@
 #define SYS_pipe     22
 #define SYS_dup      23
 #define SYS_getuid   174  /* Linux RISC-V ABI; matches libc/syscall.S "li a7, 174" */
+#define SYS_geteuid  175
+#define SYS_getegid  177
 #define SYS_waitpid  25
 #define SYS_sigprocmask 26
 #define SYS_getcwd   27
@@ -78,6 +80,7 @@
 #define SYS_setrlimit   98   /* int setrlimit(int resource, const struct rlimit *rlim) */
 #define SYS_pathconf    99   /* long pathconf(const char *path, int name) */
 #define SYS_fpathconf   100  /* long fpathconf(int fd, int name) */
+#define SYS_fcntl       101  /* int fcntl(int fd, int cmd, long arg) */
 
 // Initialize syscall subsystem
 void syscall_init(void);
@@ -155,3 +158,4 @@ int sys_getrlimit(int resource, struct rlimit *user_rlim);
 int sys_setrlimit(int resource, const struct rlimit *user_rlim);
 long pathconf(const char *path, int name);
 long fpathconf(int fd, int name);
+int sys_fcntl(int fd, int cmd, long arg);

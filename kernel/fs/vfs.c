@@ -700,7 +700,14 @@ int vfs_create(const char *path, uint32_t mode) {
     printk("mount type: %s\n", mnt->fs_type->name);
 
     if (mnt->fs_type->ops.create) {
-        return mnt->fs_type->ops.create(mnt, rel_path, mode);
+        int ret = mnt->fs_type->ops.create(mnt, rel_path, mode);
+        if (ret == 0) {
+            // Populate dentry cache so pool_used reflects the new file.
+            dentry_t *new_d = NULL;
+            if (vfs_lookup(path, &new_d) == 0)
+                dentry_put(new_d);
+        }
+        return ret;
     }
 
     return -1;

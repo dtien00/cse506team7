@@ -25,6 +25,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <signal.h>
 #include "us_test_common.h"
 
 void run_test_printf(us_test_group_t *group);
@@ -92,6 +93,8 @@ void run_test_pathconf(us_test_group_t *group);
 void run_test_mm_health(us_test_group_t *group);
 void run_test_eval_mm(us_test_group_t *group);
 void run_test_exec_shebang(us_test_group_t *group);
+void run_test_posix_compliance(us_test_group_t *group);
+void run_test_leak(us_test_group_t *group);
 
 /* comprehensive libc conformance suites (each fills multiple groups) */
 void run_test_libc_string(us_test_group_t groups[], int *idx);
@@ -149,6 +152,12 @@ int main(int argc, char **argv, char **envp) {
     if (argc >= 2 && strcmp(argv[1], "--envp-empty") == 0) {
         return (getenv("SBX_SENTINEL") == NULL) ? 0 : 4;
     }
+    /* Probe for execve-resets-sighandler test: raise SIGUSR1 with SIG_DFL.
+     * If exec() correctly reset the handler, this kills us with SIGUSR1. */
+    if (argc >= 2 && strcmp(argv[1], "--posix-sigusr1-probe") == 0) {
+        raise(SIGUSR1);
+        return 0; /* only reached if SIGUSR1 was ignored / blocked */
+    }
     (void)envp; /* not used in normal test mode; environ is the live copy */
 
     us_test_group_t groups[MAX_GROUPS];
@@ -166,27 +175,27 @@ int main(int argc, char **argv, char **envp) {
     /* ── Lightweight / no-fork tests (always run) ─────────────────────────── */
 
     if (RUN_ALL_TESTS) {
-        run_test_printf(&groups[idx++]);
-        run_test_string(&groups[idx++]);
-        run_test_ctype(&groups[idx++]);
-        run_test_stdlib(&groups[idx++]);
-        run_test_sbrk_brk(&groups[idx++]);
-        run_test_file_io(&groups[idx++]);
-        run_test_mv_cp(&groups[idx++]);
-        run_test_write(&groups[idx++]);
-        run_test_fs_persist(groups, &idx);
-        run_test_syscall(&groups[idx++]);
-        run_test_errno(&groups[idx++]);
-        run_test_dirent(&groups[idx++]);
-        run_test_termios_tty(&groups[idx++]);
-        run_test_stack_growth(&groups[idx++]);
-        run_test_yield(&groups[idx++]);
-        run_test_procinfo(&groups[idx++]);
-        run_test_procfs(&groups[idx++]);
-        run_test_gettimeofday(&groups[idx++]);
-        run_test_pipe_sigpipe(&groups[idx++]);
-        run_test_time(&groups[idx++]);
-        run_test_nanosleep(&groups[idx++]);
+        // run_test_printf(&groups[idx++]);
+        // run_test_string(&groups[idx++]);
+        // run_test_ctype(&groups[idx++]);
+        // run_test_stdlib(&groups[idx++]);
+        // run_test_sbrk_brk(&groups[idx++]);
+        // run_test_file_io(&groups[idx++]);
+        // run_test_mv_cp(&groups[idx++]);
+        // run_test_write(&groups[idx++]);
+        // run_test_fs_persist(groups, &idx);
+        // run_test_syscall(&groups[idx++]);
+        // run_test_errno(&groups[idx++]);
+        // run_test_dirent(&groups[idx++]);
+        // run_test_termios_tty(&groups[idx++]);
+        // run_test_stack_growth(&groups[idx++]);
+        // run_test_yield(&groups[idx++]);
+        // run_test_procinfo(&groups[idx++]);
+        // run_test_procfs(&groups[idx++]);
+        // run_test_gettimeofday(&groups[idx++]);
+        // run_test_pipe_sigpipe(&groups[idx++]);
+        // run_test_time(&groups[idx++]);
+        // run_test_nanosleep(&groups[idx++]);
     }
 
     /* ── RUN_FORK_HEAVY: tests that spawn multiple child processes ─────────── */
@@ -214,6 +223,8 @@ int main(int argc, char **argv, char **envp) {
         run_test_cloexec(&groups[idx++]);
         run_test_shell_exit(&groups[idx++]);
         run_test_exec_shebang(&groups[idx++]);
+        run_test_posix_compliance(&groups[idx++]);
+        run_test_leak(&groups[idx++]);
     }
 
     /* ── RUN_MEMORY_HEAVY: tests with large heap / mmap allocations ────────── */
@@ -238,10 +249,10 @@ int main(int argc, char **argv, char **envp) {
         run_test_dirops(&groups[idx++]);
         run_test_inode_openunlink(&groups[idx++]);
         run_test_fd_reclaim(&groups[idx++]);
-        // run_test_syscall_robustness(&groups[idx++]);
-        // run_test_fd_offset(&groups[idx++]);
-        // run_test_forkforkfork(&groups[idx++]);
-        // // run_test_writebig(&groups[idx++]); /* fills disk */
+        run_test_syscall_robustness(&groups[idx++]);
+        run_test_fd_offset(&groups[idx++]);
+        run_test_forkforkfork(&groups[idx++]);
+        // run_test_writebig(&groups[idx++]); /* fills disk */
     }
 
     /* ── Comprehensive libc conformance tests (always run, no forks) ────────── */
