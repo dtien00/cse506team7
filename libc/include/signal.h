@@ -48,6 +48,16 @@ typedef void (*sighandler_t)(int);
 #define SIG_UNBLOCK 1
 #define SIG_SETMASK 2
 
+#define SA_NOCLDSTOP  0x00000001  /* don't send SIGCHLD when child stops */
+#define SA_NOCLDWAIT  0x00000002  /* don't create zombie on child exit */
+#define SA_SIGINFO    0x00000004  /* sa_sigaction takes (int,siginfo_t*,void*) */
+#define SA_ONSTACK    0x08000000  /* use alternate signal stack */
+#define SA_RESTART    0x10000000  /* restart syscall on signal return */
+#define SA_NODEFER    0x40000000  /* don't mask this signal while handling it */
+#define SA_NOMASK     SA_NODEFER
+#define SA_RESETHAND  0x80000000  /* reset disposition to SIG_DFL after delivery */
+#define SA_ONESHOT    SA_RESETHAND
+
 typedef unsigned long sigset_t;
 
 struct sigaction {
