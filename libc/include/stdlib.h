@@ -7,10 +7,10 @@
 #define EXIT_FAILURE 1
 #define RAND_MAX 2147483647
 
-void exit(int status);
-void _Exit(int status);
+__attribute__((noreturn)) void exit(int status);
+__attribute__((noreturn)) void _Exit(int status);
 int atexit(void (*func)(void));
-void abort(void);
+__attribute__((noreturn)) void abort(void);
 
 void* malloc(size_t size);
 void* calloc(size_t nmemb, size_t size);

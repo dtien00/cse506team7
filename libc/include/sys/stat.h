@@ -2,7 +2,7 @@
 #define _SYS_STAT_H
 
 #include "sys/types.h"
-#include "time.h"
+#include "../time.h"
 
 #define S_IFMT   0170000
 #define S_IFSOCK 0140000
