@@ -5,7 +5,7 @@
 typedef unsigned long clock_t;
 #endif
 #ifndef HAVE_USECONDS_T
-typedef unsigned long useconds_t;
+typedef unsigned int useconds_t;
 #endif
 #ifndef HAVE_SUSECONDS_T
 typedef long suseconds_t;
