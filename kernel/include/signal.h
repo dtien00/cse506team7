@@ -111,7 +111,6 @@ int    sigsuspend(const sigset_t *mask);
 
 void   psiginfo(const siginfo_t *, const char *);
 void   psignal(int, const char *);
-int    pthread_kill(pthread_t, int);
 int    pthread_sigmask(int, const sigset_t *restrict, sigset_t *restrict);
 int    sig2str(int, char *);
 
