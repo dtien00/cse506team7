@@ -145,7 +145,7 @@ void run_test_sigaction(us_test_group_t *group) {
     act.sa_handler  = SIG_IGN;
     act.sa_mask     = 0;
     act.sa_flags    = 0;
-    act.sa_restorer = NULL;
+    act.sa_sigaction = NULL;
     r = sigaction(SIGUSR2, &act, &oldact);
     TEST(group, "sigaction: set SIG_IGN returns 0", r == 0);
     TEST(group, "sigaction: oldact after set returns SIG_DFL", oldact.sa_handler == SIG_DFL);
