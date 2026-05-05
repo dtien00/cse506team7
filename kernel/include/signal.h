@@ -3,8 +3,10 @@
 
 #include "sys/types.h"
 
-typedef int sig_atomic_t;
-typedef void (*sighandler_t)(int);
+struct timespec;  /* forward declaration for sigtimedwait */
+
+typedef int           sig_atomic_t;
+typedef void        (*sighandler_t)(int);
 
 #define SIGHUP    1
 #define SIGINT    2
@@ -63,26 +65,61 @@ typedef void (*sighandler_t)(int);
 
 typedef unsigned long sigset_t;
 
-struct sigaction {
-    sighandler_t sa_handler;
-    sigset_t     sa_mask;
-    int          sa_flags;
-    void       (*sa_restorer)(void);
+union sigval {
+    int   sival_int;
+    void *sival_ptr;
 };
 
-sighandler_t signal(int signum, sighandler_t handler);
-int sigaction(int signum, const struct sigaction *act, struct sigaction *oldact);
-int kill(pid_t pid, int sig);
-int raise(int sig);
+typedef struct {
+    int          si_signo;
+    int          si_code;
+    pid_t        si_pid;
+    uid_t        si_uid;
+    void        *si_addr;
+    int          si_status;
+    union sigval si_value;
+} siginfo_t;
 
-int sigemptyset(sigset_t *set);
-int sigfillset(sigset_t *set);
-int sigaddset(sigset_t *set, int signum);
-int sigdelset(sigset_t *set, int signum);
-int sigismember(const sigset_t *set, int signum);
+struct sigaction {
+    sighandler_t  sa_handler;
+    sigset_t      sa_mask;
+    int           sa_flags;
+    void        (*sa_restorer)(void);  /* kernel-internal; matches libc sa_sigaction slot */
+};
 
-int sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
-int sigpending(sigset_t *set);
-int sigsuspend(const sigset_t *mask);
+/* Field order matches libc stack_t (ss_sp, ss_size, ss_flags) for ABI consistency. */
+typedef struct {
+    void  *ss_sp;
+    size_t ss_size;
+    int    ss_flags;
+} stack_t;
 
-#endif
+int    kill(pid_t pid, int sig);
+int    raise(int sig);
+void (*signal(int, void (*)(int)))(int);
+int    sigaction(int signum, const struct sigaction *act, struct sigaction *oldact);
+
+int    sigemptyset(sigset_t *set);
+int    sigfillset(sigset_t *set);
+int    sigaddset(sigset_t *set, int signum);
+int    sigdelset(sigset_t *set, int signum);
+int    sigismember(const sigset_t *set, int signum);
+
+int    sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
+int    sigpending(sigset_t *set);
+int    sigsuspend(const sigset_t *mask);
+
+void   psiginfo(const siginfo_t *, const char *);
+void   psignal(int, const char *);
+int    pthread_kill(pthread_t, int);
+int    pthread_sigmask(int, const sigset_t *restrict, sigset_t *restrict);
+int    sig2str(int, char *);
+
+int    sigqueue(pid_t, int, union sigval);
+int    sigtimedwait(const sigset_t *restrict, siginfo_t *restrict,
+                    const struct timespec *restrict);
+int    sigwait(const sigset_t *restrict, int *restrict);
+int    sigwaitinfo(const sigset_t *restrict, siginfo_t *restrict);
+int    str2sig(const char *restrict, int *restrict);
+
+#endif /* _SIGNAL_H */
