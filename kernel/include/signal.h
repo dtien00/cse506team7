@@ -84,7 +84,7 @@ struct sigaction {
     sighandler_t  sa_handler;
     sigset_t      sa_mask;
     int           sa_flags;
-    void        (*sa_restorer)(void);  /* kernel-internal; matches libc sa_sigaction slot */
+    void        (*sa_sigaction)(void);  /* kernel-internal; matches libc sa_sigaction slot */
 };
 
 /* Field order matches libc stack_t (ss_sp, ss_size, ss_flags) for ABI consistency. */
