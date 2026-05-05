@@ -15,4 +15,5 @@ dump/**
 /docs/
 /dev-remote.sh
 /.gdbinit
-/thirdparty/python/
+thirdparty/*
+!thirdparty/python
