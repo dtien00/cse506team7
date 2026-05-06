@@ -353,18 +353,20 @@ int term_read(terminal_t *t, char *buf, uint32_t n)
             return (int)got;
         }
 
-        // Blocking: sleep until VMIN bytes are available
-        // Before sleeping, re-check under interrupt disable to close the race window.
+        // Blocking: sleep until VMIN bytes are available.
+        // interrupts_off() closes the missed-wakeup race: the ISR cannot call
+        // proc_wakeup between the ibuf_count check and proc_sleep's proc_block.
+        // proc_sleep re-enables interrupts internally before yielding, so the
+        // ISR fires correctly after the process is marked blocked.
         t->reader = current;
-        while (1) {
-            uint64_t flags;
-            interrupts_save_disable(&flags);          // close race window
+        while (ibuf_count(t) < (uint32_t)vmin && t->sig_pending == TERM_SIG_NONE) {
+            interrupts_off();
             if (ibuf_count(t) >= (uint32_t)vmin || t->sig_pending != TERM_SIG_NONE) {
-                interrupts_restore(flags);
+                interrupts_on();
                 break;
             }
-            interrupts_restore(flags);
             proc_sleep(t);
+            interrupts_on();
         }
         t->reader = NULL;
 
