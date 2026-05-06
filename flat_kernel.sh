@@ -33,11 +33,18 @@ echo "Copying source tree (excluding ./kernel and ./flat_kernel) ..."
 rsync -a \
     --exclude="kernel" \
     --exclude="flat_kernel" \
+    --exclude="thirdparty" \
     --exclude=".git" \
     --exclude=".gitignore" \
     --exclude=".gitmodules" \
     --exclude=".gitattributes" \
     "$SRC/" "$DEST/"
+
+# copy thirdparty only if not already present
+if [ ! -d "$DEST/thirdparty" ]; then
+    echo "Copying thirdparty ..."
+    cp -a ./thirdparty "$DEST/thirdparty"
+fi
 
 # ── Flatten ./kernel into ./flat_kernel/kernel ───────────────────────────────
 echo "Flattening ./kernel -> $KERNEL_DEST ..."
