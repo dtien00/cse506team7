@@ -354,15 +354,26 @@ int term_read(terminal_t *t, char *buf, uint32_t n)
         }
 
         // Blocking: sleep until VMIN bytes are available
+        // Before sleeping, re-check under interrupt disable to close the race window.
         t->reader = current;
-        while (ibuf_count(t) < (uint32_t)vmin && t->sig_pending == TERM_SIG_NONE)
+        while (1) {
+            uint64_t flags;
+            interrupts_save_disable(&flags);          // close race window
+            if (ibuf_count(t) >= (uint32_t)vmin || t->sig_pending != TERM_SIG_NONE) {
+                interrupts_restore(flags);
+                break;
+            }
+            interrupts_restore(flags);
             proc_sleep(t);
+        }
         t->reader = NULL;
 
         if (t->sig_pending != TERM_SIG_NONE) {
+            int sig = t->sig_pending;
             t->sig_pending = TERM_SIG_NONE;
-            proc_exit(-1);
-            return -1;
+            if (current)
+                current->pending_signals |= (1U << sig);
+            return -1;        // caller sees -1, REPL raises KeyboardInterrupt
         }
 
         // Drain up to n bytes from the ring buffer
