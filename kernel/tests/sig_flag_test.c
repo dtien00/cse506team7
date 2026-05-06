@@ -78,7 +78,7 @@ void sig_flag_test_run(void) {
             act.sa_handler  = SIG_IGN;
             act.sa_mask     = 0;
             act.sa_flags    = SA_NOCLDSTOP | SA_RESETHAND;
-            act.sa_restorer = NULL;
+            act.sa_sigaction = NULL;
 
             int r = sys_sigaction(KERNEL_SIGTERM, &act, &oldact);
             TEST("roundtrip: install returns 0", r == 0);
@@ -118,7 +118,7 @@ void sig_flag_test_run(void) {
             act.sa_mask     = 0;
             /* SA_RESTART (0x10000000) is not in SA_KNOWN_FLAGS — must be stripped. */
             act.sa_flags    = SA_NOCLDSTOP | SA_RESTART;
-            act.sa_restorer = NULL;
+            act.sa_sigaction = NULL;
 
             sys_sigaction(SIGUSR1, &act, NULL);
 
@@ -167,7 +167,7 @@ void sig_flag_test_run(void) {
             act.sa_handler  = SIG_IGN;
             act.sa_mask     = 0;
             act.sa_flags    = SA_NOCLDSTOP | SA_RESETHAND;
-            act.sa_restorer = NULL;
+            act.sa_sigaction = NULL;
 
             int r = sys_sigaction(KERNEL_SIGKILL, &act, NULL);
             TEST("reject-flags: SIGKILL with sa_flags returns -EINVAL (< 0)", r < 0);

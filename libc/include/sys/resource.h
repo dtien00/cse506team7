@@ -23,6 +23,9 @@ struct rlimit {
     rlim_t rlim_max;   /* hard limit (ceiling) */
 };
 #define RLIM_INFINITY   ((rlim_t)~0ULL)
+#define RLIM_SAVED_MAX  ((rlim_t)~0ULL)
+#define RLIM_SAVED_CUR  ((rlim_t)~0ULL)
+
 
 /* Resource identifiers for getrlimit/setrlimit */
 #define RLIMIT_NOFILE   0    /* max open file descriptors */
@@ -31,10 +34,12 @@ struct rlimit {
 #define RLIMIT_AS       3    /* max virtual address space */
 #define RLIMIT_DATA     4    /* max data segment (heap) size */
 #define RLIMIT_CORE     5    /* max core dump file size (0 = no dump) */
-#define RLIM_NLIMITS    6    /* number of resource types */
+#define RLIMIT_FSIZE    6    /* max file size in bytes */
+#define RLIM_NLIMITS    7    /* number of resource types */
 
 int getrusage(int who, struct rusage *usage);
 int getrlimit(int resource, struct rlimit *rlim);
 int setrlimit(int resource, const struct rlimit *rlim);
+
 
 #endif /* _SYS_RESOURCE_H */

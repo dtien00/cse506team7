@@ -200,7 +200,42 @@ testsuite:
 test:
 	python3 testsuite/run_tests.py
 
+# --- python libc header + symbol probe ---
+#
+# Compiles dump/python_libc_probe.c with the exact flags used by the python
+# build.  A clean compile confirms every header MicroPython needs is present
+# and every type/macro is defined.  Run before building python to catch missing
+# libc pieces early without waiting for the full micropython link.
+#
+#   make -C thirdparty python-probe        # compile-only (fast)
+#   make -C thirdparty python-probe-link   # also link against libc.a (catches missing fns)
+
+PROBE_SRC  := $(abspath dump/python_libc_probe.c)
+PROBE_OBJ  := $(abspath $(TOP)/build/thirdparty/python_libc_probe.o)
+PROBE_ELF  := $(abspath $(TOP)/build/thirdparty/python_libc_probe.elf)
+PROBE_CFLAGS := -ffreestanding -fno-builtin -nostdlib -nostdinc -mcmodel=medany \
+                -march=rv64imac_zicsr_zifencei -mabi=lp64 \
+                -isystem $(abspath .)/include -isystem $(abspath $(TOP)/libc/include) -isystem $(GCC_INC) \
+                -D__sbunix__ -Wno-unused-function -Wno-unused-variable
+
+python-probe: $(DUMMY_OBJ) $(COMPAT_OBJ) $(SETJMP_OBJ)
+	@mkdir -p $(@D $(PROBE_OBJ))
+	@mkdir -p $(dir $(PROBE_OBJ))
+	$(CC) $(PROBE_CFLAGS) -c $(PROBE_SRC) -o $(PROBE_OBJ)
+	@echo "python-probe: all headers OK"
+
+python-probe-link: python-probe
+	$(CC) $(PROBE_OBJ) \
+	      -nostdlib $(abspath $(TOP)/build/libc/crt.S.o) \
+	      $(DUMMY_OBJ) $(COMPAT_OBJ) $(SETJMP_OBJ) \
+	      -Wl,--whole-archive $(abspath $(TOP)/build/libc.a) -Wl,--no-whole-archive \
+	      -Wl,--allow-multiple-definition -Wl,--gc-sections \
+	      -Wl,--no-warn-mismatch -lgcc \
+	      -o $(PROBE_ELF)
+	@echo "python-probe-link: all symbols resolved"
+
 .PHONY: install testsuite test busybox busybox-patch busybox-install busybox-menuconfig
 .PHONY: python python-patch python-install python-clean
 .PHONY: tcc tcc-install
 .PHONY: pdpmake pdpmake-install
+.PHONY: python-probe python-probe-link

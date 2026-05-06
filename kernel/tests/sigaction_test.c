@@ -88,7 +88,7 @@ void sigaction_test_run(void) {
             act.sa_handler  = SIG_IGN;
             act.sa_mask     = 0;
             act.sa_flags    = 0;
-            act.sa_restorer = 0;
+            act.sa_sigaction = 0;
 
             int r = sys_sigaction(KERNEL_SIGTERM, &act, &oldact);
             TEST("sigaction-set: set SIG_IGN returns 0", r == 0);
@@ -139,7 +139,7 @@ void sigaction_test_run(void) {
             act.sa_handler  = SIG_IGN;
             act.sa_mask     = 0;
             act.sa_flags    = 0;
-            act.sa_restorer = 0;
+            act.sa_sigaction = 0;
 
             int r = sys_sigaction(KERNEL_SIGPIPE, &act, NULL);
             TEST("no-oldact: returns 0", r == 0);
@@ -161,7 +161,7 @@ void sigaction_test_run(void) {
             act.sa_handler = SIG_IGN;
             act.sa_mask     = 0;
             act.sa_flags    = 0;
-            act.sa_restorer = NULL;
+            act.sa_sigaction = NULL;
 
             int r = sys_sigaction(KERNEL_SIGKILL, &act, NULL);
             TEST("reject-SIGKILL: returns -EINVAL (< 0)", r < 0);
@@ -184,7 +184,7 @@ void sigaction_test_run(void) {
             act.sa_handler = SIG_IGN;
             act.sa_mask     = 0;
             act.sa_flags    = 0;
-            act.sa_restorer = NULL;
+            act.sa_sigaction = NULL;
 
             int r = sys_sigaction(KERNEL_SIGSTOP, &act, NULL);
             TEST("reject-SIGSTOP: returns -EINVAL (< 0)", r < 0);
@@ -205,7 +205,7 @@ void sigaction_test_run(void) {
             act.sa_handler = SIG_IGN;
             act.sa_mask     = 0;
             act.sa_flags    = 0;
-            act.sa_restorer = NULL;
+            act.sa_sigaction = NULL;
 
             int r = sys_sigaction(0, &act, NULL);
             TEST("reject-sig0: returns < 0", r < 0);
@@ -226,7 +226,7 @@ void sigaction_test_run(void) {
             act.sa_handler = SIG_IGN;
             act.sa_mask     = 0;
             act.sa_flags    = 0;
-            act.sa_restorer = NULL;
+            act.sa_sigaction = NULL;
 
             int r = sys_sigaction(32, &act, NULL);
             TEST("reject-sig32: returns < 0", r < 0);
@@ -248,7 +248,7 @@ void sigaction_test_run(void) {
             act.sa_handler = (sighandler_t)sigaction_test_run;
             act.sa_mask     = 0;
             act.sa_flags    = 0;
-            act.sa_restorer = NULL;
+            act.sa_sigaction = NULL;
 
             int r = sys_sigaction(SIGUSR1, &act, NULL);
             TEST("reject-fnptr: returns < 0", r < 0);

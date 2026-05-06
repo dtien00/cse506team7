@@ -12,7 +12,7 @@ sighandler_t signal(int signum, sighandler_t handler) {
     act.sa_handler  = handler;
     act.sa_mask     = 0;
     act.sa_flags    = 0;
-    act.sa_restorer = 0;
+    act.sa_sigaction = 0;
     if (sigaction(signum, &act, &oldact) < 0)
         return SIG_ERR;
     return oldact.sa_handler;
