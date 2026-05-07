@@ -59,6 +59,11 @@ struct flock {
     pid_t l_pid;
 };
 
+#define AT_FDCWD            (-100)
+#define AT_SYMLINK_NOFOLLOW 0x100
+#define AT_SYMLINK_FOLLOW   0x200
+#define AT_REMOVEDIR        0x200
+
 int open(const char *pathname, int flags, ...);
 int creat(const char *pathname, mode_t mode);
 int fcntl(int fd, int cmd, ...);

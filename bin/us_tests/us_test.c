@@ -135,7 +135,8 @@ void run_test_python_exitcode(us_test_group_t *group);
 static const int RUN_ALL_TESTS   = 0;
 static const int RUN_FORK_HEAVY  = RUN_ALL_TESTS && 0;
 static const int RUN_MEMORY_HEAVY = RUN_ALL_TESTS && 0;
-static const int RUN_STRESS_TESTS = RUN_ALL_TESTS && 0;
+static const int RUN_STRESS_TESTS = RUN_ALL_TESTS || 1;
+static const int RUN_PYTHON_TESTS = RUN_ALL_TESTS && 0;
 
 int main(int argc, char **argv, char **envp) {
     /*
@@ -255,7 +256,7 @@ int main(int argc, char **argv, char **envp) {
         // run_test_fork_alloc_stress(&groups[idx++]);
         // run_test_bigfile(&groups[idx++]);
         // run_test_forkstress(&groups[idx++]);
-        // run_test_dirops(&groups[idx++]);
+        run_test_dirops(&groups[idx++]);
         // run_test_inode_openunlink(&groups[idx++]);
         // run_test_fd_reclaim(&groups[idx++]);
         // run_test_syscall_robustness(&groups[idx++]);
@@ -271,12 +272,12 @@ int main(int argc, char **argv, char **envp) {
         run_test_libc_stdio(groups, &idx);
         run_test_libc_stdlib(groups, &idx);
         run_test_libc_time(groups, &idx);
-        // is empty file has com,pilation issue, not necessary
+        // is empty file has compilation issue, not necessary
     }
 
     // answer is python exists 1 or 0
     // run_test_python_exitcode(&groups[idx++]);
-    run_test_python_hardcoded(&groups[idx++]);
+    if (RUN_PYTHON_TESTS) run_test_python_hardcoded(&groups[idx++]);
 
     return ut_suite_end(groups, idx);
 }

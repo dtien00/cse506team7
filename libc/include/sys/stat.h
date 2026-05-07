@@ -37,26 +37,33 @@
 #define S_IXOTH 0001
 
 struct stat {
-    dev_t     st_dev;
-    ino_t     st_ino;
-    mode_t    st_mode;
-    nlink_t   st_nlink;
-    uid_t     st_uid;
-    gid_t     st_gid;
-    off_t     st_size;
-    time_t    st_atime;
-    time_t    st_mtime;
-    time_t    st_ctime;
+    dev_t           st_dev;
+    ino_t           st_ino;
+    mode_t          st_mode;
+    nlink_t         st_nlink;
+    uid_t           st_uid;
+    gid_t           st_gid;
+    off_t           st_size;
     struct timespec st_atim;
     struct timespec st_mtim;
     struct timespec st_ctim;
 };
 
+#define st_atime st_atim.tv_sec
+#define st_mtime st_mtim.tv_sec
+#define st_ctime st_ctim.tv_sec
+
 int stat(const char *pathname, struct stat *statbuf);
 int lstat(const char *pathname, struct stat *statbuf);
 int fstat(int fd, struct stat *statbuf);
+int fstatat(int fd, const char *restrict pathname, struct stat *restrict statbuf, int flags);
 int mkdir(const char *pathname, mode_t mode);
+int mkdirat(int fd, const char *pathname, mode_t mode);
+int mkfifo(const char *pathname, mode_t mode);
+int mkfifoat(int fd, const char *pathname, mode_t mode);
 int chmod(const char *pathname, mode_t mode);
 int fchmod(int fd, mode_t mode);
+int fchmodat(int fd, const char *pathname, mode_t mode, int flags);
+int futimens(int fd, const struct timespec times[2]);
 
 #endif

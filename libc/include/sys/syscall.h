@@ -64,6 +64,7 @@
 #define SYS_getitimer        94
 #define SYS_setitimer        95
 #define SYS_fcntl            101
+#define SYS_fstatat          102
 #define SYS_lstat            107
 #define SYS_rename           56
 #define SYS_getuid           174
