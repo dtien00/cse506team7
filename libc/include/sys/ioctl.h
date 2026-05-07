@@ -2,6 +2,7 @@
 #define _SYS_IOCTL_H
 
 #include "types.h"
+#include <termios.h>   // struct winsize lives in <termios.h> per POSIX
 
 #define TCGETS     0x5401
 #define TCSETS     0x5402
@@ -15,13 +16,6 @@
 #define TIOCSWINSZ 0x5414
 #define FIONREAD   0x541B
 #define TIOCINQ    FIONREAD
-
-struct winsize {
-    unsigned short ws_row;
-    unsigned short ws_col;
-    unsigned short ws_xpixel;
-    unsigned short ws_ypixel;
-};
 
 int ioctl(int fd, unsigned long request, ...);
 

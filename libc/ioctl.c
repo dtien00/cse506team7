@@ -54,3 +54,28 @@ int ioctl(int fd, unsigned long request, ...) {
             return -1;
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POSIX termios stubs.
+// Declared in <termios.h> for source-compat with TCC/busybox; behavior is
+// minimal — the kernel doesn't yet implement drain/flow/flush/break/sessions.
+// cf*speed accessors are real (the speed lives in the struct), tcget/setwinsize
+// route through the existing TIOC*WINSZ ioctl path.
+// ─────────────────────────────────────────────────────────────────────────────
+speed_t cfgetispeed(const struct termios *t) { return t->c_ispeed; }
+speed_t cfgetospeed(const struct termios *t) { return t->c_ospeed; }
+int cfsetispeed(struct termios *t, speed_t s) { t->c_ispeed = s; return 0; }
+int cfsetospeed(struct termios *t, speed_t s) { t->c_ospeed = s; return 0; }
+
+int tcdrain(int fd)               { (void)fd; return 0; }
+int tcflow(int fd, int act)       { (void)fd; (void)act; return 0; }
+int tcflush(int fd, int q)        { (void)fd; (void)q;   return 0; }
+int tcsendbreak(int fd, int dur)  { (void)fd; (void)dur; return 0; }
+pid_t tcgetsid(int fd)            { (void)fd; return 0; }
+
+int tcgetwinsize(int fd, struct winsize *ws) {
+    return ioctl(fd, TIOCGWINSZ, ws);
+}
+int tcsetwinsize(int fd, const struct winsize *ws) {
+    return ioctl(fd, TIOCSWINSZ, ws);
+}

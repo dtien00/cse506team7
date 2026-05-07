@@ -2,60 +2,122 @@
 #include "kernel/types.h"
 
 // ─────────────────────────────────────────────────────────────────────────────
-// c_iflag  — input processing
+// POSIX termios bit values, c_cc indices, and struct layout.
+// MUST stay byte-identical to libc/include/termios.h and
+// thirdparty/include/termios.h — the struct crosses the syscall ABI verbatim
+// via copy_to_user/copy_from_user in sys_tcgetattr/sys_tcsetattr.
 // ─────────────────────────────────────────────────────────────────────────────
-#define ICRNL   (1u << 0)   // map \r → \n on input
-#define IXON    (1u << 1)   // XON/XOFF flow control  (^S / ^Q)
 
-// ─────────────────────────────────────────────────────────────────────────────
-// c_oflag  — output processing
-// ─────────────────────────────────────────────────────────────────────────────
-#define ONLCR   (1u << 0)   // map \n → \r\n on output  (needed for UART!)
+typedef uint32_t tcflag_t;
+typedef uint32_t speed_t;
+typedef uint8_t  cc_t;
 
-// ─────────────────────────────────────────────────────────────────────────────
-// c_lflag  — local / line-discipline flags
-// ─────────────────────────────────────────────────────────────────────────────
-#define ECHO    (1u << 0)   // echo received characters back to output
-#define ECHOE   (1u << 1)   // erase: echo BS SP BS sequence
-#define ICANON  (1u << 2)   // canonical (cooked) mode; raw mode when clear
-#define ISIG    (1u << 3)   // generate signals on ^C / ^\ / ^Z
-#define IEXTEN  (1u << 4)   // extended processing (^V literal-next)
+#define NCCS 32
 
-// ─────────────────────────────────────────────────────────────────────────────
+// c_iflag — input modes
+#define IGNBRK  0x0001
+#define BRKINT  0x0002
+#define IGNPAR  0x0004
+#define PARMRK  0x0008
+#define INPCK   0x0010
+#define ISTRIP  0x0020
+#define INLCR   0x0040
+#define IGNCR   0x0080
+#define ICRNL   0x0100   // map \r → \n on input
+#define IXON    0x0400   // XON/XOFF output flow control (^S / ^Q)
+#define IXANY   0x0800
+#define IXOFF   0x1000
+#define IMAXBEL 0x2000
+#define IUTF8   0x4000
+
+// c_oflag — output modes
+#define OPOST  0x0001
+#define ONLCR  0x0004   // map \n → \r\n on output (needed for UART!)
+#define OCRNL  0x0008
+#define ONOCR  0x0010
+#define ONLRET 0x0020
+#define TABDLY 0x1800
+#define TAB3   0x1800
+
+// c_cflag — control modes
+#define CSIZE   0x0030
+#define CS5     0x0000
+#define CS6     0x0010
+#define CS7     0x0020
+#define CS8     0x0030
+#define CSTOPB  0x0040
+#define CREAD   0x0080
+#define PARENB  0x0100
+#define PARODD  0x0200
+#define HUPCL   0x0400
+#define CLOCAL  0x0800
+#define CRTSCTS 0x80000000U
+
+// c_lflag — local / line-discipline modes
+#define ISIG    0x0001   // generate signals on ^C / ^\ / ^Z
+#define ICANON  0x0002   // canonical (cooked) mode; raw mode when clear
+#define XCASE   0x0004
+#define ECHO    0x0008   // echo received characters back to output
+#define ECHOE   0x0010   // erase: echo BS SP BS sequence
+#define ECHOK   0x0020
+#define ECHONL  0x0040
+#define NOFLSH  0x0080
+#define TOSTOP  0x0100
+#define ECHOCTL 0x0200
+#define ECHOPRT 0x0400
+#define ECHOKE  0x0800
+#define IEXTEN  0x8000   // extended processing (^V literal-next)
+
 // c_cc[] control-character indices
-// ─────────────────────────────────────────────────────────────────────────────
-#define VEOF     0   // ^D  — EOF on empty canonical line
-#define VEOL     1   // extra end-of-line  (0 = disabled)
+#define VINTR    0   // ^C — SIGINT
+#define VQUIT    1   // ^\ — SIGQUIT
 #define VERASE   2   // DEL / ^H — erase previous character
 #define VKILL    3   // ^U — erase entire line
-#define VINTR    4   // ^C — SIGINT
-#define VQUIT    5   // ^\ — SIGQUIT
-#define VSUSP    6   // ^Z — SIGTSTP  (deferred until job-control)
-#define VLNEXT   7   // ^V — literal-next
-#define VMIN     8   // raw: minimum bytes before read() returns
-#define VTIME    9   // raw: timeout in 0.1 s units  (0 = no timeout)
-#define NCCS    10
+#define VEOF     4   // ^D — EOF on empty canonical line
+#define VTIME    5   // raw: timeout in 0.1 s units (0 = no timeout)
+#define VMIN     6   // raw: minimum bytes before read() returns
+#define VSTART   8   // ^Q — resume output
+#define VSTOP    9   // ^S — stop output
+#define VSUSP    10  // ^Z — SIGTSTP (deferred until job-control)
+#define VEOL     11  // extra end-of-line (0 = disabled)
+#define VREPRINT 12
+#define VDISCARD 13
+#define VWERASE  14
+#define VLNEXT   15  // ^V — literal-next
+#define VEOL2    16
 
-// ─────────────────────────────────────────────────────────────────────────────
-// termios structure
-// ─────────────────────────────────────────────────────────────────────────────
-typedef uint32_t tcflag_t;
-typedef uint8_t cc_t;
+// Baud rates
+#define B0       0
+#define B50      1
+#define B75      2
+#define B110     3
+#define B134     4
+#define B150     5
+#define B200     6
+#define B300     7
+#define B600     8
+#define B1200    9
+#define B1800   10
+#define B2400   11
+#define B4800   12
+#define B9600   13
+#define B19200  14
+#define B38400  15
+
+// tcsetattr() action values
+#define TCSANOW     0   // apply immediately
+#define TCSADRAIN   1   // apply after output drains (treated as NOW for now)
+#define TCSAFLUSH   2   // apply after drain, discard pending input
 
 struct termios {
     tcflag_t c_iflag; // input flags
     tcflag_t c_oflag; // output flags
-    tcflag_t c_cflag; // hardware control (baud/parity – mostly unused)
+    tcflag_t c_cflag; // hardware control (baud/parity — mostly unused)
     tcflag_t c_lflag; // local / line-discipline flags
-    cc_t c_cc[NCCS];
+    cc_t     c_cc[NCCS];
+    speed_t  c_ispeed;
+    speed_t  c_ospeed;
 };
-
-// ─────────────────────────────────────────────────────────────────────────────
-// tcsetattr() action values
-// ─────────────────────────────────────────────────────────────────────────────
-#define TCSANOW     0   // apply immediately
-#define TCSADRAIN   1   // apply after output drains  (treated as NOW for now)
-#define TCSAFLUSH   2   // apply after drain, discard pending input
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Pending signal values  (kernel-internal, no libc signal.h needed)
