@@ -38,12 +38,13 @@ struct itimerspec {
 #define TIMER_ABSTIME           1
 
 /* locale_t is opaque per POSIX; <locale.h> is its canonical home */
-typedef void *locale_t;
+typedef int locale_t;
 
 /* struct sigevent is defined in <signal.h>; forward-declared for timer_create */
 struct sigevent;
 
 clock_t    clock(void);
+int        clock_getcpuclockid(pid_t, clockid_t *);
 int        clock_getres(clockid_t, struct timespec *);
 int        clock_gettime(clockid_t, struct timespec *);
 int        clock_nanosleep(clockid_t, int, const struct timespec *,
