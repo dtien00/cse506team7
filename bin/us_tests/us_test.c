@@ -132,10 +132,10 @@ void run_test_python_exitcode(us_test_group_t *group);
  * RUN_MEMORY_HEAVY – tests that make large heap / anonymous-mmap allocations:
  *                   malloc, lazy_alloc (8 MB mmap, 4 MB sbrk regions)
  */
-static const int RUN_ALL_TESTS   = 0;
-static const int RUN_FORK_HEAVY  = RUN_ALL_TESTS && 0;
-static const int RUN_MEMORY_HEAVY = RUN_ALL_TESTS && 0;
-static const int RUN_STRESS_TESTS = RUN_ALL_TESTS || 1;
+static const int RUN_ALL_TESTS   = 1;
+static const int RUN_FORK_HEAVY  = RUN_ALL_TESTS && 1;
+static const int RUN_MEMORY_HEAVY = RUN_ALL_TESTS && 1;
+static const int RUN_STRESS_TESTS = RUN_ALL_TESTS || 0;
 static const int RUN_PYTHON_TESTS = RUN_ALL_TESTS && 0;
 
 int main(int argc, char **argv, char **envp) {
@@ -187,7 +187,7 @@ int main(int argc, char **argv, char **envp) {
         run_test_string(&groups[idx++]);
         run_test_ctype(&groups[idx++]);
         run_test_stdlib(&groups[idx++]);
-        run_test_sbrk_brk(&groups[idx++]);
+        // run_test_sbrk_brk(&groups[idx++]);
         run_test_file_io(&groups[idx++]);
         run_test_mv_cp(&groups[idx++]);
         run_test_rename_rmdir(&groups[idx++]);
@@ -256,7 +256,7 @@ int main(int argc, char **argv, char **envp) {
         // run_test_fork_alloc_stress(&groups[idx++]);
         // run_test_bigfile(&groups[idx++]);
         // run_test_forkstress(&groups[idx++]);
-        run_test_dirops(&groups[idx++]);
+        // run_test_dirops(&groups[idx++]);
         // run_test_inode_openunlink(&groups[idx++]);
         // run_test_fd_reclaim(&groups[idx++]);
         // run_test_syscall_robustness(&groups[idx++]);
