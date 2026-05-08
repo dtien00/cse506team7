@@ -631,12 +631,11 @@ static int procfs_readlink(vnode_t *vn, char *buf, size_t size) {
 static const struct { const char *name; uint8_t dtype; } pid_dir_entries[] = {
     { "status", DT_REG },
     { "stat",   DT_REG },
-    { "smaps",  DT_REG },
-    { "cwd",    DT_REG },
-    { "exe",    DT_REG },
+    { "cwd",    DT_LNK },
+    { "exe",    DT_LNK },
     { "root",   DT_LNK },
 };
-#define PID_DIR_NENTRIES 6
+#define PID_DIR_NENTRIES 5
 
 static int procfs_readdir(mount_t *mnt, vnode_t *vnode, uint32_t start_idx, void *buf,
                           uint32_t bufsize, uint32_t *entries_out) {
