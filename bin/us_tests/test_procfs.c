@@ -87,27 +87,34 @@ void run_test_procfs(us_test_group_t *group) {
     DIR *self_dir = opendir("/proc/self");
     TEST(group, "opendir(\"/proc/self\") succeeds", self_dir != NULL);
     if (self_dir) {
-        int has_status = 0, has_stat = 0, has_cwd = 0, has_exe = 0, has_root = 0;
+        int has_status = 0, has_stat = 0, has_cwd = 0, has_exe = 0, has_root = 0, has_smaps = 0;
+        int any_entry = 0;
         struct dirent *e;
         while ((e = readdir(self_dir)) != NULL) {
+            any_entry = 1;
             if (strcmp(e->d_name, "status") == 0) has_status = 1;
             if (strcmp(e->d_name, "stat")   == 0) has_stat   = 1;
             if (strcmp(e->d_name, "cwd")    == 0) has_cwd    = 1;
             if (strcmp(e->d_name, "exe")    == 0) has_exe    = 1;
             if (strcmp(e->d_name, "root")   == 0) has_root   = 1;
+            if (strcmp(e->d_name, "smaps")  == 0) has_smaps  = 1;
         }
         closedir(self_dir);
+        TEST(group, "readdir(/proc/self) returns at least one entry", any_entry);
         TEST(group, "readdir(/proc/self) contains status", has_status);
         TEST(group, "readdir(/proc/self) contains stat",   has_stat);
         TEST(group, "readdir(/proc/self) contains cwd",    has_cwd);
         TEST(group, "readdir(/proc/self) contains exe",    has_exe);
         TEST(group, "readdir(/proc/self) contains root",   has_root);
+        TEST(group, "readdir(/proc/self) contains smaps",  has_smaps);
     } else {
+        SKIP(group, "readdir(/proc/self) returns at least one entry", "opendir failed");
         SKIP(group, "readdir(/proc/self) contains status", "opendir failed");
         SKIP(group, "readdir(/proc/self) contains stat",   "opendir failed");
         SKIP(group, "readdir(/proc/self) contains cwd",    "opendir failed");
         SKIP(group, "readdir(/proc/self) contains exe",    "opendir failed");
         SKIP(group, "readdir(/proc/self) contains root",   "opendir failed");
+        SKIP(group, "readdir(/proc/self) contains smaps",  "opendir failed");
     }
 
     // ── /proc/self/status ─────────────────────────────────────────────────
@@ -161,6 +168,7 @@ void run_test_procfs(us_test_group_t *group) {
         TEST(group, "open/read /proc/self/stat succeeds", sn > 0);
         if (sn > 0) {
             TEST(group, "stat starts with digit", stat_buf[0] >= '0' && stat_buf[0] <= '9');
+            TEST(group, "stat first field is own pid", atoi(stat_buf) == getpid());
             // Find "(comm)" field
             char *open_p  = strchr(stat_buf, '(');
             char *close_p = strchr(stat_buf, ')');
@@ -172,6 +180,19 @@ void run_test_procfs(us_test_group_t *group) {
                      state_c == 'R' || state_c == 'S' || state_c == 'D' ||
                      state_c == 'T' || state_c == 'Z');
             }
+        }
+    }
+
+    // ── /proc/self/smaps ───────────────────────────────────────────────────
+
+    {
+        char smaps_buf[512];
+        int sm = read_to_buffer("/proc/self/smaps", smaps_buf, sizeof(smaps_buf));
+        TEST(group, "open/read /proc/self/smaps succeeds", sm > 0);
+        if (sm > 0) {
+            TEST(group, "smaps contains VmSize field",  strstr(smaps_buf, "VmSize")  != NULL);
+            TEST(group, "smaps contains VmStack field", strstr(smaps_buf, "VmStack") != NULL);
+            TEST(group, "smaps contains KernelStack",   strstr(smaps_buf, "KernelStack") != NULL);
         }
     }
 
@@ -196,7 +217,7 @@ void run_test_procfs(us_test_group_t *group) {
         }
     }
 
-    // ── /proc/self/cwd and /proc/self/root symlinks ────────────────────────
+    // ── /proc/self/cwd, /proc/self/root, /proc/self/exe symlinks ───────────
 
     {
         char link_buf[256];
@@ -215,6 +236,12 @@ void run_test_procfs(us_test_group_t *group) {
             link_buf[lr] = '\0';
             TEST(group, "root readlink starts with /", link_buf[0] == '/');
         }
+    }
+    {
+        // exe: openable; content may be empty until first exec
+        int fd = open("/proc/self/exe", O_RDONLY);
+        TEST(group, "open(/proc/self/exe) succeeds", fd >= 0);
+        if (fd >= 0) close(fd);
     }
 
     // ── /proc/self via readlink ────────────────────────────────────────────

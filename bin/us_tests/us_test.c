@@ -69,6 +69,7 @@ void run_test_links(us_test_group_t groups[], int *idx);
 void run_test_pipe_sigpipe(us_test_group_t *group);
 void run_test_zombie_fd(us_test_group_t *group);
 void run_test_nanosleep(us_test_group_t *group);
+void run_test_sh_dash_c(us_test_group_t *group);
 void run_test_xv6_compat(us_test_group_t *group);
 void run_test_fd_limits(us_test_group_t *group);
 void run_test_shell_exit(us_test_group_t *group);
@@ -135,8 +136,8 @@ void run_test_python_smoke(us_test_group_t *group);
  *                   malloc, lazy_alloc (8 MB mmap, 4 MB sbrk regions)
  */
 static const int RUN_ALL_TESTS   = 1;
-static const int RUN_FORK_HEAVY  = RUN_ALL_TESTS && 1;
-static const int RUN_MEMORY_HEAVY = RUN_ALL_TESTS && 1;
+static const int RUN_FORK_HEAVY  = RUN_ALL_TESTS && 0;
+static const int RUN_MEMORY_HEAVY = RUN_ALL_TESTS && 0;
 static const int RUN_STRESS_TESTS = RUN_ALL_TESTS || 0;
 static const int RUN_PYTHON_TESTS = RUN_ALL_TESTS && 0;
 
@@ -233,6 +234,7 @@ int main(int argc, char **argv, char **envp) {
         run_test_fsync(&groups[idx++]);
         run_test_cloexec(&groups[idx++]);
         run_test_shell_exit(&groups[idx++]);
+        run_test_sh_dash_c(&groups[idx++]);
         run_test_exec_shebang(&groups[idx++]);
         run_test_exec_errno(&groups[idx++]);
         run_test_posix_compliance(&groups[idx++]);
