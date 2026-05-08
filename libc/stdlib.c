@@ -332,6 +332,34 @@ int setenv(const char *name, const char *value, int overwrite) {
     return 0;
 }
 
+int putenv(char *string) {
+    char *eq = strchr(string, '=');
+    if (!eq)
+        return unsetenv(string); /* "NAME" with no '=' removes the variable */
+
+    // Temporarily null-terminate the name to reuse env_find
+    *eq = '\0';
+    int idx = env_find(string);
+    *eq = '=';
+
+    if (idx >= 0) {
+        // putenv does not copy — the string itself becomes the env entry
+        environ[idx] = string;
+        return 0;
+    }
+
+    if (!ensure_heap_environ()) return -1;
+    int n = env_count(environ);
+    char **new_env = malloc((size_t)(n + 2) * sizeof(char *));
+    if (!new_env) return -1;
+    for (int i = 0; i < n; i++) new_env[i] = environ[i];
+    new_env[n]     = string;
+    new_env[n + 1] = NULL;
+    free(environ);
+    environ = new_env;
+    return 0;
+}
+
 int unsetenv(const char *name) {
     int idx = env_find(name);
     if (idx < 0) return 0; /* not present — success per POSIX */

@@ -26,6 +26,7 @@ long long strtoll(const char* nptr, char** endptr, int base);
 unsigned long long strtoull(const char* nptr, char** endptr, int base);
 
 char* getenv(const char* name);
+int putenv(char* string);
 int setenv(const char* name, const char* value, int overwrite);
 int unsetenv(const char* name);
 

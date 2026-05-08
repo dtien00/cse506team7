@@ -138,9 +138,109 @@ static void test_env_exec(us_test_group_t *g) {
     ut_group_end(g);
 }
 
+/* ------------------------------------------------------------------ group 3 */
+
+static void test_putenv_direct(us_test_group_t *g) {
+    char *v;
+
+    ut_group_begin(g, "putenv/direct");
+
+    /* basic: putenv a new key and read it back */
+    static char entry1[] = "SBUNIX_PUT=alpha";
+    putenv(entry1);
+    v = getenv("SBUNIX_PUT");
+    TEST(g, "putenv new key visible via getenv", v != NULL && strcmp(v, "alpha") == 0);
+
+    /* putenv stores the pointer — mutating the string changes getenv's result */
+    entry1[11] = 'b'; /* "alpha" -> "blpha" */
+    v = getenv("SBUNIX_PUT");
+    TEST(g, "putenv string mutation visible in getenv (no-copy semantics)",
+         v != NULL && strcmp(v, "blpha") == 0);
+    entry1[11] = 'a'; /* restore for tidiness */
+
+    /* putenv with same key replaces the entry */
+    static char entry2[] = "SBUNIX_PUT=beta";
+    putenv(entry2);
+    v = getenv("SBUNIX_PUT");
+    TEST(g, "putenv same key replaces value", v != NULL && strcmp(v, "beta") == 0);
+
+    /* putenv("NAME") with no '=' removes the variable */
+    static char bare[] = "SBUNIX_PUT";
+    putenv(bare);
+    v = getenv("SBUNIX_PUT");
+    TEST(g, "putenv bare name (no '=') removes variable", v == NULL);
+
+    /* two independent keys coexist */
+    static char kA[] = "SBUNIX_PA=aaa";
+    static char kB[] = "SBUNIX_PB=bbb";
+    putenv(kA);
+    putenv(kB);
+    v = getenv("SBUNIX_PA");
+    TEST(g, "putenv two keys: first present", v != NULL && strcmp(v, "aaa") == 0);
+    v = getenv("SBUNIX_PB");
+    TEST(g, "putenv two keys: second present", v != NULL && strcmp(v, "bbb") == 0);
+    unsetenv("SBUNIX_PA");
+    unsetenv("SBUNIX_PB");
+
+    ut_group_end(g);
+}
+
+/* ------------------------------------------------------------------ group 4 */
+
+// Child probe: putenv a value in the parent, fork, child checks getenv.
+// Exercises that fork inherits the modified environ without an exec in between.
+static void test_putenv_fork(us_test_group_t *g) {
+    ut_group_begin(g, "putenv/fork");
+
+    static char entry[] = "SBUNIX_PUT_FORK=forked";
+    putenv(entry);
+
+    pid_t pid = fork();
+    TEST(g, "putenv fork: fork succeeds", pid >= 0);
+    if (pid == 0) {
+        char *v = getenv("SBUNIX_PUT_FORK");
+        _exit((v != NULL && strcmp(v, "forked") == 0) ? 0 : 1);
+    }
+    if (pid > 0) {
+        int st = 0;
+        waitpid(pid, &st, 0);
+        TEST(g, "putenv fork: child exited normally", WIFEXITED(st));
+        TEST(g, "putenv fork: child saw putenv'd value via getenv",
+             WIFEXITED(st) && WEXITSTATUS(st) == 0);
+    }
+
+    // Parent's own environ is unaffected after fork
+    char *v = getenv("SBUNIX_PUT_FORK");
+    TEST(g, "putenv fork: parent still sees value after fork", v != NULL && strcmp(v, "forked") == 0);
+    unsetenv("SBUNIX_PUT_FORK");
+
+    // Exec path: putenv then fork+execve; child probes via --envp-probe
+    static char exec_entry[] = "SBUNIX_PUT_EXEC=execval";
+    putenv(exec_entry);
+    pid = fork();
+    TEST(g, "putenv exec: fork succeeds", pid >= 0);
+    if (pid == 0) {
+        char *argv[] = { "us_tests", "--envp-probe", "SBUNIX_PUT_EXEC=execval", NULL };
+        execve("/bin/us_tests", argv, environ);
+        _exit(127);
+    }
+    if (pid > 0) {
+        int st = 0;
+        waitpid(pid, &st, 0);
+        TEST(g, "putenv exec: child exited normally", WIFEXITED(st));
+        TEST(g, "putenv exec: putenv'd value survives execve via environ",
+             WIFEXITED(st) && WEXITSTATUS(st) == 0);
+    }
+    unsetenv("SBUNIX_PUT_EXEC");
+
+    ut_group_end(g);
+}
+
 /* ---------------------------------------------------------------- entry point */
 
 void run_test_exec_envp(us_test_group_t groups[], int *idx) {
-    test_env_direct(&groups[(*idx)++]);
-    test_env_exec  (&groups[(*idx)++]);
+    test_env_direct    (&groups[(*idx)++]);
+    test_env_exec      (&groups[(*idx)++]);
+    test_putenv_direct (&groups[(*idx)++]);
+    test_putenv_fork   (&groups[(*idx)++]);
 }

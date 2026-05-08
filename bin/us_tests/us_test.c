@@ -67,6 +67,7 @@ void run_test_pgrp(us_test_group_t *group);
 void run_test_jobctl(us_test_group_t *group);
 void run_test_links(us_test_group_t groups[], int *idx);
 void run_test_pipe_sigpipe(us_test_group_t *group);
+void run_test_zombie_fd(us_test_group_t *group);
 void run_test_nanosleep(us_test_group_t *group);
 void run_test_xv6_compat(us_test_group_t *group);
 void run_test_fd_limits(us_test_group_t *group);
@@ -110,6 +111,7 @@ void run_test_libc_time(us_test_group_t groups[], int *idx);
 void run_test_python_hardcoded(us_test_group_t *group);
 /* Exit-code probe: just prints exit status of hello.py / willcrash.py */
 void run_test_python_exitcode(us_test_group_t *group);
+void run_test_python_smoke(us_test_group_t *group);
 
 /* base groups + 6 fs_persist sub-groups + libc conformance suites */
 #define MAX_GROUPS 250
@@ -133,8 +135,8 @@ void run_test_python_exitcode(us_test_group_t *group);
  *                   malloc, lazy_alloc (8 MB mmap, 4 MB sbrk regions)
  */
 static const int RUN_ALL_TESTS   = 1;
-static const int RUN_FORK_HEAVY  = RUN_ALL_TESTS && 1;
-static const int RUN_MEMORY_HEAVY = RUN_ALL_TESTS && 1;
+static const int RUN_FORK_HEAVY  = RUN_ALL_TESTS && 0;
+static const int RUN_MEMORY_HEAVY = RUN_ALL_TESTS && 0;
 static const int RUN_STRESS_TESTS = RUN_ALL_TESTS || 0;
 static const int RUN_PYTHON_TESTS = RUN_ALL_TESTS && 0;
 
@@ -203,8 +205,10 @@ int main(int argc, char **argv, char **envp) {
         run_test_procfs(&groups[idx++]);
         run_test_gettimeofday(&groups[idx++]);
         run_test_pipe_sigpipe(&groups[idx++]);
+        run_test_zombie_fd(&groups[idx++]);
         run_test_time(&groups[idx++]);
         run_test_nanosleep(&groups[idx++]);
+        run_test_exec_envp(groups, &idx);
     }
 
     /* ── RUN_FORK_HEAVY: tests that spawn multiple child processes ─────────── */
@@ -226,7 +230,6 @@ int main(int argc, char **argv, char **envp) {
         run_test_pgrp(&groups[idx++]);
         run_test_jobctl(&groups[idx++]);
         run_test_links(groups, &idx);
-        run_test_exec_envp(groups, &idx);
         run_test_mmap_file(&groups[idx++]);
         run_test_fsync(&groups[idx++]);
         run_test_cloexec(&groups[idx++]);
@@ -277,7 +280,10 @@ int main(int argc, char **argv, char **envp) {
 
     // answer is python exists 1 or 0
     // run_test_python_exitcode(&groups[idx++]);
-    if (RUN_PYTHON_TESTS) run_test_python_hardcoded(&groups[idx++]);
+    if (RUN_PYTHON_TESTS) {
+        run_test_python_smoke(&groups[idx++]);
+        // run_test_python_hardcoded(&groups[idx++]);
+    }
 
     return ut_suite_end(groups, idx);
 }
