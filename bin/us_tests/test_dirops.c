@@ -46,6 +46,41 @@ static void test_mkdir_stat(us_test_group_t *group) {
     TEST(group, "rmdir: nonexistent returns error", rmdir("/mnt/no_such_dir_xv6") < 0);
 }
 
+/* ── fstatat ─────────────────────────────────────────────────────────────── */
+
+static void test_fstatat(us_test_group_t *group) {
+    const char *dir  = "/mnt/xv6_fstatat";
+    const char *file = "/mnt/xv6_fstatat/probe.txt";
+
+    rmdir(dir);
+    mkdir(dir, 0755);
+    int fd = open(file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd >= 0) { write(fd, "hi", 2); close(fd); }
+
+    struct stat st;
+    int r;
+
+    /* AT_FDCWD + absolute path behaves like stat() */
+    r = fstatat(AT_FDCWD, file, &st, 0);
+    TEST(group, "fstatat: AT_FDCWD absolute path succeeds", r == 0);
+    TEST(group, "fstatat: AT_FDCWD reports regular file", r == 0 && S_ISREG(st.st_mode));
+    TEST(group, "fstatat: AT_FDCWD reports size 2", r == 0 && st.st_size == 2);
+
+    /* real dirfd + relative filename */
+    int dfd = open(dir, O_RDONLY | O_DIRECTORY, 0);
+    TEST(group, "fstatat: open dir fd succeeds", dfd >= 0);
+    if (dfd >= 0) {
+        r = fstatat(dfd, "probe.txt", &st, 0);
+        TEST(group, "fstatat: dirfd + relative name succeeds", r == 0);
+        TEST(group, "fstatat: dirfd result is regular file", r == 0 && S_ISREG(st.st_mode));
+        TEST(group, "fstatat: dirfd result size 2", r == 0 && st.st_size == 2);
+        close(dfd);
+    }
+
+    unlink(file);
+    rmdir(dir);
+}
+
 /* ── readdir sees created entries ───────────────────────────────────────── */
 
 static void test_readdir_entries(us_test_group_t *group) {
@@ -253,6 +288,7 @@ void run_test_dirops(us_test_group_t *group) {
     ut_group_begin(group, "dirops");
 
     test_mkdir_stat(group);
+    test_fstatat(group);
     test_readdir_entries(group);
     test_nested_dirs(group);
     test_chdir_getcwd(group);

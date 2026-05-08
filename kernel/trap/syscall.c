@@ -411,6 +411,10 @@ void syscall_handler(trap_frame *frame) {
             ret = sys_lstat((const char *)arg0, (void *)arg1);
             break;
 
+        case SYS_fstatat:
+            ret = sys_fstatat((int)arg0, (const char *)arg1, (struct stat *)arg2, (int)arg3);
+            break;
+
         case SYS_chmod:
             ret = sys_chmod((const char *)arg0, (mode_t)arg1);
             break;
@@ -1880,6 +1884,57 @@ int sys_fstat(int fd, struct stat *ustat)
     int ret = file_fstat(fd, &kst);
     if (ret != 0) return ret;
 
+    if (copy_to_user(ustat, &kst, sizeof(struct stat)) < 0) return -EFAULT;
+    return 0;
+}
+
+int sys_fstatat(int dirfd, const char *upath, struct stat *ustat, int flags)
+{
+    if (!current || !upath || !ustat) return -EINVAL;
+
+    char *kpath = kmalloc(MAX_PATH);
+    if (!kpath) return -ENOMEM;
+    if (strncpy_from_user(kpath, upath, MAX_PATH - 1) < 0) { kfree(kpath); return -EFAULT; }
+    kpath[MAX_PATH - 1] = '\0';
+
+    int no_follow = (flags & AT_SYMLINK_NOFOLLOW) != 0;
+
+    // Absolute path or AT_FDCWD: resolve from CWD/root as stat/lstat would
+    if (kpath[0] == '/' || dirfd == AT_FDCWD) {
+        struct stat kst;
+        int ret = no_follow ? file_lstat(kpath, &kst) : file_stat(kpath, &kst);
+        kfree(kpath);
+        if (ret != 0) return ret;
+        if (copy_to_user(ustat, &kst, sizeof(struct stat)) < 0) return -EFAULT;
+        return 0;
+    }
+
+    // Relative path with real dirfd: build full path from that directory's dentry
+    file_t *f = f_get(current, dirfd);
+    if (!f) { kfree(kpath); return -EBADF; }
+    if (!f->dentry) { f_put(f); kfree(kpath); return -ENOTDIR; }
+
+    char *fullpath = kmalloc(MAX_PATH);
+    if (!fullpath) { f_put(f); kfree(kpath); return -ENOMEM; }
+
+    if (dentry_build_path(f->dentry, vfs_get_root(), fullpath, MAX_PATH) != 0) {
+        f_put(f); kfree(kpath); kfree(fullpath);
+        return -ENAMETOOLONG;
+    }
+    f_put(f);
+
+    size_t dlen = strlen(fullpath);
+    size_t plen = strlen(kpath);
+    if (dlen + 1 + plen >= MAX_PATH) { kfree(kpath); kfree(fullpath); return -ENAMETOOLONG; }
+    if (dlen == 0 || fullpath[dlen - 1] != '/') { fullpath[dlen] = '/'; dlen++; }
+    strncpy(fullpath + dlen, kpath, MAX_PATH - dlen - 1);
+    fullpath[MAX_PATH - 1] = '\0';
+    kfree(kpath);
+
+    struct stat kst;
+    int ret = no_follow ? file_lstat(fullpath, &kst) : file_stat(fullpath, &kst);
+    kfree(fullpath);
+    if (ret != 0) return ret;
     if (copy_to_user(ustat, &kst, sizeof(struct stat)) < 0) return -EFAULT;
     return 0;
 }

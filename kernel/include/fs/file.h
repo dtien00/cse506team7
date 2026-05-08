@@ -1,5 +1,6 @@
 #pragma once
 #include "kernel/types.h"
+#include "kernel/resource.h"
 #include "fs/dentry.h"
 #include "kernel/limits.h"
 
@@ -69,16 +70,16 @@ typedef struct fd_table {
 } fd_table_t;
 
 struct stat {
-    dev_t st_dev; // all fs
-    ino_t st_ino; // all fs
-    mode_t st_mode; // all fs
-    nlink_t st_nlink; // hardcode 1 for files and calculate for directories
-    uid_t st_uid; // 0
-    gid_t st_gid; // 0
-    off_t st_size; // all fs
-    time_t st_atime; // all fs
-    time_t st_mtime; // all fs
-    time_t st_ctime; // all fs
+    dev_t           st_dev;
+    ino_t           st_ino;
+    mode_t          st_mode;
+    nlink_t         st_nlink;
+    uid_t           st_uid;
+    gid_t           st_gid;
+    off_t           st_size;
+    struct timespec st_atim;
+    struct timespec st_mtim;
+    struct timespec st_ctim;
 };
 
 // Function declarations

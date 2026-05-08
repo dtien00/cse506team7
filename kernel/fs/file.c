@@ -557,9 +557,12 @@ static int vnode_fill_stat(vnode_t *vn, struct stat *kst) {
     kst->st_gid = 0; // no group model
     kst->st_size = (off_t) vn->size;
 
-    kst->st_atime = (time_t) vn->atime;
-    kst->st_mtime = (time_t) vn->mtime;
-    kst->st_ctime = (time_t) vn->ctime;
+    kst->st_atim.tv_sec  = (long) vn->atime;
+    kst->st_atim.tv_nsec = 0;
+    kst->st_mtim.tv_sec  = (long) vn->mtime;
+    kst->st_mtim.tv_nsec = 0;
+    kst->st_ctim.tv_sec  = (long) vn->ctime;
+    kst->st_ctim.tv_nsec = 0;
 
     return 0;
 }

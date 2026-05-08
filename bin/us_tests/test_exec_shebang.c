@@ -93,6 +93,30 @@ static void test_shebang_plain_text(us_test_group_t *tg) {
     unlink(path);
 }
 
+/* #!/bin/python script execved directly — exercises the shebang→python path */
+static void test_shebang_python(us_test_group_t *tg) {
+    if (access("/bin/python", X_OK) != 0) {
+        SKIP(tg, "shebang python: /bin/python not present", "/bin/python missing");
+        return;
+    }
+    const char *path = "/mnt/shebang_python.py";
+    if (write_script(path, "#!/bin/python\nimport sys\nsys.exit(37)\n") < 0) {
+        SKIP(tg, "shebang python: script write failed", "could not create script");
+        return;
+    }
+    pid_t pid = fork();
+    if (pid == 0) {
+        char *av[] = { (char *)path, NULL };
+        execve(path, av, NULL);
+        _exit(99);
+    }
+    int st = 0;
+    waitpid(pid, &st, 0);
+    TEST(tg, "shebang: #!/bin/python script exits with declared exit code",
+         WIFEXITED(st) && WEXITSTATUS(st) == 37);
+    unlink(path);
+}
+
 /* optional argument on the shebang line is passed to interpreter */
 static void test_shebang_opt_arg(us_test_group_t *tg) {
     const char *path = "/mnt/shebang_optarg.sh";
@@ -121,5 +145,6 @@ void run_test_exec_shebang(us_test_group_t *group) {
     test_shebang_bad_interp(group);
     test_shebang_plain_text(group);
     test_shebang_opt_arg(group);
+    test_shebang_python(group);
     ut_group_end(group);
 }

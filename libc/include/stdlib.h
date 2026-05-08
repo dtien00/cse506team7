@@ -47,6 +47,10 @@ long               atol(const char *nptr);
 long long          atoll(const char *nptr);
 double             atof(const char *nptr);
 
+char* getenv(const char* name);
+int putenv(char* string);
+int setenv(const char* name, const char* value, int overwrite);
+int unsetenv(const char* name);
 double             strtod(const char *restrict nptr, char **restrict endptr);
 float              strtof(const char *restrict nptr, char **restrict endptr);
 long double        strtold(const char *restrict nptr, char **restrict endptr);

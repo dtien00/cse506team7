@@ -25,6 +25,7 @@
 .global stat
 .global lstat
 .global fstat
+.global fstatat
 .global mkdir
 .global chmod
 .global fchmod
@@ -200,6 +201,11 @@ lstat:
 
 fstat:
     li a7, 80
+    ecall
+    j __syscall_ret
+
+fstatat:
+    li a7, 102
     ecall
     j __syscall_ret
 

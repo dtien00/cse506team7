@@ -82,6 +82,10 @@
 #define SYS_pathconf    99   /* long pathconf(const char *path, int name) */
 #define SYS_fpathconf   100  /* long fpathconf(int fd, int name) */
 #define SYS_fcntl       101  /* int fcntl(int fd, int cmd, long arg) */
+#define SYS_fstatat     102  /* int fstatat(int dirfd, const char *, struct stat *, int flags) */
+
+#define AT_FDCWD            (-100)
+#define AT_SYMLINK_NOFOLLOW 0x100
 
 // Initialize syscall subsystem
 void syscall_init(void);
@@ -125,6 +129,7 @@ int sys_fs_getdents(int fd, void *dirp, uint32_t count);
 int sys_stat(const char *upath, struct stat *ustat);
 int sys_fstat(int fd, struct stat *ustat);
 int sys_lstat(const char *upath, struct stat *ustat);
+int sys_fstatat(int dirfd, const char *upath, struct stat *ustat, int flags);
 int sys_chmod(const char *upath, mode_t mode);
 int sys_fchmod(int fd, mode_t mode);
 int sys_rmdir(const char *path);

@@ -79,6 +79,10 @@ trap_entry:
     mv   a0, sp
     call trap_handler
 
+    # FIX: disable S-mode interrupts during the exit window so nested traps
+    # cannot overlap this frame. The user's saved sstatus (which sret will
+    # restore) is unaffected — this only clears the *live* SIE bit.
+    csrci sstatus, 2          # clear SSTATUS_SIE (bit 1)
     // --- Return from trap ---
 
     // Restore sepc (trap.c may have modified frame->sepc, e.g. +4 for ecall)
