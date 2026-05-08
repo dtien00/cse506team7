@@ -22,9 +22,9 @@ struct itimerval {
 #define ITIMER_VIRTUAL 1
 #define ITIMER_PROF    2
 
-int gettimeofday(struct timeval* tv, struct timezone* tz);
-int settimeofday(const struct timeval* tv, const struct timezone* tz);
+int gettimeofday(struct timeval *restrict tv, void *restrict tz);
+int settimeofday(const struct timeval *tv, const struct timezone *tz);  /* non-POSIX */
 int getitimer(int which, struct itimerval* curr_value);
-int setitimer(int which, const struct itimerval* new_value, struct itimerval* old_value);
+int setitimer(int which, const struct itimerval *restrict new_value, struct itimerval *restrict old_value);
 
 #endif
