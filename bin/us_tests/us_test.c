@@ -68,6 +68,7 @@ void run_test_jobctl(us_test_group_t *group);
 void run_test_links(us_test_group_t groups[], int *idx);
 void run_test_pipe_sigpipe(us_test_group_t *group);
 void run_test_zombie_fd(us_test_group_t *group);
+void run_test_sh_dash_c(us_test_group_t *group);
 void run_test_nanosleep(us_test_group_t *group);
 void run_test_xv6_compat(us_test_group_t *group);
 void run_test_fd_limits(us_test_group_t *group);
@@ -206,6 +207,8 @@ int main(int argc, char **argv, char **envp) {
         run_test_gettimeofday(&groups[idx++]);
         run_test_pipe_sigpipe(&groups[idx++]);
         run_test_zombie_fd(&groups[idx++]);
+        run_test_sh_dash_c(&groups[idx++]);
+        run_test_cow(&groups[idx++]);
         run_test_time(&groups[idx++]);
         run_test_nanosleep(&groups[idx++]);
         run_test_exec_envp(groups, &idx);
@@ -215,7 +218,6 @@ int main(int argc, char **argv, char **envp) {
     if (RUN_FORK_HEAVY) {
         run_test_process(&groups[idx++]);
         run_test_exec_bin(&groups[idx++]);
-        run_test_cow(&groups[idx++]);
         run_test_sched(&groups[idx++]);
         run_test_signal(&groups[idx++]);
         run_test_signal_faults(&groups[idx++]);
