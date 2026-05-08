@@ -914,6 +914,8 @@ static int exec_internal(const char *path, char *const argv[],
     current->vma_list = new_vma_list;
     current->sz        = highest_seg_end;
     current->satp      = MAKE_SATP((uintptr_t)new_pt);
+    strncpy(current->exe_path, path, SBUNIX_PATH_MAX - 1);
+    current->exe_path[SBUNIX_PATH_MAX - 1] = '\0';
     
     // Reset MLFQ scheduling state so the new image starts fresh.
     current->mlfq_level = 0;

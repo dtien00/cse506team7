@@ -4,406 +4,715 @@
 #include "fs/vfs.h"
 #include "kernel/printk.h"
 #include "kernel/types.h"
+#include "kernel/limits.h"
 #include "lib/string.h"
 #include "mm/kmalloc.h"
+#include "mm/pmm.h"
+#include "mm/vma.h"
 #include "process/process.h"
 
-#define PROCFS_MAX_NAME 32
-#define PROCFS_STATUS_BUFSIZE 256
+#define PROCFS_MAX_NAME      32
+#define PROCFS_STATUS_BUFSIZE 1024
+#define PROCFS_STAT_BUFSIZE   512
+#define PROCFS_MEMINFO_BUFSIZE 256
 
 typedef enum {
     PROCFS_NODE_ROOT,
     PROCFS_NODE_PID_DIR,
     PROCFS_NODE_STATUS_FILE,
+    PROCFS_NODE_STAT_FILE,
+    PROCFS_NODE_CWD_LINK,
+    PROCFS_NODE_EXE_LINK,
+    PROCFS_NODE_ROOT_LINK,
+    PROCFS_NODE_SELF_LINK,
+    PROCFS_NODE_MEMINFO_FILE,
 } procfs_node_type_t;
 
 typedef struct procfs_node {
     procfs_node_type_t type;
-    int pid; // valid for PID_DIR and STATUS_FILE
+    int pid; // valid for PID_DIR and per-pid files/links
 } procfs_node_t;
 
 static vnode_t *procfs_root = NULL;
 
-static const char *proc_state_name(proc_state_t state) {
-    switch (state) {
-        case PROC_UNUSED: return "unused";
-        case PROC_CREATED: return "created";
-        case PROC_READY: return "ready";
-        case PROC_RUNNING: return "running";
-        case PROC_BLOCKED: return "blocked";
-        case PROC_ZOMBIE: return "zombie";
-        case PROC_STOPPED: return "stopped";
-        default: return "unknown";
-    }
-}
+// ── number formatters ────────────────────────────────────────────────────────
 
 static int procfs_itoa(int value, char *buf, int bufsize) {
     if (!buf || bufsize <= 0)
         return 0;
-
     if (value == 0) {
         if (bufsize < 2) return 0;
-        buf[0] = '0';
-        buf[1] = '\0';
+        buf[0] = '0'; buf[1] = '\0';
         return 1;
     }
-
-    char temp[16];
+    char temp[24];
     int pos = 0;
     int negative = 0;
     long v = value;
-    if (v < 0) {
-        negative = 1;
-        v = -v;
-    }
+    if (v < 0) { negative = 1; v = -v; }
     while (v > 0 && pos < (int)sizeof(temp) - 1) {
-        temp[pos++] = '0' + (v % 10);
+        temp[pos++] = '0' + (int)(v % 10);
         v /= 10;
     }
-    if (negative) {
-        temp[pos++] = '-';
-    }
-    if (pos + 1 > bufsize)
-        return 0;
-    for (int i = 0; i < pos; i++) {
+    if (negative) temp[pos++] = '-';
+    if (pos + 1 > bufsize) return 0;
+    for (int i = 0; i < pos; i++)
         buf[i] = temp[pos - 1 - i];
-    }
     buf[pos] = '\0';
     return pos;
 }
 
-static int procfs_write_status(char *out, int out_size, struct proc *p) {
-    if (!out || out_size <= 0 || !p)
-        return 0;
+static int procfs_utoa(uint64_t value, char *buf, int bufsize) {
+    if (!buf || bufsize <= 0) return 0;
+    if (value == 0) {
+        if (bufsize < 2) return 0;
+        buf[0] = '0'; buf[1] = '\0';
+        return 1;
+    }
+    char temp[24];
+    int pos = 0;
+    uint64_t v = value;
+    while (v > 0 && pos < (int)sizeof(temp) - 1) {
+        temp[pos++] = '0' + (int)(v % 10);
+        v /= 10;
+    }
+    if (pos + 1 > bufsize) return 0;
+    for (int i = 0; i < pos; i++)
+        buf[i] = temp[pos - 1 - i];
+    buf[pos] = '\0';
+    return pos;
+}
 
-    int written = 0;
+// Write "<val> kB" into buf, return chars written (not including NUL)
+static int procfs_utoa_kb(uint64_t bytes, char *buf, int bufsize) {
+    uint64_t kb = bytes / 1024;
+    int n = procfs_utoa(kb, buf, bufsize - 4);
+    if (n <= 0) return 0;
+    if (n + 4 >= bufsize) return n;
+    buf[n]   = ' '; buf[n+1] = 'k'; buf[n+2] = 'B'; buf[n+3] = '\0';
+    return n + 3;
+}
+
+static int procfs_hex64(uint64_t v, char *buf, int bufsize) {
+    if (bufsize < 17) return 0;
+    static const char hex[] = "0123456789abcdef";
+    for (int i = 15; i >= 0; i--) {
+        buf[i] = hex[v & 0xf];
+        v >>= 4;
+    }
+    buf[16] = '\0';
+    return 16;
+}
+
+// ── state helpers ────────────────────────────────────────────────────────────
+
+static const char *proc_state_linux(proc_state_t state) {
+    switch (state) {
+        case PROC_RUNNING:  return "R (running)";
+        case PROC_CREATED:  return "R (running)";
+        case PROC_READY:    return "R (running)";
+        case PROC_BLOCKED:  return "S (sleeping)";
+        case PROC_STOPPED:  return "T (stopped)";
+        case PROC_ZOMBIE:   return "Z (zombie)";
+        default:            return "S (sleeping)";
+    }
+}
+
+static char proc_state_char(proc_state_t state) {
+    switch (state) {
+        case PROC_RUNNING:
+        case PROC_CREATED:
+        case PROC_READY:   return 'R';
+        case PROC_BLOCKED: return 'S';
+        case PROC_STOPPED: return 'T';
+        case PROC_ZOMBIE:  return 'Z';
+        default:           return 'S';
+    }
+}
+
+// ── VMA stats ────────────────────────────────────────────────────────────────
+
+static void procfs_vma_stats(struct proc *p,
+                              uint64_t *total_b,
+                              uint64_t *stk_b,
+                              uint64_t *data_b,
+                              uint64_t *exe_b) {
+    *total_b = *stk_b = *data_b = *exe_b = 0;
+    if (!p) return;
+    for (struct vm_area *v = p->vma_list; v; v = v->next) {
+        if (v->type == VMA_TYPE_DEVICE) continue;
+        uint64_t sz = v->end - v->start;
+        *total_b += sz;
+        if (v->type & VMA_TYPE_STACK)
+            *stk_b += sz;
+        else if ((v->type & VMA_TYPE_HEAP) || (v->type & VMA_TYPE_ANON))
+            *data_b += sz;
+        if ((v->type & VMA_TYPE_FILE) && (v->prot & VMA_PROT_EXEC))
+            *exe_b += sz;
+    }
+}
+
+// ── append helper ────────────────────────────────────────────────────────────
+
+static int buf_append(char *out, int out_size, int written, const char *s, int len) {
+    if (written >= out_size) return written;
+    int copy = len;
+    if (written + copy > out_size) copy = out_size - written;
+    memcpy(out + written, s, copy);
+    return written + copy;
+}
+
+// ── status writer ────────────────────────────────────────────────────────────
+
+static int procfs_write_status(char *out, int out_size, struct proc *p) {
+    if (!out || out_size <= 0 || !p) return 0;
+
     char numbuf[32];
-    int n;
     char line[128];
+    int w = 0;
+    int n;
+
+#define EMIT(label, val_str, val_len) do { \
+    int ll = (int)strlen(label); \
+    int vl = (val_len); \
+    if (ll + 2 + vl + 1 < (int)sizeof(line)) { \
+        memcpy(line, label, ll); \
+        line[ll] = ':'; \
+        line[ll + 1] = '\t'; \
+        memcpy(line + ll + 2, (val_str), vl); \
+        line[ll + 2 + vl] = '\n'; \
+        w = buf_append(out, out_size, w, line, ll + 2 + vl + 1); \
+    } \
+} while (0)
+
+    EMIT("Name",  p->name,                   (int)strlen(p->name));
+    const char *st = proc_state_linux(p->state);
+    EMIT("State", st,                         (int)strlen(st));
 
     n = procfs_itoa(p->pid, numbuf, sizeof(numbuf));
-    if (n <= 0) return 0;
-    int line_len = 5 + n + 1;
-    if (line_len > (int)sizeof(line))
-        line_len = (int)sizeof(line);
-    memcpy(line, "pid: ", 5);
-    memcpy(line + 5, numbuf, n);
-    line[5 + n] = '\n';
-    n = (written + line_len <= out_size) ? line_len : out_size - written;
-    if (n > 0) {
-        memcpy(out + written, line, n);
-        written += n;
-    }
+    EMIT("Pid",   numbuf, n);
 
     n = procfs_itoa(p->parent ? p->parent->pid : 0, numbuf, sizeof(numbuf));
-    line_len = 6 + n + 1;
-    memcpy(line, "ppid: ", 6);
-    memcpy(line + 6, numbuf, n);
-    line[6 + n] = '\n';
-    if (written < out_size) {
-        int copy = (written + line_len <= out_size) ? line_len : out_size - written;
-        memcpy(out + written, line, copy);
-        written += copy;
-    }
+    EMIT("PPid",  numbuf, n);
 
-    int namelen = (int) strlen(p->name);
-    line_len = 6 + namelen + 1;
-    if (written < out_size) {
-        memcpy(line, "name: ", 6);
-        memcpy(line + 6, p->name, namelen);
-        line[6 + namelen] = '\n';
-        int copy = (written + line_len <= out_size) ? line_len : out_size - written;
-        if (copy > 0) {
-            memcpy(out + written, line, copy);
-            written += copy;
-        }
-    }
+    n = procfs_itoa((int)p->pgid, numbuf, sizeof(numbuf));
+    EMIT("PGid",  numbuf, n);
 
-    const char *state = proc_state_name(p->state);
-    int statelen = (int) strlen(state);
-    line_len = 7 + statelen + 1;
-    if (written < out_size) {
-        memcpy(line, "state: ", 7);
-        memcpy(line + 7, state, statelen);
-        line[7 + statelen] = '\n';
-        int copy = (written + line_len <= out_size) ? line_len : out_size - written;
-        if (copy > 0) {
-            memcpy(out + written, line, copy);
-            written += copy;
-        }
-    }
+    n = procfs_itoa((int)p->sid, numbuf, sizeof(numbuf));
+    EMIT("Sid",   numbuf, n);
 
-    n = procfs_itoa(p->priority, numbuf, sizeof(numbuf));
-    line_len = 10 + n + 1;
-    if (written < out_size) {
-        memcpy(line, "priority: ", 10);
-        memcpy(line + 10, numbuf, n);
-        line[10 + n] = '\n';
-        int copy = (written + line_len <= out_size) ? line_len : out_size - written;
-        if (copy > 0) {
-            memcpy(out + written, line, copy);
-            written += copy;
-        }
-    }
+    uint64_t total_b, stk_b, data_b, exe_b;
+    procfs_vma_stats(p, &total_b, &stk_b, &data_b, &exe_b);
 
-    n = procfs_itoa((int) p->utime_ticks, numbuf, sizeof(numbuf));
-    line_len = 11 + n + 1;
-    if (written < out_size) {
-        memcpy(line, "cpu_ticks: ", 11);
-        memcpy(line + 11, numbuf, n);
-        line[11 + n] = '\n';
-        int copy = (written + line_len <= out_size) ? line_len : out_size - written;
-        if (copy > 0) {
-            memcpy(out + written, line, copy);
-            written += copy;
-        }
-    }
+    n = procfs_utoa_kb(total_b, numbuf, sizeof(numbuf));
+    EMIT("VmSize", numbuf, n);
 
-    return written;
+    n = procfs_utoa_kb(stk_b, numbuf, sizeof(numbuf));
+    EMIT("VmStk",  numbuf, n);
+
+    n = procfs_utoa_kb(data_b, numbuf, sizeof(numbuf));
+    EMIT("VmData", numbuf, n);
+
+    n = procfs_utoa_kb(exe_b, numbuf, sizeof(numbuf));
+    EMIT("VmExe",  numbuf, n);
+
+    // KernelStack is always KSTACK_SIZE (4 kB)
+    n = procfs_utoa_kb(KSTACK_SIZE, numbuf, sizeof(numbuf));
+    EMIT("KernelStack", numbuf, n);
+
+    EMIT("Threads", "1", 1);
+
+    n = procfs_hex64((uint64_t)p->pending_signals, numbuf, sizeof(numbuf));
+    EMIT("SigPnd", numbuf, n);
+
+    n = procfs_hex64((uint64_t)p->signal_mask, numbuf, sizeof(numbuf));
+    EMIT("SigBlk", numbuf, n);
+
+#undef EMIT
+
+    return w;
 }
+
+// ── stat writer ──────────────────────────────────────────────────────────────
+
+static int procfs_write_stat(char *out, int out_size, struct proc *p) {
+    if (!out || out_size <= 0 || !p) return 0;
+
+    uint64_t total_b, stk_b, data_b, exe_b;
+    procfs_vma_stats(p, &total_b, &stk_b, &data_b, &exe_b);
+
+    // Trim comm to 15 chars to match Linux (stored in parens)
+    char comm[18];
+    comm[0] = '(';
+    int nl = (int)strlen(p->name);
+    if (nl > 15) nl = 15;
+    memcpy(comm + 1, p->name, nl);
+    comm[nl + 1] = ')';
+    comm[nl + 2] = '\0';
+
+    char sc = proc_state_char(p->state);
+    int ppid = p->parent ? (int)p->parent->pid : 0;
+    uint64_t vsize = total_b;
+    uint64_t rss   = total_b / 4096; // pages
+
+    // Build the line using a temporary buffer
+    char tmp[PROCFS_STAT_BUFSIZE];
+    int w = 0;
+
+#define APPD(val) do { \
+    char _nb[32]; int _n = procfs_itoa((val), _nb, sizeof(_nb)); \
+    if (_n > 0 && w + _n + 1 < (int)sizeof(tmp)) { \
+        memcpy(tmp + w, _nb, _n); w += _n; \
+        tmp[w++] = ' '; \
+    } \
+} while (0)
+
+#define APPU(val) do { \
+    char _nb[32]; int _n = procfs_utoa((val), _nb, sizeof(_nb)); \
+    if (_n > 0 && w + _n + 1 < (int)sizeof(tmp)) { \
+        memcpy(tmp + w, _nb, _n); w += _n; \
+        tmp[w++] = ' '; \
+    } \
+} while (0)
+
+    // field 1: pid
+    APPD((int)p->pid);
+    // field 2: comm
+    {
+        int cl = (int)strlen(comm);
+        if (w + cl + 1 < (int)sizeof(tmp)) {
+            memcpy(tmp + w, comm, cl); w += cl;
+            tmp[w++] = ' ';
+        }
+    }
+    // field 3: state char
+    if (w + 2 < (int)sizeof(tmp)) { tmp[w++] = sc; tmp[w++] = ' '; }
+    // 4: ppid
+    APPD(ppid);
+    // 5: pgid
+    APPD((int)p->pgid);
+    // 6: session
+    APPD((int)p->sid);
+    // 7-13: zeros (tty, tpgid, flags, minflt, cminflt, majflt, cmajflt)
+    for (int i = 0; i < 7; i++) APPD(0);
+    // 14: utime
+    APPU(p->utime_ticks);
+    // 15-16: stime, cutime (0)
+    APPD(0); APPD(0);
+    // 17: priority (nice convention: kernel 0 = highest; Linux stat field 18 is nice)
+    APPD(p->priority);
+    // 18: nice (0)
+    APPD(0);
+    // 19: num_threads
+    APPD(1);
+    // 20: itrealvalue (0)
+    APPD(0);
+    // 21: starttime (0)
+    APPD(0);
+    // 22: vsize (bytes)
+    APPU(vsize);
+    // 23: rss (pages)
+    APPU(rss);
+    // Replace trailing space with newline
+    if (w > 0 && tmp[w-1] == ' ') tmp[w-1] = '\n';
+    else if (w < (int)sizeof(tmp)) tmp[w++] = '\n';
+
+#undef APPD
+#undef APPU
+
+    int copy = w;
+    if (copy > out_size) copy = out_size;
+    memcpy(out, tmp, copy);
+    return copy;
+}
+
+// ── meminfo writer ───────────────────────────────────────────────────────────
+
+static int procfs_write_meminfo(char *out, int out_size) {
+    if (!out || out_size <= 0) return 0;
+
+    uint64_t total_kb = pmm_total_memory() / 1024;
+    uint64_t free_kb  = pmm_free_memory()  / 1024;
+
+    char tmp[PROCFS_MEMINFO_BUFSIZE];
+    int w = 0;
+
+#define MEM_LINE(label, kb) do { \
+    char _nb[32]; \
+    int _ll = (int)strlen(label); \
+    int _nl = procfs_utoa((kb), _nb, sizeof(_nb)); \
+    if (_nl > 0 && w + _ll + _nl + 10 < (int)sizeof(tmp)) { \
+        memcpy(tmp + w, label, _ll); w += _ll; \
+        tmp[w++] = ':'; tmp[w++] = '\t'; \
+        memcpy(tmp + w, _nb, _nl); w += _nl; \
+        tmp[w++] = ' '; tmp[w++] = 'k'; tmp[w++] = 'B'; tmp[w++] = '\n'; \
+    } \
+} while (0)
+
+    MEM_LINE("MemTotal",     total_kb);
+    MEM_LINE("MemFree",      free_kb);
+    MEM_LINE("MemAvailable", free_kb);
+    MEM_LINE("Buffers",      (uint64_t)0);
+    MEM_LINE("Cached",       (uint64_t)0);
+    MEM_LINE("SwapTotal",    (uint64_t)0);
+    MEM_LINE("SwapFree",     (uint64_t)0);
+
+#undef MEM_LINE
+
+    int copy = w;
+    if (copy > out_size) copy = out_size;
+    memcpy(out, tmp, copy);
+    return copy;
+}
+
+// ── vnode allocation ─────────────────────────────────────────────────────────
 
 static vnode_t *procfs_alloc_vnode(procfs_node_type_t type, int pid, mount_t *mnt) {
-    vnode_t *vnode = kzalloc(sizeof(vnode_t));
-    if (!vnode)
-        return NULL;
-    vnode->type = (type == PROCFS_NODE_STATUS_FILE) ? VNODE_REG : VNODE_DIR;
-    vnode->mode = (type == PROCFS_NODE_STATUS_FILE) ? 0444 : 0555;
-    vnode->size = 0;
-    vnode->nlink = (type == PROCFS_NODE_STATUS_FILE) ? 1 : 2;
-    vnode->ref_count = 0;
-    vnode->mount = mnt;
-    vnode->fs_type = mnt ? mnt->fs_type : NULL;
+    vnode_t *vn = kzalloc(sizeof(vnode_t));
+    if (!vn) return NULL;
+
+    switch (type) {
+        case PROCFS_NODE_STATUS_FILE:
+        case PROCFS_NODE_STAT_FILE:
+        case PROCFS_NODE_MEMINFO_FILE:
+            vn->type  = VNODE_REG; vn->mode = 0444; vn->nlink = 1; break;
+        case PROCFS_NODE_CWD_LINK:
+        case PROCFS_NODE_EXE_LINK:
+        case PROCFS_NODE_ROOT_LINK:
+        case PROCFS_NODE_SELF_LINK:
+            vn->type  = VNODE_LNK; vn->mode = 0777; vn->nlink = 1; break;
+        default:
+            vn->type  = VNODE_DIR; vn->mode = 0555; vn->nlink = 2; break;
+    }
+    vn->size       = 0;
+    vn->ref_count  = 0;
+    vn->mount      = mnt;
+    vn->fs_type    = mnt ? mnt->fs_type : NULL;
 
     procfs_node_t *node = kzalloc(sizeof(procfs_node_t));
-    if (!node) {
-        kfree(vnode);
-        return NULL;
-    }
+    if (!node) { kfree(vn); return NULL; }
     node->type = type;
-    node->pid = pid;
-    vnode->fs_data = node;
-
-    return vnode;
+    node->pid  = pid;
+    vn->fs_data = node;
+    return vn;
 }
 
-static struct proc *procfs_lookup_process(const char *name) {
-    if (!name)
-        return NULL;
-
-    if (strcmp(name, "self") == 0) {
-        if (!current)
-            return NULL;
-        return current;
-    }
-
-    int pid = 0;
-    for (const char *c = name; *c; c++) {
-        if (*c < '0' || *c > '9')
-            return NULL;
-        pid = pid * 10 + (*c - '0');
-    }
-    return proc_find((pid_t)pid);
-}
+// ── path helpers ─────────────────────────────────────────────────────────────
 
 static int procfs_parse_path(const char *path, char comps[3][PROCFS_MAX_NAME], int *count) {
-    if (!path || !count)
-        return -1;
-
+    if (!path || !count) return -1;
     *count = 0;
-    while (*path == '/')
-        path++;
-    if (*path == '\0')
-        return 0;
+    while (*path == '/') path++;
+    if (*path == '\0') return 0;
 
     const char *start = path;
     size_t len = 0;
     while (1) {
         if (*path == '/' || *path == '\0') {
             if (len > 0) {
-                if (len >= PROCFS_MAX_NAME)
-                    return -1;
+                if (len >= PROCFS_MAX_NAME || *count >= 3) return -1;
                 memcpy(comps[*count], start, len);
-                comps[*count][len] = '\0';
-                (*count)++;
-                if (*count >= 3)
-                    return -1;
+                comps[(*count)++][len] = '\0';
             }
-            if (*path == '\0')
-                break;
+            if (*path == '\0') break;
             path++;
-            while (*path == '/')
-                path++;
-            if (*path == '\0')
-                break;
-            start = path;
-            len = 0;
+            while (*path == '/') path++;
+            if (*path == '\0') break;
+            start = path; len = 0;
             continue;
         }
-        len++;
-        path++;
+        len++; path++;
     }
     return 0;
 }
 
+static struct proc *procfs_pid_from_name(const char *name) {
+    if (!name) return NULL;
+    int pid = 0;
+    for (const char *c = name; *c; c++) {
+        if (*c < '0' || *c > '9') return NULL;
+        pid = pid * 10 + (*c - '0');
+    }
+    return proc_find((pid_t)pid);
+}
+
+// ── lookup ───────────────────────────────────────────────────────────────────
+
 static vnode_t *procfs_lookup(mount_t *mnt, const char *path) {
-    if (!mnt || !path)
-        return NULL;
+    if (!mnt || !path || !procfs_root) return NULL;
 
-    if (!procfs_root)
-        return NULL;
-
-    if (path[0] == '/')
-        path++;
-    if (*path == '\0')
-        return procfs_root;
+    while (*path == '/') path++;
+    if (*path == '\0') return procfs_root;
 
     char comps[3][PROCFS_MAX_NAME];
     int count = 0;
-    if (procfs_parse_path(path, comps, &count) < 0)
-        return NULL;
+    if (procfs_parse_path(path, comps, &count) < 0) return NULL;
 
     if (count == 1) {
-        struct proc *p = procfs_lookup_process(comps[0]);
-        if (!p)
-            return NULL;
+        if (strcmp(comps[0], "self") == 0)
+            return procfs_alloc_vnode(PROCFS_NODE_SELF_LINK, 0, mnt);
+        if (strcmp(comps[0], "meminfo") == 0)
+            return procfs_alloc_vnode(PROCFS_NODE_MEMINFO_FILE, 0, mnt);
+        struct proc *p = procfs_pid_from_name(comps[0]);
+        if (!p) return NULL;
         return procfs_alloc_vnode(PROCFS_NODE_PID_DIR, p->pid, mnt);
     }
 
     if (count == 2) {
-        struct proc *p = procfs_lookup_process(comps[0]);
-        if (!p)
-            return NULL;
-        if (strcmp(comps[1], "status") != 0)
-            return NULL;
-        return procfs_alloc_vnode(PROCFS_NODE_STATUS_FILE, p->pid, mnt);
+        // self/<file> resolves via current
+        struct proc *p = NULL;
+        if (strcmp(comps[0], "self") == 0) {
+            p = current;
+        } else {
+            p = procfs_pid_from_name(comps[0]);
+        }
+        if (!p) return NULL;
+
+        const char *name = comps[1];
+        if (strcmp(name, "status") == 0)
+            return procfs_alloc_vnode(PROCFS_NODE_STATUS_FILE, p->pid, mnt);
+        if (strcmp(name, "stat") == 0)
+            return procfs_alloc_vnode(PROCFS_NODE_STAT_FILE, p->pid, mnt);
+        if (strcmp(name, "cwd") == 0)
+            return procfs_alloc_vnode(PROCFS_NODE_CWD_LINK, p->pid, mnt);
+        if (strcmp(name, "exe") == 0)
+            return procfs_alloc_vnode(PROCFS_NODE_EXE_LINK, p->pid, mnt);
+        if (strcmp(name, "root") == 0)
+            return procfs_alloc_vnode(PROCFS_NODE_ROOT_LINK, p->pid, mnt);
+        return NULL;
     }
 
     return NULL;
 }
 
+// ── read ─────────────────────────────────────────────────────────────────────
+
 static int procfs_read(vnode_t *vnode, void *buf, size_t offset, size_t len) {
-    if (!vnode || !buf)
-        return -EINVAL;
+    if (!vnode || !buf) return -EINVAL;
 
-    procfs_node_t *node = (procfs_node_t *) vnode->fs_data;
-    if (!node || node->type != PROCFS_NODE_STATUS_FILE)
-        return -EISDIR;
-
-    struct proc *p = proc_find((pid_t) node->pid);
-    if (!p)
-        return -ENOENT;
+    procfs_node_t *node = (procfs_node_t *)vnode->fs_data;
+    if (!node) return -EINVAL;
 
     char temp[PROCFS_STATUS_BUFSIZE];
-    int total = procfs_write_status(temp, sizeof(temp), p);
-    if (total <= 0)
-        return 0;
-    if ((size_t)offset >= (size_t) total)
-        return 0;
+    int total = 0;
+
+    switch (node->type) {
+        case PROCFS_NODE_STATUS_FILE: {
+            struct proc *p = proc_find((pid_t)node->pid);
+            if (!p) return -ENOENT;
+            total = procfs_write_status(temp, sizeof(temp), p);
+            break;
+        }
+        case PROCFS_NODE_STAT_FILE: {
+            struct proc *p = proc_find((pid_t)node->pid);
+            if (!p) return -ENOENT;
+            total = procfs_write_stat(temp, sizeof(temp), p);
+            break;
+        }
+        case PROCFS_NODE_MEMINFO_FILE:
+            total = procfs_write_meminfo(temp, sizeof(temp));
+            break;
+        case PROCFS_NODE_CWD_LINK:
+        case PROCFS_NODE_EXE_LINK:
+        case PROCFS_NODE_ROOT_LINK:
+        case PROCFS_NODE_SELF_LINK:
+            return -EINVAL; // must use readlink
+        case PROCFS_NODE_PID_DIR:
+        case PROCFS_NODE_ROOT:
+            return -EISDIR;
+        default:
+            return -EINVAL;
+    }
+
+    if (total <= 0) return 0;
+    if (offset >= (size_t)total) return 0;
     size_t to_copy = len;
-    if (offset + to_copy > (size_t) total)
-        to_copy = (size_t) total - offset;
+    if (offset + to_copy > (size_t)total) to_copy = (size_t)total - offset;
     memcpy(buf, temp + offset, to_copy);
-    return (int) to_copy;
+    return (int)to_copy;
 }
+
+// ── readlink ─────────────────────────────────────────────────────────────────
+
+static int procfs_readlink(vnode_t *vn, char *buf, size_t size) {
+    if (!vn || !buf || size == 0) return -EINVAL;
+
+    procfs_node_t *node = (procfs_node_t *)vn->fs_data;
+    if (!node) return -EINVAL;
+
+    switch (node->type) {
+        case PROCFS_NODE_SELF_LINK: {
+            if (!current) return -ESRCH;
+            char tmp[32];
+            int pn = procfs_itoa((int)current->pid, tmp, sizeof(tmp));
+            if (pn <= 0) return -EINVAL;
+            if ((size_t)pn >= size) return -ENAMETOOLONG;
+            memcpy(buf, tmp, pn + 1);
+            return pn;
+        }
+        case PROCFS_NODE_CWD_LINK: {
+            struct proc *p = proc_find((pid_t)node->pid);
+            if (!p) return -ENOENT;
+            int r = fs_struct_get_cwd(p->fs, buf, size);
+            if (r < 0) return r;
+            return (int)strlen(buf);
+        }
+        case PROCFS_NODE_ROOT_LINK: {
+            struct proc *p = proc_find((pid_t)node->pid);
+            if (!p) return -ENOENT;
+            int r = fs_struct_get_root(p->fs, buf, size);
+            if (r < 0) return r;
+            return (int)strlen(buf);
+        }
+        case PROCFS_NODE_EXE_LINK: {
+            struct proc *p = proc_find((pid_t)node->pid);
+            if (!p) return -ENOENT;
+            if (p->exe_path[0] == '\0') {
+                buf[0] = '\0';
+                return 0;
+            }
+            size_t n = strlen(p->exe_path);
+            size_t copy = n < size ? n : size - 1;
+            memcpy(buf, p->exe_path, copy);
+            buf[copy] = '\0';
+            return (int)copy;
+        }
+        default:
+            return -EINVAL;
+    }
+}
+
+// ── readdir ──────────────────────────────────────────────────────────────────
+
+// PID directory entries (order matches readdir index 0-4)
+static const struct { const char *name; uint8_t dtype; } pid_dir_entries[] = {
+    { "status", DT_REG },
+    { "stat",   DT_REG },
+    { "cwd",    DT_LNK },
+    { "exe",    DT_LNK },
+    { "root",   DT_LNK },
+};
+#define PID_DIR_NENTRIES 5
 
 static int procfs_readdir(mount_t *mnt, vnode_t *vnode, uint32_t start_idx, void *buf,
                           uint32_t bufsize, uint32_t *entries_out) {
-    if (!mnt || !vnode || !buf || !entries_out)
-        return -EINVAL;
+    if (!mnt || !vnode || !buf || !entries_out) return -EINVAL;
 
-    procfs_node_t *node = (procfs_node_t *) vnode->fs_data;
+    procfs_node_t *node = (procfs_node_t *)vnode->fs_data;
     if (node && node->type != PROCFS_NODE_ROOT && node->type != PROCFS_NODE_PID_DIR)
         return -ENOTDIR;
 
-    char *out = (char *) buf;
+    char *out = (char *)buf;
     uint32_t written = 0;
     uint32_t found = 0;
     uint32_t idx = 0;
 
     if (!node || node->type == PROCFS_NODE_ROOT) {
+        // idx 0 → "self" (DT_LNK)
+        if (idx++ >= start_idx) {
+            const char *name = "self";
+            uint16_t reclen = FS_DENT_RECLEN(strlen(name));
+            if (written + reclen > bufsize) goto done;
+            fs_dent_t *dent = (fs_dent_t *)(out + written);
+            dent->d_ino    = 0;
+            dent->d_reclen = reclen;
+            dent->d_type   = DT_LNK;
+            memcpy(dent->d_name, name, strlen(name) + 1);
+            written += reclen;
+            found++;
+        }
+        // idx 1 → "meminfo" (DT_REG)
+        if (idx++ >= start_idx) {
+            const char *name = "meminfo";
+            uint16_t reclen = FS_DENT_RECLEN(strlen(name));
+            if (written + reclen > bufsize) goto done;
+            fs_dent_t *dent = (fs_dent_t *)(out + written);
+            dent->d_ino    = 0;
+            dent->d_reclen = reclen;
+            dent->d_type   = DT_REG;
+            memcpy(dent->d_name, name, strlen(name) + 1);
+            written += reclen;
+            found++;
+        }
+        // idx 2+ → numeric pids
         for (int i = 0; i < MAX_PROCS; i++) {
             struct proc *p = &proctab[i];
-            if (p->state == PROC_UNUSED)
-                continue;
-            if (idx++ < start_idx)
-                continue;
-
+            if (p->state == PROC_UNUSED) continue;
+            if (idx++ < start_idx) continue;
             char name[PROCFS_MAX_NAME];
             int namelen = procfs_itoa(p->pid, name, sizeof(name));
-            if (namelen <= 0)
-                continue;
+            if (namelen <= 0) continue;
             uint16_t reclen = FS_DENT_RECLEN(namelen);
-            if (written + reclen > bufsize)
-                break;
-            fs_dent_t *dent = (fs_dent_t *) (out + written);
-            dent->d_ino = (ino_t) p->pid;
+            if (written + reclen > bufsize) goto done;
+            fs_dent_t *dent = (fs_dent_t *)(out + written);
+            dent->d_ino    = (ino_t)p->pid;
             dent->d_reclen = reclen;
-            dent->d_type = DT_DIR;
+            dent->d_type   = DT_DIR;
             memcpy(dent->d_name, name, namelen + 1);
             written += reclen;
             found++;
         }
     } else {
-        // PID directory only contains status file
-        if (start_idx == 0) {
-            const char *name = "status";
+        // PID directory: emit 5 entries
+        for (int i = 0; i < PID_DIR_NENTRIES; i++) {
+            if (idx++ < start_idx) continue;
+            const char *name = pid_dir_entries[i].name;
             uint16_t reclen = FS_DENT_RECLEN(strlen(name));
-            if (written + reclen <= bufsize) {
-                fs_dent_t *dent = (fs_dent_t *) (out + written);
-                dent->d_ino = (ino_t) node->pid;
-                dent->d_reclen = reclen;
-                dent->d_type = DT_REG;
-                memcpy(dent->d_name, name, strlen(name) + 1);
-                written += reclen;
-                found = 1;
-            }
+            if (written + reclen > bufsize) goto done;
+            fs_dent_t *dent = (fs_dent_t *)(out + written);
+            dent->d_ino    = (ino_t)node->pid;
+            dent->d_reclen = reclen;
+            dent->d_type   = pid_dir_entries[i].dtype;
+            memcpy(dent->d_name, name, strlen(name) + 1);
+            written += reclen;
+            found++;
         }
     }
 
+done:
     *entries_out = found;
-    return (int) written;
+    return (int)written;
 }
 
+// ── mount/unmount ────────────────────────────────────────────────────────────
+
 static int procfs_unmount(mount_t *mnt) {
-    if (!mnt)
-        return -EINVAL;
-    if (procfs_root) {
-        kfree(procfs_root);
-        procfs_root = NULL;
-    }
+    if (!mnt) return -EINVAL;
+    if (procfs_root) { kfree(procfs_root); procfs_root = NULL; }
     return 0;
 }
 
 static vnode_t *procfs_mount(mount_t *mnt, const char *source) {
-    (void) source;
-    if (!mnt)
-        return NULL;
+    (void)source;
+    if (!mnt) return NULL;
 
     vnode_t *root = kzalloc(sizeof(vnode_t));
-    if (!root)
-        return NULL;
+    if (!root) return NULL;
 
-    root->type = VNODE_DIR;
-    root->mode = 0555;
-    root->size = 0;
-    root->nlink = 2;
+    root->type      = VNODE_DIR;
+    root->mode      = 0555;
+    root->size      = 0;
+    root->nlink     = 2;
     root->ref_count = 0;
-    root->mount = mnt;
-    root->fs_data = NULL;
-    root->fs_type = mnt->fs_type;
+    root->mount     = mnt;
+    root->fs_data   = NULL;
+    root->fs_type   = mnt->fs_type;
 
     procfs_root = root;
     return root;
 }
 
+// ── fs_type registration ─────────────────────────────────────────────────────
+
 static fs_type_t procfs_type = {
     .name = "procfs",
     .ops = {
-        .mount = procfs_mount,
-        .unmount = procfs_unmount,
-        .lookup = procfs_lookup,
-        .read = procfs_read,
-        .readdir = procfs_readdir,
+        .mount    = procfs_mount,
+        .unmount  = procfs_unmount,
+        .lookup   = procfs_lookup,
+        .read     = procfs_read,
+        .readlink = procfs_readlink,
+        .readdir  = procfs_readdir,
     },
     .next = NULL,
 };

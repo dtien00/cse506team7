@@ -225,6 +225,26 @@ int file_open_with_flags(const char *path, int flags, mode_t mode) {
         return lookup_err;
     // vfs_lookup_from returns ref=1 — that ref is owned by this open-file instance.
 
+    // Follow terminal symlinks (vfs_lookup_from uses lstat semantics).
+    if (d->d_vnode && d->d_vnode->type == VNODE_LNK && !(flags & O_NOFOLLOW)) {
+        if (!d->d_vnode->mount || !d->d_vnode->mount->fs_type->ops.readlink) {
+            dentry_put(d);
+            return -EINVAL;
+        }
+        char *link_target = kmalloc(MAX_PATH);
+        if (!link_target) { dentry_put(d); return -ENOMEM; }
+        int r = d->d_vnode->mount->fs_type->ops.readlink(d->d_vnode, link_target, MAX_PATH - 1);
+        dentry_t *link_parent = d->d_parent ? d->d_parent : current->fs->cwd;
+        dentry_put(d);
+        if (r < 0) { kfree(link_target); return r; }
+        link_target[r] = '\0';
+        dentry_t *resolve_base = (link_target[0] == '/') ? vfs_get_root() : link_parent;
+        lookup_err = vfs_lookup_from(resolve_base, link_target, &d);
+        kfree(link_target);
+        if (lookup_err)
+            return lookup_err;
+    }
+
     if ((flags & O_DIRECTORY) && d->d_vnode && d->d_vnode->type != VNODE_DIR) {
         dentry_put(d);
         return -ENOTDIR;
@@ -575,6 +595,29 @@ int file_stat(const char *kpath, struct stat *kst) {
     int lookup_err = vfs_lookup_from(current->fs->cwd, kpath, &d);
     if (lookup_err)
         return lookup_err;
+
+    // Follow terminal symlinks (vfs_lookup_from uses lstat semantics).
+    int depth = 0;
+    while (d->d_vnode && d->d_vnode->type == VNODE_LNK) {
+        if (++depth > 8) { dentry_put(d); return -ELOOP; }
+        if (!d->d_vnode->mount || !d->d_vnode->mount->fs_type->ops.readlink) {
+            dentry_put(d);
+            return -EINVAL;
+        }
+        char *link_target = kmalloc(MAX_PATH);
+        if (!link_target) { dentry_put(d); return -ENOMEM; }
+        int r = d->d_vnode->mount->fs_type->ops.readlink(d->d_vnode, link_target, MAX_PATH - 1);
+        dentry_t *link_parent = d->d_parent ? d->d_parent : current->fs->cwd;
+        dentry_put(d);
+        if (r < 0) { kfree(link_target); return r; }
+        link_target[r] = '\0';
+        dentry_t *resolve_base = (link_target[0] == '/') ? vfs_get_root() : link_parent;
+        d = NULL;
+        lookup_err = vfs_lookup_from(resolve_base, link_target, &d);
+        kfree(link_target);
+        if (lookup_err)
+            return lookup_err;
+    }
 
     int ret = vnode_fill_stat(d->d_vnode, kst);
     dentry_put(d);

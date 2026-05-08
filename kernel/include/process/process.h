@@ -200,6 +200,8 @@ struct proc {
     struct rlimit rlimits[RLIM_NLIMITS];
 
     uintptr_t copy_fault_recover; // 0 when not inside a copy function; set by copy_{to,from}_user
+
+    char exe_path[SBUNIX_PATH_MAX]; // path of last exec'd binary (set at exec commit point)
 };
 
 extern struct proc proctab[];

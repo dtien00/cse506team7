@@ -411,7 +411,9 @@ static int vfs_step(dentry_t *cur, mount_t **mnt, const char *comp,
     // 2. Cache check
     dentry_t *child = dentry_lookup_child(cur, comp);
     if (child) {
-        if (!is_last && child->d_vnode && child->d_vnode->type != VNODE_DIR)
+        if (!is_last && child->d_vnode &&
+            child->d_vnode->type != VNODE_DIR &&
+            child->d_vnode->type != VNODE_LNK)
             return -ENOTDIR;
         dentry_get(child);
 
@@ -453,8 +455,8 @@ static int vfs_step(dentry_t *cur, mount_t **mnt, const char *comp,
     if (!vnode)
         return -ENOENT;
 
-    // 4. ENOTDIR check for non-final components
-    if (!is_last && vnode->type != VNODE_DIR) {
+    // 4. ENOTDIR check for non-final components (symlinks are ok; vfs_walk follows them)
+    if (!is_last && vnode->type != VNODE_DIR && vnode->type != VNODE_LNK) {
         kfree(vnode);
         return -ENOTDIR;
     }
@@ -513,6 +515,7 @@ static int vfs_walk(dentry_t *start, mount_t *mnt,
     for (int i = 0; i < n; i++) {
         int crossed = 0;
         dentry_t *next = NULL;
+        dentry_t *parent = cur; // save before put, needed for relative symlink base
         int err = vfs_step(cur, &mnt, comps[i], rel_buf,
                            (i == n - 1), &crossed, &next);
         dentry_put(cur);
@@ -521,8 +524,10 @@ static int vfs_walk(dentry_t *start, mount_t *mnt,
             return err;
         }
 
-        // If the resolved node is a symlink, expand it and continue the walk.
-        if (next->d_vnode && next->d_vnode->type == VNODE_LNK) {
+        // If the resolved node is a non-terminal symlink, expand it and continue.
+        // Terminal symlinks are returned as-is (lstat semantics); callers that
+        // need follow-through (file_open, chdir) do an extra step themselves.
+        if (i < n - 1 && next->d_vnode && next->d_vnode->type == VNODE_LNK) {
             if (!next->d_vnode->mount ||
                 !next->d_vnode->mount->fs_type->ops.readlink) {
                 dentry_put(next);
@@ -551,9 +556,13 @@ static int vfs_walk(dentry_t *start, mount_t *mnt,
             }
             link_target[r] = '\0';
 
+            // Relative symlinks resolve from the symlink's parent dir (parent),
+            // not from cwd. Absolute symlinks normalize from root.
+            dentry_t *norm_base = (link_target[0] == '/')
+                ? vfs_root
+                : parent;
             err = dentry_normalize_path(
-                current && current->fs ? current->fs->cwd : vfs_root,
-                vfs_root, link_target, link_target, MAX_PATH);
+                norm_base, vfs_root, link_target, link_target, MAX_PATH);
             if (err) {
                 kfree(link_target);
                 kfree(remainder);
