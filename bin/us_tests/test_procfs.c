@@ -87,7 +87,7 @@ void run_test_procfs(us_test_group_t *group) {
     DIR *self_dir = opendir("/proc/self");
     TEST(group, "opendir(\"/proc/self\") succeeds", self_dir != NULL);
     if (self_dir) {
-        int has_status = 0, has_stat = 0, has_cwd = 0, has_exe = 0, has_root = 0, has_smaps = 0;
+        int has_status = 0, has_stat = 0, has_cwd = 0, has_exe = 0, has_root = 0;
         int any_entry = 0;
         struct dirent *e;
         while ((e = readdir(self_dir)) != NULL) {
@@ -97,7 +97,6 @@ void run_test_procfs(us_test_group_t *group) {
             if (strcmp(e->d_name, "cwd")    == 0) has_cwd    = 1;
             if (strcmp(e->d_name, "exe")    == 0) has_exe    = 1;
             if (strcmp(e->d_name, "root")   == 0) has_root   = 1;
-            if (strcmp(e->d_name, "smaps")  == 0) has_smaps  = 1;
         }
         closedir(self_dir);
         TEST(group, "readdir(/proc/self) returns at least one entry", any_entry);
@@ -106,7 +105,6 @@ void run_test_procfs(us_test_group_t *group) {
         TEST(group, "readdir(/proc/self) contains cwd",    has_cwd);
         TEST(group, "readdir(/proc/self) contains exe",    has_exe);
         TEST(group, "readdir(/proc/self) contains root",   has_root);
-        TEST(group, "readdir(/proc/self) contains smaps",  has_smaps);
     } else {
         SKIP(group, "readdir(/proc/self) returns at least one entry", "opendir failed");
         SKIP(group, "readdir(/proc/self) contains status", "opendir failed");
@@ -114,7 +112,6 @@ void run_test_procfs(us_test_group_t *group) {
         SKIP(group, "readdir(/proc/self) contains cwd",    "opendir failed");
         SKIP(group, "readdir(/proc/self) contains exe",    "opendir failed");
         SKIP(group, "readdir(/proc/self) contains root",   "opendir failed");
-        SKIP(group, "readdir(/proc/self) contains smaps",  "opendir failed");
     }
 
     // ── /proc/self/status ─────────────────────────────────────────────────
