@@ -48,7 +48,9 @@ int *__errno_location(void);
 #define ENOMSG          42
 #define EIDRM           43
 
+#define ENOLINK         67
 #define EPROTO          71
+#define EMULTIHOP       72
 #define EBADMSG         74
 #define EOVERFLOW       75
 
@@ -79,6 +81,8 @@ int *__errno_location(void);
 #define EHOSTUNREACH    113
 #define EALREADY        114
 #define EINPROGRESS     115
+#define ESTALE          116
+#define EDQUOT          122
 #define ECANCELED       125
 
 #define EOWNERDEAD      130
