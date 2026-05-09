@@ -103,6 +103,12 @@ typedef unsigned long    uint_fast64_t;
 #define SIG_ATOMIC_MIN   INT32_MIN
 #define SIG_ATOMIC_MAX   INT32_MAX
 
+/* wchar_t / wint_t limits (compiler-defined; correct for any GCC target) */
+#define WCHAR_MIN  __WCHAR_MIN__
+#define WCHAR_MAX  __WCHAR_MAX__
+#define WINT_MIN   __WINT_MIN__
+#define WINT_MAX   __WINT_MAX__
+
 /* ── Constant expression macros ──────────────────────────────────────────── */
 #define INT8_C(v)        (v)
 #define INT16_C(v)       (v)
