@@ -1,7 +1,7 @@
 #ifndef _CTYPE_H
 #define _CTYPE_H
 
-#include <locale.h>
+#include "locale.h"
 
 /* ISO C / base POSIX */
 int isalnum(int c);
