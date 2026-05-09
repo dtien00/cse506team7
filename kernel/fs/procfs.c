@@ -191,10 +191,16 @@ static int procfs_write_status(char *out, int out_size, struct proc *p) {
     EMIT("State", st,                         (int)strlen(st));
 
     n = procfs_itoa(p->pid, numbuf, sizeof(numbuf));
+    EMIT("Tgid",  numbuf, n);
+
+    n = procfs_itoa(p->pid, numbuf, sizeof(numbuf));
     EMIT("Pid",   numbuf, n);
 
     n = procfs_itoa(p->parent ? p->parent->pid : 0, numbuf, sizeof(numbuf));
     EMIT("PPid",  numbuf, n);
+
+    n = procfs_itoa((int)p->pgid, numbuf, sizeof(numbuf));
+    EMIT("Pgrp",  numbuf, n);
 
     n = procfs_itoa((int)p->pgid, numbuf, sizeof(numbuf));
     EMIT("Pgid",  numbuf, n);
@@ -391,6 +397,7 @@ static vnode_t *procfs_alloc_vnode(procfs_node_type_t type, int pid, mount_t *mn
         case PROCFS_NODE_SMAPS_FILE:
             vn->type  = VNODE_REG; vn->mode = 0444; vn->nlink = 1; break;
         case PROCFS_NODE_CWD_LINK:
+            vn->type  = VNODE_REG; vn->mode = 0444; vn->nlink = 1; break;
         case PROCFS_NODE_EXE_LINK:
         case PROCFS_NODE_ROOT_LINK:
         case PROCFS_NODE_SELF_LINK:
@@ -627,15 +634,16 @@ static int procfs_readlink(vnode_t *vn, char *buf, size_t size) {
 
 // ── readdir ──────────────────────────────────────────────────────────────────
 
-// PID directory entries (order matches readdir index 0-4)
+// PID directory entries (order matches readdir index 0-5)
 static const struct { const char *name; uint8_t dtype; } pid_dir_entries[] = {
     { "status", DT_REG },
     { "stat",   DT_REG },
-    { "cwd",    DT_LNK },
+    { "smaps",  DT_REG },
+    { "cwd",    DT_REG },
     { "exe",    DT_LNK },
     { "root",   DT_LNK },
 };
-#define PID_DIR_NENTRIES 5
+#define PID_DIR_NENTRIES 6
 
 static int procfs_readdir(mount_t *mnt, vnode_t *vnode, uint32_t start_idx, void *buf,
                           uint32_t bufsize, uint32_t *entries_out) {
