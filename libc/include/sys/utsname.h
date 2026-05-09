@@ -3,11 +3,11 @@
 #include "sys/types.h"
 
 struct utsname {
-    char  sysname[]  // Name of this implementation of the operating system.
-    char  nodename[] // Name of this node within the communications network to which this node is attached, if any.
-    char  release[]  // Current release level of this implementation.
-    char  version[]  // Current version level of this release.
-    char  machine[]  // Name of the hardware type on which the system is running.
+    char  sysname[65];
+    char  nodename[65];
+    char  release[65];
+    char  version[65];
+    char  machine[65];
 };
 
 struct passwd *getpwnam(const char *);

@@ -575,7 +575,10 @@ static int vnode_fill_stat(vnode_t *vn, struct stat *kst) {
     kst->st_nlink = (nlink_t) nlink;
     kst->st_uid = 0; // no user model
     kst->st_gid = 0; // no group model
+    kst->st_rdev = 0; // no special-file device IDs in this implementation
     kst->st_size = (off_t) vn->size;
+    kst->st_blksize = 512;
+    kst->st_blocks = (blkcnt_t) ((vn->size + 511) / 512);
 
     kst->st_atim.tv_sec  = (long) vn->atime;
     kst->st_atim.tv_nsec = 0;

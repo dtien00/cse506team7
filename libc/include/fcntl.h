@@ -15,7 +15,7 @@
 #define O_NONBLOCK  0x0800
 #define O_DIRECTORY 0x10000
 #define O_CLOEXEC   0x80000
-#define O_CLOFORK   NULL
+#define O_CLOFORK   0x100000
 
 #define F_DUPFD         0
 #define F_GETFD         1
@@ -62,7 +62,7 @@ struct flock {
 #define AT_FDCWD            (-100)
 #define AT_SYMLINK_NOFOLLOW 0x100
 #define AT_SYMLINK_FOLLOW   0x200
-#define AT_REMOVEDIR        0x200
+#define AT_REMOVEDIR        0x400
 
 int open(const char *pathname, int flags, ...);
 int creat(const char *pathname, mode_t mode);
