@@ -14,9 +14,13 @@
 #include "trap/trap.h"
 #include "fs/block_cache.h"
 #include "signal.h"
+#include "sigframe.h"
 #include "tty/term.h"
 #include "kernel/limits.h"
 /* _SC_* not included here: use SBUNIX_SC_* from kernel/limits.h in sys_sysconf */
+
+/* Defined in trap.c; dispatches a user-space signal handler via sigframe. */
+void signal_dispatch(trap_frame *frame, int sig);
 
 /* Forward declarations for functions defined later in this file */
 static long pathconf_query(int name);
@@ -91,6 +95,29 @@ void syscall_handler(trap_frame *frame) {
                     ((1U << s) & KERNEL_DFL_IGNORE_SIGS &&
                      current->handlers[s] == (void *)SIG_DFL))
                     current->pending_signals &= ~(1u << s);
+            }
+        }
+
+        /* Dispatch one pending, unmasked custom handler per syscall return.
+           Only SIGKILL is truly uncatchable; SIGSTOP is already excluded by
+           KERNEL_STOP_SIGS.  Signals with a fatal default (SIGUSR1, SIGTERM,
+           etc.) reach this block when a custom handler is installed — the
+           fatal check below only fires for SIG_DFL-disposition signals. */
+        {
+            uint32_t catchable = current->pending_signals
+                                & ~current->signal_mask
+                                & ~(1U << KERNEL_SIGKILL)
+                                & ~KERNEL_STOP_SIGS;
+            while (catchable) {
+                int s = kernel_ctz((uint32_t)catchable);
+                catchable &= catchable - 1;
+                if ((uintptr_t)current->handlers[s] > (uintptr_t)SIG_IGN) {
+                    signal_dispatch(frame, s);
+                    current->pending_signals &= ~(1u << s);
+                    if (!(current->sig_flags[s] & SA_NODEFER))
+                        current->signal_mask |= (1u << s) | current->sa_masks[s];
+                    break;
+                }
             }
         }
 
@@ -227,6 +254,13 @@ void syscall_handler(trap_frame *frame) {
             strncpy(current->name, base, MAX_NAME - 1);
             current->name[MAX_NAME - 1] = '\0';
         }
+        return;
+    }
+
+    /* sys_sigreturn restores a0 from the sigframe; handle before the generic
+       ret path to prevent frame->a0 = ret from overwriting the restored value. */
+    if (syscall_num == SYS_sigreturn) {
+        sys_sigreturn(frame);
         return;
     }
 
@@ -2010,18 +2044,26 @@ int sys_sigaction(int sig, const struct sigaction *act, struct sigaction *oldact
 
     if (oldact != NULL) {
         struct sigaction kold = { .sa_handler = (sighandler_t)current->handlers[sig],
-                                  .sa_mask = 0,
-                                  .sa_flags = (int)current->sig_flags[sig] };
+                                  .sa_mask    = current->sa_masks[sig],
+                                  .sa_flags   = (int)current->sig_flags[sig] };
         if (copy_to_user(oldact, &kold, sizeof(kold)) < 0) return -EFAULT;
     }
 
-    // Install new disposition — only SIG_DFL (0) and SIG_IGN (1) accepted;
-    // custom function pointers require a signal-return trampoline.
     if (act != NULL) {
         struct sigaction kact;
         if (copy_from_user(&kact, act, sizeof(kact)) < 0) return -EFAULT;
-        if (kact.sa_handler != SIG_DFL && kact.sa_handler != SIG_IGN) return -EINVAL;
-        current->handlers[sig] = (void *)kact.sa_handler;
+        /* Custom handler: require SA_RESTORER so the kernel knows the return
+         * trampoline address.  The libc sigaction() wrapper always injects it;
+         * raw calls without it (e.g. kernel unit tests) are rejected. */
+        if (kact.sa_handler != SIG_DFL && kact.sa_handler != SIG_IGN &&
+            !(kact.sa_flags & SA_RESTORER))
+            return -EINVAL;
+        current->handlers[sig]    = (void *)kact.sa_handler;
+        current->sa_masks[sig]    = kact.sa_mask & ~((1U << KERNEL_SIGKILL)  | (1U << KERNEL_SIGSTOP)  |
+                                                      (1U << KERNEL_SIGILL)   | (1U << KERNEL_SIGABRT)  |
+                                                      (1U << KERNEL_SIGTRAP)  | (1U << KERNEL_SIGBUS)); /* P1 field */
+        current->sa_restorer[sig] = (kact.sa_flags & SA_RESTORER)       /* P1 field */
+                                    ? (void *)kact.sa_restorer : NULL;
         current->sig_flags[sig] = (uint32_t)kact.sa_flags & SA_KNOWN_FLAGS;
     }
 
@@ -2524,6 +2566,36 @@ long sys_pathconf(const char *upath, int name) {
     kfree(kpath);
 
     return pathconf_query(name);
+}
+
+int sys_sigreturn(trap_frame *frame) {
+    if (!current) return -1;
+    struct sigframe sf;
+    uintptr_t sp = frame->sp;
+    if (copy_from_user(&sf, (void *)sp, sizeof(sf)) < 0) return -EFAULT;
+
+    /* Restore the full interrupted register context. */
+    frame->sepc  = sf.sepc;
+    frame->ra    = sf.ra;
+    frame->gp    = sf.gp;
+    frame->tp    = sf.tp;
+    frame->t0 = sf.t[0]; frame->t1 = sf.t[1]; frame->t2 = sf.t[2];
+    frame->t3 = sf.t[3]; frame->t4 = sf.t[4]; frame->t5 = sf.t[5];
+    frame->t6 = sf.t[6];
+    frame->s0  = sf.s[0];  frame->s1  = sf.s[1];  frame->s2  = sf.s[2];
+    frame->s3  = sf.s[3];  frame->s4  = sf.s[4];  frame->s5  = sf.s[5];
+    frame->s6  = sf.s[6];  frame->s7  = sf.s[7];  frame->s8  = sf.s[8];
+    frame->s9  = sf.s[9];  frame->s10 = sf.s[10]; frame->s11 = sf.s[11];
+    frame->a0 = sf.a[0]; frame->a1 = sf.a[1]; frame->a2 = sf.a[2];
+    frame->a3 = sf.a[3]; frame->a4 = sf.a[4]; frame->a5 = sf.a[5];
+    frame->a6 = sf.a[6]; frame->a7 = sf.a[7];
+    frame->sp  = sp + sizeof(sf);
+
+    /* Restore signal mask; strip unmaskable bits for safety. */
+    current->signal_mask = sf.saved_mask & ~((1U << KERNEL_SIGKILL)  | (1U << KERNEL_SIGSTOP)  |
+                                              (1U << KERNEL_SIGILL)   | (1U << KERNEL_SIGABRT)  |
+                                              (1U << KERNEL_SIGTRAP)  | (1U << KERNEL_SIGBUS));
+    return 0;   /* return value unused: caller returns early before frame->a0 = ret */
 }
 
 /*

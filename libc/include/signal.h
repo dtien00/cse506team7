@@ -53,6 +53,7 @@ typedef unsigned long sigset_t;
 #define SA_RESTART    0x10000000  /* restart syscall on signal return -- BLOCKED */
 #define SA_NODEFER    0x40000000  /* don't mask this signal while handling it */
 #define SA_NOMASK     SA_NODEFER
+#define SA_RESTORER   0x04000000  /* sa_restorer field is valid */
 #define SA_RESETHAND  0x80000000  /* reset disposition to SIG_DFL after delivery */
 #define SA_ONESHOT    SA_RESETHAND
 
@@ -117,6 +118,7 @@ struct sigaction {
     sigset_t     sa_mask;
     int          sa_flags;
     void        (*sa_sigaction)(int, siginfo_t *, void *);
+    void        (*sa_restorer)(void);   /* set by sigaction() wrapper when SA_RESTORER */
 };
 
 struct sigevent {
