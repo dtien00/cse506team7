@@ -20,9 +20,7 @@ typedef __WCHAR_TYPE__ wchar_t;
  *
  * RISC-V LP64 ABI: int=32-bit, long=64-bit.
  *   int_leastN_t  == intN_t          → same specifier as exact
- *   int_fast8_t   == signed char     → "hh"
- *   int_fast16/32_t == int           → ""  (no length modifier)
- *   int_fast64_t  == long            → "l"
+ *   int_fast{8,16,32,64}_t == long   → "l" for all fast variants
  */
 
 /* --- Exact-width PRI* --- */
@@ -87,35 +85,35 @@ typedef __WCHAR_TYPE__ wchar_t;
 #define PRIoLEAST32  "o"
 #define PRIoLEAST64  "lo"
 
-/* --- Fast-width PRI* --- */
-#define PRIdFAST8    "hhd"
-#define PRIdFAST16   "d"
-#define PRIdFAST32   "d"
+/* --- Fast-width PRI* (all int_fast*_t == long on LP64) --- */
+#define PRIdFAST8    "ld"
+#define PRIdFAST16   "ld"
+#define PRIdFAST32   "ld"
 #define PRIdFAST64   "ld"
 
-#define PRIiFAST8    "hhi"
-#define PRIiFAST16   "i"
-#define PRIiFAST32   "i"
+#define PRIiFAST8    "li"
+#define PRIiFAST16   "li"
+#define PRIiFAST32   "li"
 #define PRIiFAST64   "li"
 
-#define PRIuFAST8    "hhu"
-#define PRIuFAST16   "u"
-#define PRIuFAST32   "u"
+#define PRIuFAST8    "lu"
+#define PRIuFAST16   "lu"
+#define PRIuFAST32   "lu"
 #define PRIuFAST64   "lu"
 
-#define PRIxFAST8    "hhx"
-#define PRIxFAST16   "x"
-#define PRIxFAST32   "x"
+#define PRIxFAST8    "lx"
+#define PRIxFAST16   "lx"
+#define PRIxFAST32   "lx"
 #define PRIxFAST64   "lx"
 
-#define PRIXFAST8    "hhX"
-#define PRIXFAST16   "X"
-#define PRIXFAST32   "X"
+#define PRIXFAST8    "lX"
+#define PRIXFAST16   "lX"
+#define PRIXFAST32   "lX"
 #define PRIXFAST64   "lX"
 
-#define PRIoFAST8    "hho"
-#define PRIoFAST16   "o"
-#define PRIoFAST32   "o"
+#define PRIoFAST8    "lo"
+#define PRIoFAST16   "lo"
+#define PRIoFAST32   "lo"
 #define PRIoFAST64   "lo"
 
 /* --- intmax_t / intptr_t PRI* --- */
@@ -189,30 +187,30 @@ typedef __WCHAR_TYPE__ wchar_t;
 #define SCNoLEAST32  "o"
 #define SCNoLEAST64  "lo"
 
-/* --- Fast-width SCN* --- */
-#define SCNdFAST8    "hhd"
-#define SCNdFAST16   "d"
-#define SCNdFAST32   "d"
+/* --- Fast-width SCN* (all int_fast*_t == long on LP64) --- */
+#define SCNdFAST8    "ld"
+#define SCNdFAST16   "ld"
+#define SCNdFAST32   "ld"
 #define SCNdFAST64   "ld"
 
-#define SCNiFAST8    "hhi"
-#define SCNiFAST16   "i"
-#define SCNiFAST32   "i"
+#define SCNiFAST8    "li"
+#define SCNiFAST16   "li"
+#define SCNiFAST32   "li"
 #define SCNiFAST64   "li"
 
-#define SCNuFAST8    "hhu"
-#define SCNuFAST16   "u"
-#define SCNuFAST32   "u"
+#define SCNuFAST8    "lu"
+#define SCNuFAST16   "lu"
+#define SCNuFAST32   "lu"
 #define SCNuFAST64   "lu"
 
-#define SCNxFAST8    "hhx"
-#define SCNxFAST16   "x"
-#define SCNxFAST32   "x"
+#define SCNxFAST8    "lx"
+#define SCNxFAST16   "lx"
+#define SCNxFAST32   "lx"
 #define SCNxFAST64   "lx"
 
-#define SCNoFAST8    "hho"
-#define SCNoFAST16   "o"
-#define SCNoFAST32   "o"
+#define SCNoFAST8    "lo"
+#define SCNoFAST16   "lo"
+#define SCNoFAST32   "lo"
 #define SCNoFAST64   "lo"
 
 /* --- intmax_t / intptr_t SCN* --- */
