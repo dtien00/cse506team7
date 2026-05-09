@@ -2,6 +2,7 @@
 #define _UNISTD_H
 
 #include "sys/types.h"
+#include "fcntl.h"     /* O_CLOEXEC, O_CLOFORK [CX] — required by POSIX in unistd.h */
 
 /* POSIX: the process environment, initialised from envp by crt.S */
 extern char **environ;
@@ -11,11 +12,11 @@ extern char **environ;
 #define STDOUT_FILENO 1
 #define STDERR_FILENO 2
 
-/* --- lseek() whence constants --- */
-#ifndef SEEK_SET
-#define SEEK_SET  0
-#define SEEK_CUR  1
-#define SEEK_END  2
+/* --- lseek() whence constants ---
+   SEEK_SET/CUR/END come from fcntl.h (included above).
+   SEEK_HOLE and SEEK_DATA are defined here; guard separately so they
+   survive even when SEEK_SET was already defined by stdio.h or fcntl.h. */
+#ifndef SEEK_HOLE
 #define SEEK_HOLE 3
 #define SEEK_DATA 4
 #endif

@@ -2,6 +2,7 @@
 #define _TIME_H
 
 #include "sys/time.h"
+#include "locale.h"
 
 struct tm {
     int tm_sec;
@@ -36,9 +37,6 @@ struct itimerspec {
 #define CLOCK_THREAD_CPUTIME_ID  3
 
 #define TIMER_ABSTIME           1
-
-/* locale_t is opaque per POSIX; <locale.h> is its canonical home */
-typedef int locale_t;
 
 /* struct sigevent is defined in <signal.h>; forward-declared for timer_create */
 struct sigevent;
