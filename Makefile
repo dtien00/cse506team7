@@ -147,7 +147,7 @@ submit:
 
 # ********************** TEST (NOT IN ORIGINAL /shared)
 test: build/disk.img
-	$(MAKE) -B CFLAGS="$(CFLAGS) -DRUN_TESTS" build/kernel.elf
+	$(MAKE) CFLAGS="$(CFLAGS) -DRUN_TESTS"
 	qemu-system-riscv64 -machine virt -bios default -kernel build/kernel.elf \
 		-drive file=$(DISK_IMG),format=raw,if=none,id=hd0 \
 		-device virtio-blk-pci-non-transitional,drive=hd0 \
