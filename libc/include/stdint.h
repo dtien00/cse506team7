@@ -93,7 +93,9 @@ typedef unsigned long    uint_fast64_t;
 
 /* ── Other required limits ───────────────────────────────────────────────── */
 #define SIZE_MAX         UINT64_MAX
+#ifndef SSIZE_MAX
 #define SSIZE_MAX        INT64_MAX
+#endif
 
 /* ptrdiff_t is signed long on LP64; its limits match intptr */
 #define PTRDIFF_MIN      INT64_MIN
