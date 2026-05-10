@@ -640,6 +640,8 @@ pid_t sys_fork(void) {
     // POSIX: child inherits parent's signal disposition table across fork
     memcpy(child->handlers, current->handlers, sizeof(current->handlers));
     memcpy(child->sig_flags, current->sig_flags, sizeof(current->sig_flags));
+    memcpy(child->sa_masks,    current->sa_masks,    sizeof(current->sa_masks));
+    memcpy(child->sa_restorer, current->sa_restorer, sizeof(current->sa_restorer));
     child->priority    = current->priority;    /* POSIX: nice value is inherited across fork */
     // Child also inherits parent's process group and session IDs
     child->pgid = current->pgid;
