@@ -10,7 +10,7 @@ void run_test_access(us_test_group_t *group) {
 
     /* ── F_OK: existence checks ───────────────────────────────────────────── */
     ut_assert(group, access("/bin/sh", 0 /* F_OK */) == 0,  "F_OK /bin/sh present");
-    ut_assert(group, access("/bin/us_test", 0 /* F_OK */) == 0, "F_OK self binary");
+    ut_assert(group, access("/bin/us_tests", 0 /* F_OK */) == 0, "F_OK self binary");
 
     int r = access("/no/such/path/xyz", 0 /* F_OK */);
     ut_assert(group, r == -1 && errno == ENOENT, "F_OK missing→ENOENT");

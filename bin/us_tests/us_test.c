@@ -142,7 +142,7 @@ void run_test_python_smoke(us_test_group_t *group);
  */
 static const int RUN_ALL_TESTS   = 1;
 static const int RUN_FORK_HEAVY  = RUN_ALL_TESTS && 1;
-static const int RUN_MEMORY_HEAVY = RUN_ALL_TESTS && 0;
+static const int RUN_MEMORY_HEAVY = RUN_ALL_TESTS && 1;
 static const int RUN_STRESS_TESTS = RUN_ALL_TESTS || 0;
 static const int RUN_PYTHON_TESTS = RUN_ALL_TESTS && 0;
 

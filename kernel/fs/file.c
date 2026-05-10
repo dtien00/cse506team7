@@ -599,11 +599,12 @@ static int vnode_fill_stat(vnode_t *vn, struct stat *kst) {
 }
 
 int file_stat(const char *kpath, struct stat *kst) {
-    if (!kpath || !kst || !current || !current->fs)
+    if (!kpath || !kst)
         return -EINVAL;
 
+    dentry_t *cwd = (current && current->fs) ? current->fs->cwd : vfs_get_root();
     dentry_t *d = NULL;
-    int lookup_err = vfs_lookup_from(current->fs->cwd, kpath, &d);
+    int lookup_err = vfs_lookup_from(cwd, kpath, &d);
     if (lookup_err)
         return lookup_err;
 
@@ -618,7 +619,7 @@ int file_stat(const char *kpath, struct stat *kst) {
         char *link_target = kmalloc(MAX_PATH);
         if (!link_target) { dentry_put(d); return -ENOMEM; }
         int r = d->d_vnode->mount->fs_type->ops.readlink(d->d_vnode, link_target, MAX_PATH - 1);
-        dentry_t *link_parent = d->d_parent ? d->d_parent : current->fs->cwd;
+        dentry_t *link_parent = d->d_parent ? d->d_parent : cwd;
         dentry_put(d);
         if (r < 0) { kfree(link_target); return r; }
         link_target[r] = '\0';
@@ -636,11 +637,12 @@ int file_stat(const char *kpath, struct stat *kst) {
 }
 
 int file_lstat(const char *kpath, struct stat *kst) {
-    if (!kpath || !kst || !current || !current->fs)
+    if (!kpath || !kst)
         return -EINVAL;
 
+    dentry_t *cwd = (current && current->fs) ? current->fs->cwd : vfs_get_root();
     dentry_t *d = NULL;
-    int lookup_err = vfs_lookup_nofollow_pub(current->fs->cwd, kpath, &d);
+    int lookup_err = vfs_lookup_nofollow_pub(cwd, kpath, &d);
     if (lookup_err)
         return lookup_err;
 
