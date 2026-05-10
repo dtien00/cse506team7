@@ -1234,13 +1234,14 @@ ssize_t vfs_readlink(const char *path, char *buf, size_t size) {
         return -EINVAL;
     }
 
-    /* A node must either be a symlink or have a fs-provided readlink op.
-     * This allows procfs CWD (VNODE_REG + readlink op) to be queried. */
-    int has_readlink_op = vn->mount && vn->mount->fs_type->ops.readlink;
-    if (vn->type != VNODE_LNK && !has_readlink_op) {
+    /* POSIX: readlink requires the named object to be a symbolic link.
+     * Any other type — regular file, directory, etc. — must fail with EINVAL. */
+    if (vn->type != VNODE_LNK) {
         dentry_put(d);
         return -EINVAL;
     }
+
+    int has_readlink_op = vn->mount && vn->mount->fs_type->ops.readlink;
     if (!has_readlink_op) {
         dentry_put(d);
         return -ENOSYS;

@@ -397,7 +397,6 @@ static vnode_t *procfs_alloc_vnode(procfs_node_type_t type, int pid, mount_t *mn
         case PROCFS_NODE_SMAPS_FILE:
             vn->type  = VNODE_REG; vn->mode = 0444; vn->nlink = 1; break;
         case PROCFS_NODE_CWD_LINK:
-            vn->type  = VNODE_REG; vn->mode = 0444; vn->nlink = 1; break;
         case PROCFS_NODE_EXE_LINK:
         case PROCFS_NODE_ROOT_LINK:
         case PROCFS_NODE_SELF_LINK:
@@ -639,7 +638,7 @@ static const struct { const char *name; uint8_t dtype; } pid_dir_entries[] = {
     { "status", DT_REG },
     { "stat",   DT_REG },
     { "smaps",  DT_REG },
-    { "cwd",    DT_REG },
+    { "cwd",    DT_LNK },
     { "exe",    DT_LNK },
     { "root",   DT_LNK },
 };

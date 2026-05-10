@@ -545,7 +545,15 @@ vnode_t *ext2_lookup(mount_t *mnt, const char *path) {
         vnode->mount = mnt;
         vnode->fs_data = inode;
         vnode->fs_type = mnt->fs_type;
-        vnode->type = ((inode->i_mode & 0xF000) == EXT2_S_IFDIR) ? VNODE_DIR : VNODE_REG;
+        {
+            uint16_t fmt = inode->i_mode & 0xF000;
+            if (fmt == EXT2_S_IFDIR)
+                vnode->type = VNODE_DIR;
+            else if (fmt == EXT2_S_IFLNK)
+                vnode->type = VNODE_LNK;
+            else
+                vnode->type = VNODE_REG;
+        }
 
         return vnode;
     }
