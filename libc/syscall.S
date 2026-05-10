@@ -424,6 +424,8 @@ __syscall_fcntl:
 
 access:
     li a7, 43
+    ecall
+    j __syscall_ret
 
 sigreturn:
     li a7, 103
