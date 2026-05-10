@@ -19,6 +19,10 @@
 #include "kernel/limits.h"
 /* _SC_* not included here: use SBUNIX_SC_* from kernel/limits.h in sys_sysconf */
 
+/* utimensat special tv_nsec values (mirrored from libc sys/stat.h) */
+#define UTIME_NOW  0x3fffffff
+#define UTIME_OMIT 0x3ffffffe
+
 /* Defined in trap.c; dispatches a user-space signal handler via sigframe. */
 void signal_dispatch(trap_frame *frame, int sig);
 
@@ -570,6 +574,39 @@ void syscall_handler(trap_frame *frame) {
             ret = sys_fpathconf((int)arg0, (int)arg1);
             break;
 
+        case SYS_truncate:
+            ret = sys_truncate((const char *)arg0, (off_t)arg1);
+            break;
+
+        case SYS_ftruncate:
+            ret = sys_ftruncate((int)arg0, (off_t)arg1);
+            break;
+
+        case SYS_umask:
+            ret = (long)sys_umask((mode_t)arg0);
+            break;
+
+        case SYS_fchdir:
+            ret = sys_fchdir((int)arg0);
+            break;
+
+        case SYS_utimensat:
+            ret = sys_utimensat((int)arg0, (const char *)arg1,
+                                (const struct timespec *)arg2, (int)arg3);
+            break;
+
+        case SYS_chown:
+            ret = sys_chown((const char *)arg0, (uid_t)arg1, (gid_t)arg2);
+            break;
+
+        case SYS_lchown:
+            ret = sys_lchown((const char *)arg0, (uid_t)arg1, (gid_t)arg2);
+            break;
+
+        case SYS_fchown:
+            ret = sys_fchown((int)arg0, (uid_t)arg1, (gid_t)arg2);
+            break;
+
         default:
             // Unknown syscall number from user space will be recognized as delivering SIGSYS (Bad system call)
             // Set a0 = -ENOSYS so masked SIGSYS callers see a defined return value.
@@ -647,9 +684,10 @@ pid_t sys_fork(void) {
     child->pgid = current->pgid;
     child->sid = current->sid;
 
-    /* Child inherits parent's resource limits (POSIX). */
+    /* Child inherits parent's resource limits and umask (POSIX). */
     memcpy(child->rlimits, current->rlimits, sizeof(current->rlimits));
     memcpy(child->exe_path, current->exe_path, sizeof(current->exe_path));
+    child->umask_val = current->umask_val;
 
     /* Child starts one level below the parent so a timer-preempted parent
      * re-enters at the same level as the child; LIFO insertion then keeps
@@ -770,6 +808,9 @@ ssize_t sys_write(int fd, const void *buf, size_t count) {
 
 int sys_open(const char *path, int flags, mode_t mode) {
     if (!current || !path) return -EINVAL;
+
+    if (flags & O_CREAT)
+        mode &= ~current->umask_val;
 
     char *kpath = kmalloc(MAX_PATH);
     if (!kpath) return -ENOMEM;
@@ -1601,6 +1642,7 @@ ssize_t sys_readlink(const char *upath, char *ubuf, size_t bufsiz) {
 
 int sys_mkdir(const char *path, mode_t mode) {
     if (!current) return -1;
+    mode &= ~current->umask_val;
 
     char *_pathbufs = kmalloc(2 * MAX_PATH);
     if (!_pathbufs) return -ENOMEM;
@@ -2041,6 +2083,141 @@ int sys_fchmod(int fd, mode_t mode) {
     if (f->type != FILE_VNODE || !f->vnode) return -EBADF;
 
     return vfs_fchmod(f->vnode, mode);
+}
+
+int sys_ftruncate(int fd, off_t length) {
+    if (!current || length < 0) return -EINVAL;
+    file_t *f = fd_get(&current->fds, fd);
+    if (!f) return -EBADF;
+    if (f->type != FILE_VNODE || !f->vnode) return -EINVAL;
+    if (!(f->flags & (O_WRONLY | O_RDWR))) return -EBADF;
+    return vfs_ftruncate(f->vnode, length);
+}
+
+int sys_truncate(const char *upath, off_t length) {
+    if (!current || !upath || length < 0) return -EINVAL;
+    char *_pathbufs = kmalloc(2 * MAX_PATH);
+    if (!_pathbufs) return -ENOMEM;
+    char *kpath    = _pathbufs;
+    char *resolved = _pathbufs + MAX_PATH;
+    if (strncpy_from_user(kpath, upath, MAX_PATH - 1) < 0) { kfree(_pathbufs); return -EFAULT; }
+    kpath[MAX_PATH - 1] = '\0';
+    if (dentry_normalize_path(current->fs->cwd, vfs_get_root(),
+                              kpath, resolved, MAX_PATH) < 0) { kfree(_pathbufs); return -ENAMETOOLONG; }
+    int ret = vfs_truncate(resolved, length);
+    kfree(_pathbufs);
+    return ret;
+}
+
+mode_t sys_umask(mode_t mask) {
+    if (!current) return 022;
+    mode_t old = current->umask_val;
+    current->umask_val = mask & 0777;
+    return old;
+}
+
+int sys_fchdir(int fd) {
+    if (!current) return -EINVAL;
+    file_t *f = fd_get(&current->fds, fd);
+    if (!f) return -EBADF;
+    if (f->type != FILE_VNODE || !f->vnode) return -ENOTDIR;
+    if (f->vnode->type != VNODE_DIR) return -ENOTDIR;
+    if (!f->vnode->mount) return -EINVAL;
+    char *kpath = kmalloc(MAX_PATH);
+    if (!kpath) return -ENOMEM;
+    strncpy(kpath, f->vnode->mount->mountpoint, MAX_PATH - 1);
+    kpath[MAX_PATH - 1] = '\0';
+    int ret = vfs_chdir(kpath);
+    kfree(kpath);
+    return ret;
+}
+
+int sys_utimensat(int dirfd, const char *upath, const struct timespec *utimes, int flags) {
+    if (!current) return -EINVAL;
+
+    struct timespec ktimes[2];
+    if (utimes) {
+        if (copy_from_user(ktimes, utimes, sizeof(ktimes)) < 0) return -EFAULT;
+    }
+
+    vnode_t *vn = NULL;
+    dentry_t *d = NULL;
+
+    if (upath) {
+        char *kpath = kmalloc(MAX_PATH);
+        if (!kpath) return -ENOMEM;
+        if (strncpy_from_user(kpath, upath, MAX_PATH - 1) < 0) { kfree(kpath); return -EFAULT; }
+        kpath[MAX_PATH - 1] = '\0';
+
+        dentry_t *base = (dirfd == AT_FDCWD)
+            ? (current->fs ? current->fs->cwd : vfs_get_root())
+            : NULL;
+        if (dirfd != AT_FDCWD) {
+            file_t *df = fd_get(&current->fds, dirfd);
+            if (!df) { kfree(kpath); return -EBADF; }
+        }
+
+        int err = (flags & AT_SYMLINK_NOFOLLOW)
+            ? vfs_lookup_nofollow_pub(base, kpath, &d)
+            : vfs_lookup_from(base, kpath, &d);
+        kfree(kpath);
+        if (err) return err;
+        vn = d->d_vnode;
+    } else {
+        file_t *f = fd_get(&current->fds, dirfd);
+        if (!f || f->type != FILE_VNODE || !f->vnode) return -EBADF;
+        vn = f->vnode;
+    }
+
+    if (utimes) {
+        if (ktimes[0].tv_nsec != UTIME_OMIT)
+            vn->atime = ktimes[0].tv_sec;
+        if (ktimes[1].tv_nsec != UTIME_OMIT)
+            vn->mtime = ktimes[1].tv_sec;
+    } else {
+        vn->atime = vn->mtime = 0;
+    }
+
+    if (d) dentry_put(d);
+    return 0;
+}
+
+int sys_chown(const char *upath, uid_t uid, gid_t gid) {
+    (void)uid; (void)gid;
+    if (!current || !upath) return -EINVAL;
+    char *kpath = kmalloc(MAX_PATH);
+    if (!kpath) return -ENOMEM;
+    if (strncpy_from_user(kpath, upath, MAX_PATH - 1) < 0) { kfree(kpath); return -EFAULT; }
+    kpath[MAX_PATH - 1] = '\0';
+    dentry_t *d = NULL;
+    int err = vfs_lookup_from(current->fs ? current->fs->cwd : vfs_get_root(), kpath, &d);
+    kfree(kpath);
+    if (err) return err;
+    dentry_put(d);
+    return 0;
+}
+
+int sys_lchown(const char *upath, uid_t uid, gid_t gid) {
+    (void)uid; (void)gid;
+    if (!current || !upath) return -EINVAL;
+    char *kpath = kmalloc(MAX_PATH);
+    if (!kpath) return -ENOMEM;
+    if (strncpy_from_user(kpath, upath, MAX_PATH - 1) < 0) { kfree(kpath); return -EFAULT; }
+    kpath[MAX_PATH - 1] = '\0';
+    dentry_t *d = NULL;
+    int err = vfs_lookup_nofollow_pub(current->fs ? current->fs->cwd : vfs_get_root(), kpath, &d);
+    kfree(kpath);
+    if (err) return err;
+    dentry_put(d);
+    return 0;
+}
+
+int sys_fchown(int fd, uid_t uid, gid_t gid) {
+    (void)uid; (void)gid;
+    if (!current) return -EINVAL;
+    file_t *f = fd_get(&current->fds, fd);
+    if (!f) return -EBADF;
+    return 0;
 }
 
 int sys_rmdir(const char *path) {

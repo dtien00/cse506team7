@@ -290,7 +290,7 @@ int file_open_with_flags(const char *path, int flags, mode_t mode) {
 
     if ((flags & O_TRUNC) && (flags & (O_WRONLY | O_RDWR))) {
         if (f->vnode && f->vnode->mount && f->vnode->mount->fs_type && f->vnode->mount->fs_type->ops.truncate)
-            f->vnode->mount->fs_type->ops.truncate(f->vnode);
+            f->vnode->mount->fs_type->ops.truncate(f->vnode, 0);
     }
 
     if (flags & O_APPEND)

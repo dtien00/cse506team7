@@ -135,6 +135,7 @@ struct proc* proc_create(const char *name) {
     p->mlfq_level = 0;
     p->trapframe = NULL;
     p->trapframe_owned = 0;
+    p->umask_val = 022; /* POSIX default */
     for (int i = 0; i < MAX_HANDLERS; i++) { // Initialize all entries to SIG_DFL (0)
         p->handlers[i] = 0;
     }
