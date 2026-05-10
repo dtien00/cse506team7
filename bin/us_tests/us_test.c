@@ -65,6 +65,7 @@ void run_test_sigaction(us_test_group_t *group);
 void run_test_sigsuspend(us_test_group_t *group);
 void run_test_sigprocmask(us_test_group_t *group);
 void run_test_sighandler(us_test_group_t *group);
+void run_test_fork_sigdisp(us_test_group_t *group);
 void run_test_time(us_test_group_t *group);
 void run_test_termios_tty(us_test_group_t *group);
 void run_test_pgrp(us_test_group_t *group);
@@ -236,6 +237,7 @@ int main(int argc, char **argv, char **envp) {
         run_test_sigsuspend(&groups[idx++]);
         run_test_sigprocmask(&groups[idx++]);
         run_test_sighandler(&groups[idx++]);
+        run_test_fork_sigdisp(&groups[idx++]);
         run_test_pgrp(&groups[idx++]);
         run_test_jobctl(&groups[idx++]);
         run_test_links(groups, &idx);
