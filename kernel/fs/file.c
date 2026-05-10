@@ -8,6 +8,7 @@
 #include "process/process.h"
 #include "tty/term.h"
 #include "kernel/resource.h"
+#include "lib/string.h"
 
 #define SEEK_SET 0
 #define SEEK_CUR 1
@@ -16,6 +17,11 @@
 #define S_IFREG 0100000
 #define S_IFDIR 0040000
 #define S_IFLNK 0120000
+
+static int file_is_procfs_link(vnode_t *vn) {
+    return vn && vn->type == VNODE_LNK &&
+           vn->fs_type && strcmp(vn->fs_type->name, "procfs") == 0;
+}
 
 static void file_release(file_t *f);
 
@@ -226,7 +232,9 @@ int file_open_with_flags(const char *path, int flags, mode_t mode) {
     // vfs_lookup_from returns ref=1 — that ref is owned by this open-file instance.
 
     // Follow terminal symlinks (vfs_lookup_from uses lstat semantics).
-    if (d->d_vnode && d->d_vnode->type == VNODE_LNK && !(flags & O_NOFOLLOW)) {
+    if (d->d_vnode && d->d_vnode->type == VNODE_LNK &&
+        !(flags & O_NOFOLLOW) &&
+        ((flags & O_DIRECTORY) || !file_is_procfs_link(d->d_vnode))) {
         if (!d->d_vnode->mount || !d->d_vnode->mount->fs_type->ops.readlink) {
             dentry_put(d);
             return -EINVAL;

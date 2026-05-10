@@ -516,10 +516,12 @@ static int vfs_walk(dentry_t *start, mount_t *mnt,
         int crossed = 0;
         dentry_t *next = NULL;
         dentry_t *parent = cur; // save before put, needed for relative symlink base
+        dentry_get(parent);
         int err = vfs_step(cur, &mnt, comps[i], rel_buf,
                            (i == n - 1), &crossed, &next);
         dentry_put(cur);
         if (err) {
+            dentry_put(parent);
             kfree(rel_buf);
             return err;
         }
@@ -531,6 +533,7 @@ static int vfs_walk(dentry_t *start, mount_t *mnt,
             if (!next->d_vnode->mount ||
                 !next->d_vnode->mount->fs_type->ops.readlink) {
                 dentry_put(next);
+                dentry_put(parent);
                 kfree(rel_buf);
                 return -EINVAL;
             }
@@ -541,6 +544,7 @@ static int vfs_walk(dentry_t *start, mount_t *mnt,
                 kfree(link_target);
                 kfree(remainder);
                 dentry_put(next);
+                dentry_put(parent);
                 kfree(rel_buf);
                 return -ENOMEM;
             }
@@ -551,6 +555,7 @@ static int vfs_walk(dentry_t *start, mount_t *mnt,
             if (r < 0) {
                 kfree(link_target);
                 kfree(remainder);
+                dentry_put(parent);
                 kfree(rel_buf);
                 return r;
             }
@@ -563,6 +568,7 @@ static int vfs_walk(dentry_t *start, mount_t *mnt,
                 : parent;
             err = dentry_normalize_path(
                 norm_base, vfs_root, link_target, link_target, MAX_PATH);
+            dentry_put(parent);
             if (err) {
                 kfree(link_target);
                 kfree(remainder);
@@ -613,6 +619,8 @@ static int vfs_walk(dentry_t *start, mount_t *mnt,
             kfree(remainder);
             return sub_err;
         }
+
+        dentry_put(parent);
 
         // Update rel_buf for next step.
         // After a mount crossing, current component is first entry in new mount.
@@ -1112,107 +1120,7 @@ int vfs_symlink(const char *target, const char *linkpath) {
 // vfs_lookup_nofollow: like vfs_lookup_from but stops before following the
 // final symlink component, so readlink can obtain the symlink vnode itself.
 static int vfs_lookup_nofollow(dentry_t *start, const char *path, dentry_t **out) {
-    if (!path || !out) return -EINVAL;
-
-    char *normalized = kmalloc(MAX_PATH);
-    if (!normalized) return -ENOMEM;
-
-    int err = dentry_normalize_path(start ? start : vfs_root, vfs_root,
-                                    path, normalized, MAX_PATH);
-    if (err) { kfree(normalized); return err; }
-
-    if (normalized[0] == '/' && normalized[1] == '\0') {
-        kfree(normalized);
-        dentry_get(vfs_root);
-        *out = vfs_root;
-        return 0;
-    }
-
-    char *path_buf = kmalloc(MAX_PATH);
-    if (!path_buf) { kfree(normalized); return -ENOMEM; }
-    strncpy(path_buf, normalized, MAX_PATH - 1);
-    path_buf[MAX_PATH - 1] = '\0';
-
-    char *comps[MAX_COMPONENTS];
-    int n = dentry_split_path(path_buf, comps, MAX_COMPONENTS);
-    if (n < 0) { kfree(path_buf); kfree(normalized); return -ENAMETOOLONG; }
-
-    mount_t *mnt = vfs_find_mount(normalized);
-    if (!mnt) { kfree(path_buf); kfree(normalized); return -ENOENT; }
-
-    if (n == 1) {
-        dentry_get(vfs_root);
-        dentry_t *cur = vfs_root;
-        char *rel_buf = kmalloc(MAX_PATH);
-        if (!rel_buf) {
-            dentry_put(cur);
-            kfree(path_buf); kfree(normalized);
-            return -ENOMEM;
-        }
-        rel_buf[0] = '\0';
-        int crossed = 0;
-        dentry_t *child = NULL;
-        err = vfs_step(cur, &mnt, comps[0], rel_buf, 1, &crossed, &child);
-        kfree(rel_buf);
-        dentry_put(cur);
-        kfree(path_buf); kfree(normalized);
-        if (err) return err;
-        *out = child;
-        return 0;
-    }
-
-    // Walk all but the last component following symlinks normally, then do one
-    // raw vfs_step for the final component to get the symlink vnode itself.
-    char *parent_buf = kmalloc(MAX_PATH);
-    if (!parent_buf) { kfree(path_buf); kfree(normalized); return -ENOMEM; }
-    strncpy(parent_buf, normalized, MAX_PATH - 1);
-    parent_buf[MAX_PATH - 1] = '\0';
-    kfree(normalized);
-
-    // Rebuild parent path by stripping the last component.
-    char *last_slash = NULL;
-    for (char *p = parent_buf; *p; p++)
-        if (*p == '/') last_slash = p;
-    if (last_slash) {
-        if (last_slash == parent_buf)
-            parent_buf[1] = '\0';
-        else
-            *last_slash = '\0';
-    }
-
-    dentry_t *parent_d = NULL;
-    err = vfs_lookup_from(start, parent_buf, &parent_d);
-    kfree(parent_buf);
-    if (err) { kfree(path_buf); return err; }
-
-    mount_t *parent_mnt = parent_d->d_vnode ? parent_d->d_vnode->mount : mnt;
-
-    char *rel_buf = kmalloc(MAX_PATH);
-    char *par_rel = kmalloc(MAX_PATH);
-    if (!rel_buf || !par_rel) {
-        kfree(rel_buf); kfree(par_rel);
-        dentry_put(parent_d); kfree(path_buf);
-        return -ENOMEM;
-    }
-    rel_buf[0] = '\0';
-
-    if (dentry_build_path(parent_d, parent_mnt->root, par_rel, MAX_PATH) == 0) {
-        const char *r = par_rel[0] == '/' ? par_rel + 1 : par_rel;
-        strncpy(rel_buf, r, MAX_PATH - 1);
-        rel_buf[MAX_PATH - 1] = '\0';
-    }
-    kfree(par_rel);
-
-    int crossed = 0;
-    dentry_t *child = NULL;
-    err = vfs_step(parent_d, &parent_mnt, comps[n - 1], rel_buf, 1,
-                   &crossed, &child);
-    kfree(rel_buf);
-    dentry_put(parent_d);
-    kfree(path_buf);
-    if (err) return err;
-    *out = child;
-    return 0;
+    return vfs_lookup_from(start, path, out);
 }
 
 int vfs_lookup_nofollow_pub(dentry_t *start, const char *path, dentry_t **out) {
@@ -1234,13 +1142,14 @@ ssize_t vfs_readlink(const char *path, char *buf, size_t size) {
         return -EINVAL;
     }
 
-    /* A node must either be a symlink or have a fs-provided readlink op.
-     * This allows procfs CWD (VNODE_REG + readlink op) to be queried. */
-    int has_readlink_op = vn->mount && vn->mount->fs_type->ops.readlink;
-    if (vn->type != VNODE_LNK && !has_readlink_op) {
+    /* POSIX: readlink requires the named object to be a symbolic link.
+     * Any other type — regular file, directory, etc. — must fail with EINVAL. */
+    if (vn->type != VNODE_LNK) {
         dentry_put(d);
         return -EINVAL;
     }
+
+    int has_readlink_op = vn->mount && vn->mount->fs_type->ops.readlink;
     if (!has_readlink_op) {
         dentry_put(d);
         return -ENOSYS;
