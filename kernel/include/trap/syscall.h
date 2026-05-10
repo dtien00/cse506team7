@@ -110,7 +110,7 @@ int sys_sleep(int seconds);
 int sys_uptime(void);
 void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset);
 int sys_munmap(void *addr, size_t length);
-int sys_brk(void *addr);
+intptr_t sys_brk(void *addr);
 off_t sys_lseek(int fd, off_t offset, int whence);
 int sys_unlink(const char *path);
 int sys_mkdir(const char *path, mode_t mode);

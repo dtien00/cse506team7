@@ -392,7 +392,7 @@ extern int    opterr, optind, optopt;
 int          usleep(unsigned int usec);
 int          uptime(void);
 void        *sbrk(intptr_t increment);
-int          brk(void *addr);
+intptr_t     brk(void *addr);
 ssize_t      fs_getdents(int fd, void *buf, size_t count, int flags);
 int          rename(const char *oldpath, const char *newpath);
 

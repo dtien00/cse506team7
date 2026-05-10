@@ -33,6 +33,7 @@ void run_test_string(us_test_group_t *group);
 void run_test_ctype(us_test_group_t *group);
 void run_test_stdlib(us_test_group_t *group);
 void run_test_sbrk_brk(us_test_group_t *group);
+void run_test_large_io(us_test_group_t *group);
 void run_test_malloc(us_test_group_t *group);
 void run_test_file_io(us_test_group_t *group);
 void run_test_process(us_test_group_t *group);
@@ -192,7 +193,7 @@ int main(int argc, char **argv, char **envp) {
         run_test_string(&groups[idx++]);
         run_test_ctype(&groups[idx++]);
         run_test_stdlib(&groups[idx++]);
-        // run_test_sbrk_brk(&groups[idx++]);
+        run_test_sbrk_brk(&groups[idx++]);
         run_test_file_io(&groups[idx++]);
         run_test_mv_cp(&groups[idx++]);
         run_test_rename_rmdir(&groups[idx++]);
@@ -236,6 +237,7 @@ int main(int argc, char **argv, char **envp) {
         run_test_pgrp(&groups[idx++]);
         run_test_jobctl(&groups[idx++]);
         run_test_links(groups, &idx);
+        run_test_large_io(&groups[idx++]);
         run_test_mmap_file(&groups[idx++]);
         run_test_fsync(&groups[idx++]);
         run_test_cloexec(&groups[idx++]);
