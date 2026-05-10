@@ -2589,7 +2589,7 @@ int sys_sigreturn(trap_frame *frame) {
     frame->a0 = sf.a[0]; frame->a1 = sf.a[1]; frame->a2 = sf.a[2];
     frame->a3 = sf.a[3]; frame->a4 = sf.a[4]; frame->a5 = sf.a[5];
     frame->a6 = sf.a[6]; frame->a7 = sf.a[7];
-    frame->sp  = sp + sizeof(sf);
+    frame->sp  = sf.sp;   /* restore original sp saved before signal delivery */
 
     /* Restore signal mask; strip unmaskable bits for safety. */
     current->signal_mask = sf.saved_mask & ~((1U << KERNEL_SIGKILL)  | (1U << KERNEL_SIGSTOP)  |
