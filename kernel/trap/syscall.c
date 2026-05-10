@@ -2262,9 +2262,10 @@ int sys_sigaction(int sig, const struct sigaction *act, struct sigaction *oldact
     if (sig == SIGKILL || sig == SIGSTOP) return -EINVAL;
 
     if (oldact != NULL) {
-        struct sigaction kold = { .sa_handler = (sighandler_t)current->handlers[sig],
-                                  .sa_mask    = current->sa_masks[sig],
-                                  .sa_flags   = (int)current->sig_flags[sig] };
+        struct sigaction kold = { .sa_handler  = (sighandler_t)current->handlers[sig],
+                                  .sa_mask     = current->sa_masks[sig],
+                                  .sa_flags    = (int)current->sig_flags[sig],
+                                  .sa_restorer = (void (*)(void))current->sa_restorer[sig] };
         if (copy_to_user(oldact, &kold, sizeof(kold)) < 0) return -EFAULT;
     }
 

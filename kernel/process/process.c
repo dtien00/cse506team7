@@ -891,16 +891,16 @@ static int exec_internal(const char *path, char *const argv[],
     // NOTE: current->priority (nice value) and current->signal_mask are
     // intentionally NOT reset here — POSIX requires both to be preserved
     // across exec().  Do not clear these fields in future refactors.
-    // Signal dispositions: SIG_IGN survives exec(); all others reset to SIG_DFL.
-    for (int i = 0; i < 32; i++) {
-        if (current->handlers[i] != (void *)SIG_IGN)
-            current->handlers[i] = (void *)SIG_DFL;
-        for (int i = 1; i < 32; i++) {
-            if (current->handlers[i] != (void *)SIG_DFL &&
-                current->handlers[i] != (void *)SIG_IGN) {
-                current->handlers[i]  = (void *)SIG_DFL;
-                current->sig_flags[i] = 0;  // NEW: clear flags too
-            }
+    /* POSIX: across exec(), SIG_IGN survives; custom handlers reset to SIG_DFL.
+     * All supporting per-signal state (flags, mask, restorer) must also be
+     * cleared when the disposition is reset — same shape as the fork audit. */
+    for (int i = 1; i < 32; i++) {
+        if (current->handlers[i] != (void *)SIG_IGN &&
+            current->handlers[i] != (void *)SIG_DFL) {
+            current->handlers[i]    = (void *)SIG_DFL;
+            current->sig_flags[i]   = 0;
+            current->sa_masks[i]    = 0;
+            current->sa_restorer[i] = NULL;
         }
     }
     // POSIX: close all FDs marked FD_CLOEXEC before the new image starts.
