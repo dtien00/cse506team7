@@ -13,7 +13,10 @@
 #define PAGE 4096
 
 static void restore_brk_or_die(void *saved_break, int code) {
-    if (brk(saved_break) != 0) {
+    /* sys_brk returns the new program break on success (not 0).
+     * Failure is indicated by a return value != saved_break. */
+    void *result = (void *)brk(saved_break);
+    if (result != saved_break) {
         _exit(code);
     }
 }
@@ -133,6 +136,30 @@ static void test_sbrk_retval(us_test_group_t *group) {
          WIFEXITED(status) && WEXITSTATUS(status) == 0);
 }
 
+/* P3 verification: brk(new_addr) must return new_addr on success.
+ * Before the fix sys_brk returned 0 on success; after the fix it returns
+ * the new program break so that musl-style allocators can distinguish
+ * success from failure by comparing the return value to the requested addr. */
+static void test_brk_retval(us_test_group_t *group) {
+    pid_t pid = fork();
+    if (pid == 0) {
+        void *before = (void *)brk(NULL);  /* query: kernel returns current break */
+        void *target = (char *)before + PAGE;
+        void *result = (void *)brk(target);
+        /* On success kernel must return target; on failure it returns old break. */
+        int ok = (result == target);
+        if (ok) {
+            *(volatile char *)before = 0xBB; /* touch the newly mapped page */
+            brk(before);                     /* restore — ignore return */
+        }
+        _exit(ok ? 0 : 1);
+    }
+    int status = 0;
+    waitpid(pid, &status, 0);
+    TEST(group, "brk-retval: brk(new_addr) returns new_addr on success",
+         WIFEXITED(status) && WEXITSTATUS(status) == 0);
+}
+
 void run_test_sbrk_brk(us_test_group_t *group) {
     ut_group_begin(group, "sbrk_brk");
 
@@ -141,6 +168,7 @@ void run_test_sbrk_brk(us_test_group_t *group) {
     test_sbrk_fork_cow(group);
     test_sbrk_sequential(group);
     test_sbrk_retval(group);
+    test_brk_retval(group);
 
     ut_group_end(group);
 }

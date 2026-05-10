@@ -704,24 +704,30 @@ pid_t sys_fork(void) {
     return child->pid;
 }
 
+/* Bounce-buffer size for sys_read / sys_write.
+ * Must be well below KSTACK_SIZE (4096): leaves room for the trap frame,
+ * syscall_handler frame, and this function's own frame. */
+#define SYSCALL_BUF_SZ 256
+
 ssize_t sys_read(int fd, void *buf, size_t count) {
     if (!current || !buf)
         return -EINVAL;
     if (count == 0)
         return 0;
 
-    char *kbuf = (char *) kmalloc(count);
-    if (!kbuf)
-        return -ENOMEM;
-
-    int n = file_read(fd, kbuf, count);
-    if (n > 0 && copy_to_user(buf, kbuf, (size_t)n) < 0) {
-        kfree(kbuf);
-        return -EFAULT;
+    char kbuf[SYSCALL_BUF_SZ];
+    char *dst = (char *)buf;
+    ssize_t total = 0;
+    while ((size_t)total < count) {
+        size_t chunk = count - (size_t)total;
+        if (chunk > SYSCALL_BUF_SZ) chunk = SYSCALL_BUF_SZ;
+        int n = file_read(fd, kbuf, chunk);
+        if (n <= 0) return total > 0 ? total : (ssize_t)n;
+        if (copy_to_user(dst + total, kbuf, (size_t)n) < 0) return -EFAULT;
+        total += n;
+        if ((size_t)n < chunk) break;
     }
-
-    kfree(kbuf);
-    return n;
+    return total;
 }
 
 ssize_t sys_write(int fd, const void *buf, size_t count) {
@@ -730,18 +736,18 @@ ssize_t sys_write(int fd, const void *buf, size_t count) {
     if (count == 0)
         return 0;
 
-    char *kbuf = (char *) kmalloc(count);
-    if (!kbuf)
-        return -ENOMEM;
-
-    if (copy_from_user(kbuf, buf, count) < 0) {
-        kfree(kbuf);
-        return -EFAULT;
+    char kbuf[SYSCALL_BUF_SZ];
+    const char *src = (const char *)buf;
+    ssize_t total = 0;
+    while ((size_t)total < count) {
+        size_t chunk = count - (size_t)total;
+        if (chunk > SYSCALL_BUF_SZ) chunk = SYSCALL_BUF_SZ;
+        if (copy_from_user(kbuf, src + total, chunk) < 0) return -EFAULT;
+        int n = file_write(fd, kbuf, chunk);
+        if (n <= 0) return total > 0 ? total : (ssize_t)n;
+        total += n;
     }
-    int n = file_write(fd, kbuf, count);
-
-    kfree(kbuf);
-    return n;
+    return total;
 }
 
 // int sys_open(const char *path, int flags) {
@@ -1348,11 +1354,11 @@ int sys_munmap(void *addr, size_t length) {
     return 0;
 }
 
-int sys_brk(void *addr) {
+intptr_t sys_brk(void *addr) {
     struct proc *p = current;
     if (p == NULL || p->pagetable == NULL) {
         printk("sys_brk: no current process or page table\n");
-        return -1;
+        return (intptr_t)(-1L);
     }
 
     if (p->sz < USER_HEAP_START) {
@@ -1360,13 +1366,13 @@ int sys_brk(void *addr) {
     }
 
     if (addr == NULL) {
-        return (int)p->sz;
+        return (intptr_t)p->sz;
     }
 
     uintptr_t new_break = (uintptr_t)addr;
 
     if (new_break < USER_HEAP_START || new_break > USER_HEAP_END) {
-        return -1;
+        return (intptr_t)p->sz;   /* return unchanged break, not -1 */
     }
 
     uintptr_t old_break = p->sz;
@@ -1384,7 +1390,7 @@ int sys_brk(void *addr) {
         if (p->rlimits[RLIMIT_DATA].rlim_cur != RLIM_INFINITY) {
             uint64_t new_heap_size = new_break - USER_HEAP_START;
             if (new_heap_size > p->rlimits[RLIMIT_DATA].rlim_cur)
-                return -ENOMEM;
+                return (intptr_t)old_break;   /* return old break on failure */
         }
 
         uintptr_t new_end = PGROUNDUP(new_break);
@@ -1401,10 +1407,10 @@ int sys_brk(void *addr) {
             heap_vma = vma_create(vma_start, vma_end,
                                   VMA_PROT_READ | VMA_PROT_WRITE,
                                   VMA_PRIVATE, VMA_TYPE_HEAP);
-            if (!heap_vma) return -1;
+            if (!heap_vma) return (intptr_t)old_break;
             if (vma_insert(&p->vma_list, heap_vma) != 0) {
                 vma_free(heap_vma);
-                return -1;
+                return (intptr_t)old_break;
             }
         }
     } else if (new_break < old_break) {
@@ -1431,7 +1437,7 @@ int sys_brk(void *addr) {
     }
 
     p->sz = new_break;
-    return 0;
+    return (intptr_t)new_break;   /* return new break on success */
 }
 
 void *sys_sbrk(intptr_t increment) {
@@ -1457,9 +1463,9 @@ void *sys_sbrk(intptr_t increment) {
         return (void *) -1;
     }
 
-    if (sys_brk((void*)new_break) != 0) {
-        /* Propagate ENOMEM so __syscall_ret sets errno correctly.
-         * userspace sbrk() receives (void*)-1 either way. */
+    if ((uintptr_t)sys_brk((void*)new_break) != new_break) {
+        /* brk returned old break (failure) rather than new_break (success).
+         * Propagate ENOMEM so __syscall_ret sets errno correctly. */
         return (void *)(intptr_t)(-ENOMEM);
     }
 
