@@ -191,10 +191,16 @@ static int procfs_write_status(char *out, int out_size, struct proc *p) {
     EMIT("State", st,                         (int)strlen(st));
 
     n = procfs_itoa(p->pid, numbuf, sizeof(numbuf));
+    EMIT("Tgid",  numbuf, n);
+
+    n = procfs_itoa(p->pid, numbuf, sizeof(numbuf));
     EMIT("Pid",   numbuf, n);
 
     n = procfs_itoa(p->parent ? p->parent->pid : 0, numbuf, sizeof(numbuf));
     EMIT("PPid",  numbuf, n);
+
+    n = procfs_itoa((int)p->pgid, numbuf, sizeof(numbuf));
+    EMIT("Pgrp",  numbuf, n);
 
     n = procfs_itoa((int)p->pgid, numbuf, sizeof(numbuf));
     EMIT("Pgid",  numbuf, n);
@@ -627,13 +633,13 @@ static int procfs_readlink(vnode_t *vn, char *buf, size_t size) {
 
 // ── readdir ──────────────────────────────────────────────────────────────────
 
-// PID directory entries (order matches readdir index 0-4)
+// PID directory entries (order matches readdir index 0-5)
 static const struct { const char *name; uint8_t dtype; } pid_dir_entries[] = {
     { "status", DT_REG },
     { "stat",   DT_REG },
     { "smaps",  DT_REG },
-    { "cwd",    DT_REG },
-    { "exe",    DT_REG },
+    { "cwd",    DT_LNK },
+    { "exe",    DT_LNK },
     { "root",   DT_LNK },
 };
 #define PID_DIR_NENTRIES 6

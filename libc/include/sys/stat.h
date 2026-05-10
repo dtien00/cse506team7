@@ -21,6 +21,9 @@
 #define S_ISLNK(m)  (((m) & S_IFMT) == S_IFLNK)
 #define S_ISSOCK(m) (((m) & S_IFMT) == S_IFSOCK)
 
+#define S_ISUID 04000
+#define S_ISGID 02000
+
 #define S_IRWXU 0700
 #define S_IRUSR 0400
 #define S_IWUSR 0200
@@ -43,7 +46,10 @@ struct stat {
     nlink_t         st_nlink;
     uid_t           st_uid;
     gid_t           st_gid;
+    dev_t           st_rdev;
     off_t           st_size;
+    blksize_t       st_blksize;
+    blkcnt_t        st_blocks;
     struct timespec st_atim;
     struct timespec st_mtim;
     struct timespec st_ctim;
@@ -52,6 +58,15 @@ struct stat {
 #define st_atime st_atim.tv_sec
 #define st_mtime st_mtim.tv_sec
 #define st_ctime st_ctim.tv_sec
+
+/* Required even when MQ/SEM/SHM are not distinct file types; evaluate to 0. */
+#define S_TYPEISMQ(buf)  0
+#define S_TYPEISSEM(buf) 0
+#define S_TYPEISSHM(buf) 0
+
+/* Nanosecond timestamps for futimens()/utimensat(); outside [0,999999999]. */
+#define UTIME_NOW  0x3fffffff
+#define UTIME_OMIT 0x3ffffffe
 
 int stat(const char *pathname, struct stat *statbuf);
 int lstat(const char *pathname, struct stat *statbuf);
@@ -65,5 +80,7 @@ int chmod(const char *pathname, mode_t mode);
 int fchmod(int fd, mode_t mode);
 int fchmodat(int fd, const char *pathname, mode_t mode, int flags);
 int futimens(int fd, const struct timespec times[2]);
+int utimensat(int, const char *, const struct timespec [2], int);
+mode_t umask(mode_t);
 
 #endif

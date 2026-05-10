@@ -1,8 +1,7 @@
 #ifndef _TERMIOS_H
 #define _TERMIOS_H
 
-#include "types.h"
-#include <sys/types.h>   // pid_t (per POSIX termios.h requirement)
+#include "sys/types.h"   /* pid_t, cc_t base types */
 
 typedef uint32_t tcflag_t;
 typedef uint32_t speed_t;

@@ -98,10 +98,11 @@ void procfs_test_run(void) {
             char dbuf[512];
             uint32_t entries = 0;
             int dn = vfs_readdir(pid_dentry, 0, dbuf, sizeof(dbuf), &entries);
-            TEST("vfs_readdir(/proc/<pid>) returns 5 entries", dn > 0 && entries == 5);
+            TEST("vfs_readdir(/proc/<pid>) returns 6 entries", dn > 0 && entries == 6);
 
             // Verify expected names appear
             int has_status = 0, has_stat = 0, has_cwd = 0, has_exe = 0, has_root = 0;
+            int has_smaps = 0;
             char *p2 = dbuf;
             for (uint32_t i = 0; i < entries; i++) {
                 fs_dent_t *de = (fs_dent_t *)p2;
@@ -110,6 +111,7 @@ void procfs_test_run(void) {
                 if (strcmp(de->d_name, "cwd")    == 0) has_cwd    = 1;
                 if (strcmp(de->d_name, "exe")    == 0) has_exe    = 1;
                 if (strcmp(de->d_name, "root")   == 0) has_root   = 1;
+                if (strcmp(de->d_name, "smaps")  == 0) has_smaps  = 1;
                 p2 += de->d_reclen;
             }
             TEST("procfs pid dir has status", has_status);
@@ -117,6 +119,7 @@ void procfs_test_run(void) {
             TEST("procfs pid dir has cwd",    has_cwd);
             TEST("procfs pid dir has exe",    has_exe);
             TEST("procfs pid dir has root",   has_root);
+            TEST("procfs pid dir has smaps",  has_smaps);
             dentry_put(pid_dentry);
         }
     }
@@ -133,8 +136,11 @@ void procfs_test_run(void) {
         if (n > 0) {
             TEST("status contains Name",        contains_substring(buf, "Name:"));
             TEST("status contains State",       contains_substring(buf, "State:"));
+            TEST("status contains Tgid",        contains_substring(buf, "Tgid:"));
             TEST("status contains Pid",         contains_substring(buf, "Pid:"));
             TEST("status contains PPid",        contains_substring(buf, "PPid:"));
+            TEST("status contains Pgid",        contains_substring(buf, "Pgid:"));
+            TEST("status contains Sid",         contains_substring(buf, "Sid:"));
             TEST("status contains VmSize",      contains_substring(buf, "VmSize:"));
             TEST("status contains KernelStack", contains_substring(buf, "KernelStack:"));
             TEST("status contains SigPnd",      contains_substring(buf, "SigPnd:"));
@@ -178,6 +184,23 @@ void procfs_test_run(void) {
             TEST("cwd readlink starts with /", link_buf[0] == '/');
     }
 
+    // ── /proc/self/cwd read as file ───────────────────────────────────────
+
+    {
+        int cwd_fd = file_open("/proc/self/cwd");
+        TEST("file_open(/proc/self/cwd) succeeds", cwd_fd >= 0);
+        if (cwd_fd >= 0) {
+            char cwd_buf[256];
+            int cn = file_read(cwd_fd, cwd_buf, sizeof(cwd_buf) - 1);
+            TEST("file_read(/proc/self/cwd) returns positive length", cn > 0);
+            if (cn > 0) {
+                cwd_buf[cn] = '\0';
+                TEST("cwd read-as-file starts with /", cwd_buf[0] == '/');
+            }
+            file_close(cwd_fd);
+        }
+    }
+
     // ── /proc/self/root readlink ───────────────────────────────────────────
 
     {
@@ -185,6 +208,18 @@ void procfs_test_run(void) {
         TEST("vfs_readlink(/proc/self/root) returns positive length", r > 0);
         if (r > 0)
             TEST("root readlink starts with /", link_buf[0] == '/');
+    }
+
+    // ── /proc/self/smaps ──────────────────────────────────────────────────
+
+    {
+        char smaps_buf[512];
+        int sn = read_proc_file("/proc/self/smaps", smaps_buf, sizeof(smaps_buf));
+        TEST("file_read(/proc/self/smaps) returns bytes", sn > 0);
+        if (sn > 0) {
+            TEST("smaps contains VmSize",      contains_substring(smaps_buf, "VmSize:"));
+            TEST("smaps contains KernelStack", contains_substring(smaps_buf, "KernelStack:"));
+        }
     }
 
     // ── /proc/<bad>/status → ENOENT ───────────────────────────────────────

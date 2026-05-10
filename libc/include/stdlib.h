@@ -1,7 +1,10 @@
 #ifndef _STDLIB_H
 #define _STDLIB_H
 
-#include "stddef.h"   /* size_t, wchar_t, NULL */
+#include "stddef.h"    /* size_t, wchar_t, NULL */
+#include "fcntl.h"     /* O_APPEND, O_CLOEXEC, O_CLOFORK, O_SYNC [CX] */
+#include "sys/wait.h"  /* WCOREDUMP, WEXITSTATUS, WIFEXITED, WIFSIGNALED,
+                          WIFSTOPPED, WNOHANG, WSTOPSIG, WTERMSIG, WUNTRACED [CX] */
 
 /* --- Termination --- */
 #define EXIT_SUCCESS  0

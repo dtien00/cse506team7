@@ -39,6 +39,22 @@ static void boot_wait_for_first_tick(void) {
         asm volatile("wfi");
 }
 
+#ifdef RUN_TESTS
+static void test_reset_scheduler_state(void) {
+    extern struct proc *mlfq[];
+    extern struct proc *blocked_queue;
+
+    for (int i = 0; i < MLFQ_LEVELS; i++)
+        mlfq[i] = NULL;
+    blocked_queue = NULL;
+
+    for (int i = 0; i < MAX_PROCS; i++)
+        proctab[i].next = NULL;
+
+    current = NULL;
+}
+#endif
+
 void run_all_tests(void) {
     // ext2_populate_test_run();
     mem_test_run();
@@ -51,6 +67,10 @@ void run_all_tests(void) {
     sched_fairness_test_run();
     sched_idle_test_run();
     sched_nice_test_run();
+#ifdef RUN_TESTS
+    test_reset_scheduler_state();
+#endif
+    printk("run_all_tests: starting proc_test_run()\n");
     proc_test_run();
     proc_waitpid_test_run();
     procinfo_test_run();

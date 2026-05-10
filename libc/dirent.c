@@ -52,6 +52,7 @@ struct dirent *readdir(DIR *dirp) {
 
     // Populate the caller-visible struct dirent — clean POSIX shape
     dirp->entry.d_ino = kd->d_ino;
+    dirp->entry.d_reclen = (reclen_t) sizeof(struct dirent);
     dirp->entry.d_type = kd->d_type;
 
     size_t nlen = 0;

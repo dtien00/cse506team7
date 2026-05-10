@@ -93,7 +93,9 @@ typedef unsigned long    uint_fast64_t;
 
 /* ── Other required limits ───────────────────────────────────────────────── */
 #define SIZE_MAX         UINT64_MAX
+#ifndef SSIZE_MAX
 #define SSIZE_MAX        INT64_MAX
+#endif
 
 /* ptrdiff_t is signed long on LP64; its limits match intptr */
 #define PTRDIFF_MIN      INT64_MIN
@@ -102,6 +104,12 @@ typedef unsigned long    uint_fast64_t;
 /* sig_atomic_t is typically int */
 #define SIG_ATOMIC_MIN   INT32_MIN
 #define SIG_ATOMIC_MAX   INT32_MAX
+
+/* wchar_t / wint_t limits (compiler-defined; correct for any GCC target) */
+#define WCHAR_MIN  __WCHAR_MIN__
+#define WCHAR_MAX  __WCHAR_MAX__
+#define WINT_MIN   __WINT_MIN__
+#define WINT_MAX   __WINT_MAX__
 
 /* ── Constant expression macros ──────────────────────────────────────────── */
 #define INT8_C(v)        (v)

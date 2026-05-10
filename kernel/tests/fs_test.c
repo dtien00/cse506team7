@@ -594,6 +594,86 @@ void dentry_test(void) {
     }
 }
 
+// readlink EINVAL enforcement: non-symlinks must be rejected at the VFS layer.
+void symlink_readlink_test(void) {
+    printk("=== symlink / readlink tests ===\n");
+
+    char buf[256];
+    ssize_t r;
+
+    // 1. Create a symlink and verify readlink succeeds.
+    vfs_unlink("/tmp/rl_link.txt");
+    int err = vfs_symlink("/hello.txt", "/tmp/rl_link.txt");
+    TEST("vfs_symlink creates link", err == 0);
+    if (err == 0) {
+        r = vfs_readlink("/tmp/rl_link.txt", buf, sizeof(buf) - 1);
+        TEST("readlink on symlink returns positive", r > 0);
+        if (r > 0) {
+            buf[r] = '\0';
+            TEST("readlink returns correct target",
+                 strcmp(buf, "/hello.txt") == 0);
+        }
+        vfs_unlink("/tmp/rl_link.txt");
+    }
+
+    // 2. readlink on a regular tmpfs file must fail with EINVAL.
+    vfs_create("/tmp/rl_plain.txt", 0644);
+    r = vfs_readlink("/tmp/rl_plain.txt", buf, sizeof(buf));
+    TEST("readlink on tmpfs regular file fails", r == -EINVAL);
+    vfs_unlink("/tmp/rl_plain.txt");
+
+    // 3. readlink on a tmpfs directory must fail with EINVAL.
+    vfs_mkdir("/tmp/rl_dir", 0755);
+    r = vfs_readlink("/tmp/rl_dir", buf, sizeof(buf));
+    TEST("readlink on tmpfs directory fails", r == -EINVAL);
+    vfs_rmdir("/tmp/rl_dir");
+
+    // 4. readlink on a tarfs regular file must fail with EINVAL.
+    r = vfs_readlink("/hello.txt", buf, sizeof(buf));
+    TEST("readlink on tarfs regular file fails", r == -EINVAL);
+
+    // 5. readlink on the root directory must fail with EINVAL.
+    r = vfs_readlink("/", buf, sizeof(buf));
+    TEST("readlink on root directory fails", r == -EINVAL);
+
+    // 6. readlink on a nonexistent path must fail (ENOENT, not EINVAL).
+    r = vfs_readlink("/tmp/rl_no_such_file_xyz.txt", buf, sizeof(buf));
+    TEST("readlink on nonexistent path returns -ENOENT", r == -ENOENT);
+
+    // 7. lstat on a symlink must report S_IFLNK.
+    vfs_symlink("/hello.txt", "/tmp/rl_lstat_link.txt");
+    {
+        struct stat st;
+        int sr = file_lstat("/tmp/rl_lstat_link.txt", &st);
+        TEST("lstat on symlink succeeds", sr == 0);
+        TEST("lstat reports symlink type (S_IFLNK)",
+             sr == 0 && ((st.st_mode & 0170000) == 0120000));
+        vfs_unlink("/tmp/rl_lstat_link.txt");
+    }
+
+    // 8. lstat on a regular file must NOT report S_IFLNK.
+    vfs_create("/tmp/rl_reg.txt", 0644);
+    {
+        struct stat st;
+        int sr = file_lstat("/tmp/rl_reg.txt", &st);
+        TEST("lstat on regular file succeeds", sr == 0);
+        TEST("lstat on regular file does NOT report symlink type",
+             sr == 0 && ((st.st_mode & 0170000) != 0120000));
+        vfs_unlink("/tmp/rl_reg.txt");
+    }
+
+    // 9. readlink via a path whose intermediate component is a symlink
+    //    but whose final component is a regular file must fail.
+    vfs_mkdir("/tmp/rl_tgt_dir", 0755);
+    vfs_symlink("/tmp/rl_tgt_dir", "/tmp/rl_dir_link");
+    vfs_create("/tmp/rl_tgt_dir/plain.txt", 0644);
+    r = vfs_readlink("/tmp/rl_dir_link/plain.txt", buf, sizeof(buf));
+    TEST("readlink on regular file through symlink dir fails", r == -EINVAL);
+    vfs_unlink("/tmp/rl_tgt_dir/plain.txt");
+    vfs_unlink("/tmp/rl_dir_link");
+    vfs_rmdir("/tmp/rl_tgt_dir");
+}
+
 void fs_test_run(void) {
     if (fs_test_bind_to_init_proc() < 0) {
         TEST("fs_test setup: bind current to pid 1", 0);
@@ -619,6 +699,9 @@ void fs_test_run(void) {
     printk("\n");
 
     dentry_test();
+    printk("\n");
+
+    symlink_readlink_test();
     printk("\n");
     printk("\n========================================\n");
     printk("  Results: %d passed, %d failed\n", passed, failed);

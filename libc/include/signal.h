@@ -2,8 +2,7 @@
 #define _SIGNAL_H
 
 #include "sys/types.h"
-
-struct timespec;  /* forward declaration for sigtimedwait */
+#include "time.h"
 
 /* ---------- primitive scalar typedefs ---------- */
 typedef int           sig_atomic_t;
@@ -53,6 +52,7 @@ typedef unsigned long sigset_t;
 #define SA_RESTART    0x10000000  /* restart syscall on signal return -- BLOCKED */
 #define SA_NODEFER    0x40000000  /* don't mask this signal while handling it */
 #define SA_NOMASK     SA_NODEFER
+#define SA_RESTORER   0x04000000  /* sa_restorer field is valid */
 #define SA_RESETHAND  0x80000000  /* reset disposition to SIG_DFL after delivery */
 #define SA_ONESHOT    SA_RESETHAND
 
@@ -95,6 +95,50 @@ typedef struct {
     union sigval si_value;
 } siginfo_t;
 
+/* si_code values for SIGILL [CX] */
+#define ILL_ILLOPC  1
+#define ILL_ILLOPN  2
+#define ILL_ILLADR  3
+#define ILL_ILLTRP  4
+#define ILL_PRVOPC  5
+#define ILL_PRVREG  6
+#define ILL_COPROC  7
+#define ILL_BADSTK  8
+
+/* si_code values for SIGFPE [CX] */
+#define FPE_INTDIV  1
+#define FPE_INTOVF  2
+#define FPE_FLTDIV  3
+#define FPE_FLTOVF  4
+#define FPE_FLTUND  5
+#define FPE_FLTRES  6
+#define FPE_FLTINV  7
+#define FPE_FLTSUB  8
+
+/* si_code values for SIGSEGV [CX] */
+#define SEGV_MAPERR 1
+#define SEGV_ACCERR 2
+
+/* si_code values for SIGBUS [CX] */
+#define BUS_ADRALN  1
+#define BUS_ADRERR  2
+#define BUS_OBJERR  3
+
+/* si_code values for SIGCHLD [CX] */
+#define CLD_EXITED    1
+#define CLD_KILLED    2
+#define CLD_DUMPED    3
+#define CLD_TRAPPED   4
+#define CLD_STOPPED   5
+#define CLD_CONTINUED 6
+
+/* si_code values for any signal [CX] */
+#define SI_USER    0
+#define SI_QUEUE   (-1)
+#define SI_TIMER   (-2)
+#define SI_MESGQ   (-3)
+#define SI_ASYNCIO (-4)
+
 typedef struct {
     unsigned long __regs[32];  /* RISC-V GP registers + pc — opaque stub */
 } mcontext_t;
@@ -117,6 +161,7 @@ struct sigaction {
     sigset_t     sa_mask;
     int          sa_flags;
     void        (*sa_sigaction)(int, siginfo_t *, void *);
+    void        (*sa_restorer)(void);   /* set by sigaction() wrapper when SA_RESTORER */
 };
 
 struct sigevent {

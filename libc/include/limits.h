@@ -18,6 +18,13 @@
 #define TIMER_MAX       32      /* max per-process POSIX timers */
 #define TZNAME_MAX      6       /* max bytes in a timezone name */
 #define RE_DUP_MAX      255     /* max occurrences in \{m,n\} interval expression */
+#define LINE_MAX        2048    /* max bytes in a utility input line (= _POSIX2_LINE_MAX) */
+#define RTSIG_MAX       8       /* stub: RT signals unimplemented (= _POSIX_RTSIG_MAX) */
+#define SIGQUEUE_MAX    32      /* stub: queued signals unimplemented (= _POSIX_SIGQUEUE_MAX) */
+#define PTHREAD_DESTRUCTOR_ITERATIONS 4    /* stub: pthreads unimplemented */
+#define PTHREAD_KEYS_MAX              128  /* stub: pthreads unimplemented */
+#define PTHREAD_STACK_MIN             0    /* stub: pthreads unimplemented */
+#define PTHREAD_THREADS_MAX           64   /* stub: pthreads unimplemented */
 #define NSIG_MAX        31      /* maximum signal number (SIGSYS = 31) */
 #define GETENTROPY_MAX  256     /* max bytes returned by getentropy() */
 
@@ -34,6 +41,7 @@
 #define MAX_CANON       255     /* max bytes in a terminal canonical line */
 #define MAX_INPUT       255     /* max bytes in a terminal input queue */
 #define FILESIZEBITS    64      /* bits in off_t (int64_t on LP64) */
+#define TEXTDOMAIN_MAX  252     /* max text domain name length (NAME_MAX - 3) */
 
 /* ---- Memory ---------------------------------------------------------------- */
 #define PAGESIZE        4096    /* RISC-V Sv39 base page size */
@@ -93,6 +101,8 @@
 #define _POSIX_PATH_MAX                     256
 #define _POSIX_PIPE_BUF                     512
 #define _POSIX_RE_DUP_MAX                   255
+#define _POSIX_MQ_OPEN_MAX                  8
+#define _POSIX_MQ_PRIO_MAX                  32
 #define _POSIX_RTSIG_MAX                    8
 #define _POSIX_SEM_NSEMS_MAX                256
 #define _POSIX_SEM_VALUE_MAX                32767
