@@ -427,6 +427,16 @@ access:
     ecall
     j __syscall_ret
 
+truncate:
+    li a7, 104
+    ecall
+    j __syscall_ret
+
+ftruncate:
+    li a7, 105
+    ecall
+    j __syscall_ret
+
 sigreturn:
     li a7, 103
     ecall
