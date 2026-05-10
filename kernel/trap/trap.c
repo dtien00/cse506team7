@@ -5,6 +5,7 @@
 #include "process/process.h"
 #include "trap/syscall.h"
 #include "signal.h"
+#include "sigframe.h"
 #include "mm/vmm.h"
 #include "mm/pmm.h"
 #include "mm/vma.h"
@@ -12,6 +13,7 @@
 #include "drivers/plic.h"
 #include "drivers/uart.h"
 #include "drivers/virtio.h"
+#include "lib/uaccess.h"
 
 #define TIMER_INTERVAL 1000000ULL // ~0.1 second at 10 MHz clock
 
@@ -289,6 +291,44 @@ void handle_exception(trap_frame *frame) {
     }
 }
 
+void signal_dispatch(trap_frame *frame, int sig) {
+    void *restorer = current->sa_restorer[sig];   /* set by libc wrapper (P6) */
+    if (!restorer) { proc_exit(-SIGSEGV); return; }
+
+    /* Allocate sigframe below user sp, 16-byte aligned. */
+    uintptr_t sp = frame->sp - sizeof(struct sigframe);
+    sp &= ~(uintptr_t)0xf;
+
+    /* Save the full interrupted register context. */
+    struct sigframe sf = {
+        .sepc       = frame->sepc,
+        .ra         = frame->ra,
+        .sp         = frame->sp,
+        .gp         = frame->gp,
+        .tp         = frame->tp,
+        .saved_mask = current->signal_mask,
+        .sig        = (uint32_t)sig,
+    };
+    sf.t[0] = frame->t0; sf.t[1] = frame->t1; sf.t[2] = frame->t2;
+    sf.t[3] = frame->t3; sf.t[4] = frame->t4; sf.t[5] = frame->t5;
+    sf.t[6] = frame->t6;
+    sf.s[0]  = frame->s0;  sf.s[1]  = frame->s1;  sf.s[2]  = frame->s2;
+    sf.s[3]  = frame->s3;  sf.s[4]  = frame->s4;  sf.s[5]  = frame->s5;
+    sf.s[6]  = frame->s6;  sf.s[7]  = frame->s7;  sf.s[8]  = frame->s8;
+    sf.s[9]  = frame->s9;  sf.s[10] = frame->s10; sf.s[11] = frame->s11;
+    sf.a[0] = frame->a0; sf.a[1] = frame->a1; sf.a[2] = frame->a2;
+    sf.a[3] = frame->a3; sf.a[4] = frame->a4; sf.a[5] = frame->a5;
+    sf.a[6] = frame->a6; sf.a[7] = frame->a7;
+
+    if (copy_to_user((void *)sp, &sf, sizeof(sf)) < 0) { proc_exit(-SIGSEGV); return; }
+
+    /* Redirect execution to the handler; restorer provides the return path. */
+    frame->sp   = sp;
+    frame->ra   = (uint64_t)(uintptr_t)restorer;
+    frame->a0   = (uint64_t)(uint32_t)sig;
+    frame->sepc = (uint64_t)(uintptr_t)current->handlers[sig];
+}
+
 void trap_handler(trap_frame *frame) {
     // printk("TRAP: Register info scause=%p sip=%p sie=%p\n", (void *) frame->scause, (void *) read_csr(sip),
     //        (void *) read_csr(sie));
@@ -331,6 +371,30 @@ void trap_handler(trap_frame *frame) {
                     ((1U << s) & KERNEL_DFL_IGNORE_SIGS &&
                      current->handlers[s] == (void *)SIG_DFL))
                     current->pending_signals &= ~(1u << s);
+            }
+        }
+        /* Dispatch one pending, unmasked custom handler per trap return.
+           Only SIGKILL is truly uncatchable; SIGSTOP is already excluded by
+           KERNEL_STOP_SIGS.  Signals with a fatal default (SIGUSR1, SIGTERM,
+           etc.) reach this block when a custom handler is installed — the
+           fatal check below only fires for SIG_DFL-disposition signals. */
+        {
+            uint32_t catchable = current->pending_signals
+                                & ~current->signal_mask
+                                & ~(1U << KERNEL_SIGKILL)
+                                & ~KERNEL_STOP_SIGS;
+            while (catchable) {
+                int s = kernel_ctz((uint32_t)catchable);
+                catchable &= catchable - 1;
+                if ((uintptr_t)current->handlers[s] > (uintptr_t)SIG_IGN) {
+                    /* Build sigframe on user stack, redirect sepc to handler. */
+                    signal_dispatch(frame, s);          /* see below */
+                    current->pending_signals &= ~(1u << s);
+                    /* Block signal during handler per POSIX §2.4.3, unless SA_NODEFER. */
+                    if (!(current->sig_flags[s] & SA_NODEFER))
+                        current->signal_mask |= (1u << s) | current->sa_masks[s];
+                    break;   /* one handler per kernel exit; re-enter for others */
+                }
             }
         }
 
@@ -725,7 +789,6 @@ void timer_handler(void) {
     if (timer_ticks % MLFQ_BOOST_INTERVAL == 0)
         mlfq_boost();
 }
-
 // Set/clear the SIE (supervisor interrupt enable) bit in sstatus
 void interrupts_on(void) { set_csr_bit(sstatus, SSTATUS_SIE); }
 void interrupts_off(void) { clear_csr_bit(sstatus, SSTATUS_SIE); }

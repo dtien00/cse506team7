@@ -59,9 +59,10 @@ typedef void        (*sighandler_t)(int);
 #define SA_NOMASK     SA_NODEFER
 #define SA_RESETHAND  0x80000000  /* reset disposition to SIG_DFL after delivery */
 #define SA_ONESHOT    SA_RESETHAND
+#define SA_RESTORER   0x04000000  /* sa_restorer field is valid (set by libc wrapper) */
 
 /* Mask of flags this kernel actually honors; all others are accepted but silently ignored. */
-#define SA_KNOWN_FLAGS  (SA_NOCLDSTOP | SA_NOCLDWAIT | SA_RESETHAND | SA_NODEFER)
+#define SA_KNOWN_FLAGS  (SA_NOCLDSTOP | SA_NOCLDWAIT | SA_RESETHAND | SA_NODEFER | SA_RESTORER)
 
 typedef unsigned long sigset_t;
 
@@ -85,6 +86,7 @@ struct sigaction {
     sigset_t      sa_mask;
     int           sa_flags;
     void        (*sa_sigaction)(void);  /* kernel-internal; matches libc sa_sigaction slot */
+    void        (*sa_restorer)(void);   /* libc-provided sigreturn stub; valid when SA_RESTORER set */
 };
 
 /* Field order matches libc stack_t (ss_sp, ss_size, ss_flags) for ABI consistency. */

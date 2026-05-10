@@ -83,6 +83,7 @@
 #define SYS_fpathconf   100  /* long fpathconf(int fd, int name) */
 #define SYS_fcntl       101  /* int fcntl(int fd, int cmd, long arg) */
 #define SYS_fstatat     102  /* int fstatat(int dirfd, const char *, struct stat *, int flags) */
+#define SYS_sigreturn   103  /* int sigreturn(trap_frame *frame) */
 
 #define AT_FDCWD            (-100)
 #define AT_SYMLINK_NOFOLLOW 0x100
@@ -166,3 +167,4 @@ int sys_getrlimit(int resource, struct rlimit *user_rlim);
 int sys_setrlimit(int resource, const struct rlimit *user_rlim);
 long pathconf(const char *path, int name);
 long fpathconf(int fd, int name);
+int sys_sigreturn(trap_frame *frame);

@@ -126,9 +126,10 @@ void run_test_sigaction(us_test_group_t *group) {
     prev = signal(SIGSTOP, SIG_IGN);
     TEST(group, "signal: SIGSTOP returns SIG_ERR", prev == SIG_ERR);
 
-    /* 1f. Function pointer rejected (BLOCKED-8) */
+    /* 1f. Function pointer accepted — libc signal() injects SA_RESTORER */
     prev = signal(SIGUSR1, (sighandler_t)dummy_handler_addr);
-    TEST(group, "signal: function handler returns SIG_ERR (BLOCKED-8)", prev == SIG_ERR);
+    TEST(group, "signal: function handler accepted (returns previous disposition)", prev == SIG_DFL);
+    signal(SIGUSR1, SIG_DFL); /* restore before next test */
 
     /* ── §2 sigaction() API ──────────────────────────────────────────────── */
 
@@ -177,10 +178,12 @@ void run_test_sigaction(us_test_group_t *group) {
     r = sigaction(32, &act, NULL);
     TEST(group, "sigaction: sig=32 out-of-range (returns < 0)", r < 0);
 
-    /* 2i. Function pointer rejected */
+    /* 2i. Function pointer accepted — libc sigaction() wrapper injects SA_RESTORER */
     act.sa_handler = (sighandler_t)dummy_handler_addr;
     r = sigaction(SIGUSR1, &act, NULL);
-    TEST(group, "sigaction: function pointer rejected (returns < 0)", r < 0);
+    TEST(group, "sigaction: function pointer accepted (returns 0)", r == 0);
+    act.sa_handler = SIG_DFL;
+    sigaction(SIGUSR1, &act, NULL); /* restore before §3 */
 
     /* ── §3 SIG_IGN prevents fatal termination ──────────────────────────── */
     /*

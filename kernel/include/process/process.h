@@ -185,6 +185,8 @@ struct proc {
     // Signal handlers
     void *handlers[32]; // existing SIG_DFL / SIG_IGN per signal
     uint32_t sig_flags[32]; // sa_flags bits stored per signal
+    uint32_t sa_masks[32]; // signals to block during handler
+    void *sa_restorer[32]; // libc-provided sigreturn stub
 
     // Process group and session management
     pid_t pgid;

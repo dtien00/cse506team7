@@ -61,6 +61,8 @@ void run_test_gettimeofday(us_test_group_t *group);
 void run_test_alarm(us_test_group_t *group);
 void run_test_sigaction(us_test_group_t *group);
 void run_test_sigsuspend(us_test_group_t *group);
+void run_test_sigprocmask(us_test_group_t *group);
+void run_test_sighandler(us_test_group_t *group);
 void run_test_time(us_test_group_t *group);
 void run_test_termios_tty(us_test_group_t *group);
 void run_test_pgrp(us_test_group_t *group);
@@ -137,7 +139,7 @@ void run_test_python_smoke(us_test_group_t *group);
  *                   malloc, lazy_alloc (8 MB mmap, 4 MB sbrk regions)
  */
 static const int RUN_ALL_TESTS   = 1;
-static const int RUN_FORK_HEAVY  = RUN_ALL_TESTS && 0;
+static const int RUN_FORK_HEAVY  = RUN_ALL_TESTS && 1;
 static const int RUN_MEMORY_HEAVY = RUN_ALL_TESTS && 0;
 static const int RUN_STRESS_TESTS = RUN_ALL_TESTS || 0;
 static const int RUN_PYTHON_TESTS = RUN_ALL_TESTS && 0;
@@ -229,6 +231,8 @@ int main(int argc, char **argv, char **envp) {
         run_test_alarm(&groups[idx++]);
         run_test_sigaction(&groups[idx++]);
         run_test_sigsuspend(&groups[idx++]);
+        run_test_sigprocmask(&groups[idx++]);
+        run_test_sighandler(&groups[idx++]);
         run_test_pgrp(&groups[idx++]);
         run_test_jobctl(&groups[idx++]);
         run_test_links(groups, &idx);

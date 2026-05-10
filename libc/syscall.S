@@ -45,7 +45,7 @@
 .global rename
 .global gettimeofday
 .global alarm
-.global sigaction
+.global __sigaction_raw
 .global sigpending
 .global sigsuspend
 .global tcgetattr
@@ -67,6 +67,7 @@
 .global setrlimit
 .global pathconf
 .global fpathconf
+.global sigreturn
 .global __syscall_fcntl
 
 mmap:
@@ -309,7 +310,7 @@ tcgetattr:
     ecall
     j __syscall_ret
 
-sigaction:
+__sigaction_raw:
     li a7, 38
     ecall
     j __syscall_ret
@@ -417,6 +418,12 @@ fpathconf:
 
 __syscall_fcntl:
     li a7, 101
+    ecall
+    j __syscall_ret
+
+
+sigreturn:
+    li a7, 103
     ecall
     j __syscall_ret
 
