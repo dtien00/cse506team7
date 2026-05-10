@@ -645,6 +645,7 @@ pid_t sys_fork(void) {
 
     /* Child inherits parent's resource limits (POSIX). */
     memcpy(child->rlimits, current->rlimits, sizeof(current->rlimits));
+    memcpy(child->exe_path, current->exe_path, sizeof(current->exe_path));
 
     /* Child starts one level below the parent so a timer-preempted parent
      * re-enters at the same level as the child; LIFO insertion then keeps
