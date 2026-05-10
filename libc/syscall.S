@@ -62,6 +62,7 @@
 .globl setitimer
 .global fsync
 .global fdatasync
+.global access
 .global sysconf
 .global getrlimit
 .global setrlimit
@@ -417,6 +418,11 @@ fpathconf:
 
 __syscall_fcntl:
     li a7, 101
+    ecall
+    j __syscall_ret
+
+access:
+    li a7, 43
     ecall
     j __syscall_ret
 

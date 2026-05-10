@@ -49,12 +49,6 @@ int isatty(int fd) {
     return 0;
 }
 
-int access(const char *pathname, int mode) {
-    (void)pathname; (void)mode;
-    errno = ENOSYS;
-    return -1;
-}
-
 /* getpgid / setpgid / getpgrp / setsid are real syscall wrappers in syscall.S.
  * setpgrp() is a BSD convenience equivalent to setpgid(0, 0). */
 int setpgrp(void) {

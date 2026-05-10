@@ -411,6 +411,10 @@ void syscall_handler(trap_frame *frame) {
             ret = sys_lstat((const char *)arg0, (void *)arg1);
             break;
 
+        case SYS_access:
+            ret = sys_access((const char *)arg0, (int)arg1);
+            break;
+
         case SYS_fstatat:
             ret = sys_fstatat((int)arg0, (const char *)arg1, (struct stat *)arg2, (int)arg3);
             break;
@@ -1873,6 +1877,35 @@ int sys_lstat(const char *upath, struct stat *ustat)
     if (ret != 0) return ret;
 
     if (copy_to_user(ustat, &kst, sizeof(struct stat)) < 0) return -EFAULT;
+    return 0;
+}
+
+int sys_access(const char *upath, int mode)
+{
+    if (!current || !upath) return -EINVAL;
+
+    char *kpath = kmalloc(MAX_PATH);
+    if (!kpath) return -ENOMEM;
+    if (strncpy_from_user(kpath, upath, MAX_PATH - 1) < 0) { kfree(kpath); return -EFAULT; }
+    kpath[MAX_PATH - 1] = '\0';
+
+    struct stat kst;
+    int ret = file_stat(kpath, &kst);
+    kfree(kpath);
+    if (ret != 0) return ret;
+
+    if (mode == 0 /* F_OK */) return 0;
+
+    /* POSIX: check requested permission bits against inode mode.
+     * No uid/gid — treat caller as root owning everything, so check
+     * the union of owner|group|other bits for each requested access. */
+    if ((mode & 4 /* R_OK */) && !(kst.st_mode & (0400 | 0040 | 0004)))
+        return -EACCES;
+    if ((mode & 2 /* W_OK */) && !(kst.st_mode & (0200 | 0020 | 0002)))
+        return -EACCES;
+    if ((mode & 1 /* X_OK */) && !(kst.st_mode & (0100 | 0010 | 0001)))
+        return -EACCES;
+
     return 0;
 }
 

@@ -32,6 +32,7 @@
 #define SYS_getppid  21
 #define SYS_pipe     22
 #define SYS_dup      23
+#define SYS_access   43
 #define SYS_getuid   174  /* Linux RISC-V ABI; matches libc/syscall.S "li a7, 174" */
 #define SYS_geteuid  175
 #define SYS_getegid  177
@@ -129,6 +130,7 @@ int sys_fs_getdents(int fd, void *dirp, uint32_t count);
 int sys_stat(const char *upath, struct stat *ustat);
 int sys_fstat(int fd, struct stat *ustat);
 int sys_lstat(const char *upath, struct stat *ustat);
+int sys_access(const char *upath, int mode);
 int sys_fstatat(int dirfd, const char *upath, struct stat *ustat, int flags);
 int sys_chmod(const char *upath, mode_t mode);
 int sys_fchmod(int fd, mode_t mode);
