@@ -931,6 +931,42 @@ int vfs_fchmod(vnode_t *vn, mode_t mode) {
     return -EROFS;
 }
 
+int vfs_ftruncate(vnode_t *vn, off_t length) {
+    if (!vn || length < 0) return -EINVAL;
+    if (vn->type != VNODE_REG) return -EINVAL;
+    if (vn->mount && vn->mount->fs_type->ops.truncate)
+        return vn->mount->fs_type->ops.truncate(vn, length);
+    return -EROFS;
+}
+
+int vfs_truncate(const char *path, off_t length) {
+    if (!path || length < 0) return -EINVAL;
+
+    dentry_t *d = NULL;
+    int err = vfs_lookup_from(
+        current && current->fs ? current->fs->cwd : vfs_root,
+        path, &d);
+    if (err) return err;
+
+    vnode_t *vn = d->d_vnode;
+    int ret = (vn->type != VNODE_REG) ? -EINVAL : -EROFS;
+    if (vn->type == VNODE_REG && vn->mount && vn->mount->fs_type->ops.truncate)
+        ret = vn->mount->fs_type->ops.truncate(vn, length);
+    dentry_put(d);
+    return ret;
+}
+
+int vfs_utimensat(vnode_t *vn, const struct timespec *times) {
+    if (!vn) return -EINVAL;
+    if (times) {
+        vn->atime = times[0].tv_sec;
+        vn->mtime = times[1].tv_sec;
+    } else {
+        vn->atime = vn->mtime = 0;
+    }
+    return 0;
+}
+
 int vfs_rmdir(const char *path) {
     if (!path) return -EINVAL;
 

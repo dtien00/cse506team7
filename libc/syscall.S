@@ -70,6 +70,15 @@
 .global fpathconf
 .global sigreturn
 .global __syscall_fcntl
+.global truncate
+.global ftruncate
+.global umask
+.global fchdir
+.global utimensat
+.global futimens
+.global chown
+.global lchown
+.global fchown
 
 mmap:
     li a7, 14
@@ -424,6 +433,54 @@ __syscall_fcntl:
 
 access:
     li a7, 43
+    ecall
+    j __syscall_ret
+
+truncate:
+    li a7, 104
+    ecall
+    j __syscall_ret
+
+ftruncate:
+    li a7, 105
+    ecall
+    j __syscall_ret
+
+umask:
+    li a7, 106
+    ecall
+    j __syscall_ret
+
+fchdir:
+    li a7, 108
+    ecall
+    j __syscall_ret
+
+utimensat:
+    li a7, 109
+    ecall
+    j __syscall_ret
+
+futimens:
+    mv a2, a1      /* times → arg2 */
+    mv a1, zero    /* path = NULL */
+    li a3, 0       /* flags = 0 */
+    li a7, 109
+    ecall
+    j __syscall_ret
+
+chown:
+    li a7, 110
+    ecall
+    j __syscall_ret
+
+lchown:
+    li a7, 111
+    ecall
+    j __syscall_ret
+
+fchown:
+    li a7, 112
     ecall
     j __syscall_ret
 

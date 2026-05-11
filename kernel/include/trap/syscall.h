@@ -85,6 +85,15 @@
 #define SYS_fcntl       101  /* int fcntl(int fd, int cmd, long arg) */
 #define SYS_fstatat     102  /* int fstatat(int dirfd, const char *, struct stat *, int flags) */
 #define SYS_sigreturn   103  /* int sigreturn(trap_frame *frame) */
+#define SYS_truncate    104  /* int truncate(const char *path, off_t length) */
+#define SYS_ftruncate   105  /* int ftruncate(int fd, off_t length) */
+#define SYS_umask       106  /* mode_t umask(mode_t mask) */
+/* 107 = SYS_lstat (already defined above) */
+#define SYS_fchdir      108  /* int fchdir(int fd) */
+#define SYS_utimensat   109  /* int utimensat(int dirfd, const char *, const struct timespec[2], int) */
+#define SYS_chown       110  /* int chown(const char *, uid_t, gid_t) */
+#define SYS_lchown      111  /* int lchown(const char *, uid_t, gid_t) */
+#define SYS_fchown      112  /* int fchown(int fd, uid_t uid, gid_t gid) */
 
 #define AT_FDCWD            (-100)
 #define AT_SYMLINK_NOFOLLOW 0x100
@@ -170,3 +179,11 @@ int sys_setrlimit(int resource, const struct rlimit *user_rlim);
 long pathconf(const char *path, int name);
 long fpathconf(int fd, int name);
 int sys_sigreturn(trap_frame *frame);
+int sys_truncate(const char *upath, off_t length);
+int sys_ftruncate(int fd, off_t length);
+mode_t sys_umask(mode_t mask);
+int sys_fchdir(int fd);
+int sys_utimensat(int dirfd, const char *upath, const struct timespec *utimes, int flags);
+int sys_chown(const char *upath, uid_t uid, gid_t gid);
+int sys_lchown(const char *upath, uid_t uid, gid_t gid);
+int sys_fchown(int fd, uid_t uid, gid_t gid);

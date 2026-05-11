@@ -60,7 +60,7 @@ typedef struct filesystem_operations {
     int (*create)(struct mount *mnt, const char *path, uint32_t mode);
     int (*unlink)(struct mount *mnt, const char *path);
     int (*mkdir)(struct mount *mnt, const char *path, uint32_t mode);
-    int (*truncate)(vnode_t *vnode);
+    int (*truncate)(vnode_t *vnode, off_t length);
     int (*readdir)(struct mount *mnt, vnode_t *vnode, uint32_t start_idx, void *buf, uint32_t buf_size,
                    uint32_t *entries_out);
     int (*chmod)(struct mount *mnt, vnode_t *vnode, mode_t mode);
@@ -115,6 +115,9 @@ int vfs_unlink(const char *path);
 int vfs_mkdir(const char *path, uint32_t mode);
 int vfs_chmod(const char *path, mode_t mode);
 int vfs_fchmod(vnode_t *vn, mode_t mode);
+int vfs_truncate(const char *path, off_t length);
+int vfs_ftruncate(vnode_t *vn, off_t length);
+int vfs_utimensat(vnode_t *vn, const struct timespec *times);
 int vfs_rmdir(const char *path);
 int vfs_chdir(const char *kpath);
 int vfs_readdir(dentry_t *dentry, uint32_t start_idx, void *buf, uint32_t bufsize, uint32_t *entries_out);
