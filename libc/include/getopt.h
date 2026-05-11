@@ -1,6 +1,9 @@
 #ifndef _GETOPT_H
 #define _GETOPT_H
 
+/* getopt() and the opt* globals live in <unistd.h> per POSIX */
+#include "unistd.h"
+
 /* has_arg values for struct option */
 #define no_argument       0
 #define required_argument 1
@@ -13,10 +16,7 @@ struct option {
     int         val;
 };
 
-extern char *optarg;
-extern int   opterr, optind, optopt;
-
-int getopt(int, char * const [], const char *);
+/* GNU extensions — not in POSIX */
 int getopt_long(int, char * const [], const char *,
                 const struct option *, int *);
 int getopt_long_only(int, char * const [], const char *,
