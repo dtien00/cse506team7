@@ -2,6 +2,7 @@
 #include "stdarg.h"
 #include "termios.h"
 #include "errno.h"
+#include "unistd.h"
 
 int ioctl(int fd, unsigned long request, ...) {
     va_list ap;
@@ -71,7 +72,7 @@ int tcdrain(int fd)               { (void)fd; return 0; }
 int tcflow(int fd, int act)       { (void)fd; (void)act; return 0; }
 int tcflush(int fd, int q)        { (void)fd; (void)q;   return 0; }
 int tcsendbreak(int fd, int dur)  { (void)fd; (void)dur; return 0; }
-pid_t tcgetsid(int fd)            { (void)fd; return 0; }
+pid_t tcgetsid(int fd)            { (void)fd; return getpid(); }
 
 int tcgetwinsize(int fd, struct winsize *ws) {
     return ioctl(fd, TIOCGWINSZ, ws);
