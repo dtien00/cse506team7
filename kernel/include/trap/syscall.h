@@ -85,7 +85,18 @@
 #define SYS_fcntl       101  /* int fcntl(int fd, int cmd, long arg) */
 #define SYS_fstatat     102  /* int fstatat(int dirfd, const char *, struct stat *, int flags) */
 #define SYS_sigreturn   103  /* int sigreturn(trap_frame *frame) */
+#define SYS_select      104  /* int select(int, fd_set*, fd_set*, fd_set*, timeval*) */
 
+/* Kernel-side fd_set — ABI-identical to libc/include/sys/select.h fd_set */
+#define KSELECT_SETSIZE  1024
+typedef struct {
+    uint64_t fds_bits[KSELECT_SETSIZE / 64];
+} k_fd_set;
+#define KFD_SET(fd, s)    ((s)->fds_bits[(fd)/64] |=  (1ULL << ((fd) % 64)))
+#define KFD_CLR(fd, s)    ((s)->fds_bits[(fd)/64] &= ~(1ULL << ((fd) % 64)))
+#define KFD_ISSET(fd, s)  (!!((s)->fds_bits[(fd)/64] &  (1ULL << ((fd) % 64))))
+#define KFD_ZERO(s)       do { for (int _i = 0; _i < KSELECT_SETSIZE/64; _i++) \
+                                   (s)->fds_bits[_i] = 0; } while (0)
 #define AT_FDCWD            (-100)
 #define AT_SYMLINK_NOFOLLOW 0x100
 
@@ -170,3 +181,5 @@ int sys_setrlimit(int resource, const struct rlimit *user_rlim);
 long pathconf(const char *path, int name);
 long fpathconf(int fd, int name);
 int sys_sigreturn(trap_frame *frame);
+int sys_select(int nfds, k_fd_set *urfds, k_fd_set *uwfds, k_fd_set *uefds,
+               struct timeval_k *utv);

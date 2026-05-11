@@ -70,6 +70,7 @@
 .global fpathconf
 .global sigreturn
 .global __syscall_fcntl
+.global select
 
 mmap:
     li a7, 14
@@ -424,6 +425,11 @@ __syscall_fcntl:
 
 access:
     li a7, 43
+    ecall
+    j __syscall_ret
+
+select:
+    li a7, 104
     ecall
     j __syscall_ret
 
