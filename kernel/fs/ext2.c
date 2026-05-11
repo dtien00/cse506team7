@@ -1233,22 +1233,27 @@ int ext2_mkdir(mount_t *mnt, const char *path, uint32_t mode) {
 }
 
 // Truncate an ext2 file to zero length: free all data blocks and reset size.
-static int ext2_truncate(vnode_t *vnode) {
-    if (!vnode || !vnode->fs_data || !vnode->mount) return -1;
+static int ext2_truncate(vnode_t *vnode, off_t length) {
+    if (!vnode || !vnode->fs_data || !vnode->mount || length < 0) return -1;
 
     ext2_inode_t *inode = (ext2_inode_t *)vnode->fs_data;
     ext2_mount_data_t *mnt = (ext2_mount_data_t *)vnode->mount->fs_data;
 
-    // Refresh from disk so we don't clobber fields (e.g. i_links_count) updated
-    // via another vnode pointing to the same inode (hardlinks).
     ext2_read_inode(mnt, (uint32_t)vnode->ino, inode);
 
-    // Free each allocated direct block
+    if (length > 0) {
+        /* Shrink or sparse-extend: just update i_size */
+        inode->i_size = (uint32_t)length;
+        vnode->size   = (uint32_t)length;
+        ext2_write_inode(mnt, vnode->ino, inode);
+        return 0;
+    }
+
+    /* length == 0: free all data blocks */
     for (int i = 0; i < EXT2_NDIR_BLOCKS; i++) {
         uint32_t blk = inode->i_block[i];
         if (blk == 0) continue;
 
-        // Determine which group owns this block
         uint32_t group = (blk - mnt->sb->s_first_data_block) / mnt->blocks_per_group;
         uint32_t bit   = (blk - mnt->sb->s_first_data_block) % mnt->blocks_per_group;
 
@@ -1264,7 +1269,6 @@ static int ext2_truncate(vnode_t *vnode) {
             ext2_write_gdt(mnt);
         }
         kfree(bitmap);
-
         inode->i_block[i] = 0;
     }
 

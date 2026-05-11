@@ -20,6 +20,9 @@ int ut_suite_end(const us_test_group_t *groups, int count);
 #define TEST(group, name, cond) \
     ut_check((group), (cond), (name), __FILE__, __LINE__)
 
+#define ut_assert(group, cond, name) \
+    ut_check((group), (cond), (name), __FILE__, __LINE__)  // useless change but claude wanted to do this instead of fixing test file so...
+
 #define SKIP(group, name, reason) \
     ut_skip((group), (name), (reason))
 

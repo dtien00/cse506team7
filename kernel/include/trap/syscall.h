@@ -32,6 +32,7 @@
 #define SYS_getppid  21
 #define SYS_pipe     22
 #define SYS_dup      23
+#define SYS_access   43
 #define SYS_getuid   174  /* Linux RISC-V ABI; matches libc/syscall.S "li a7, 174" */
 #define SYS_geteuid  175
 #define SYS_getegid  177
@@ -84,7 +85,16 @@
 #define SYS_fcntl       101  /* int fcntl(int fd, int cmd, long arg) */
 #define SYS_fstatat     102  /* int fstatat(int dirfd, const char *, struct stat *, int flags) */
 #define SYS_sigreturn   103  /* int sigreturn(trap_frame *frame) */
-#define SYS_select      104  /* int select(int, fd_set*, fd_set*, fd_set*, timeval*) */
+#define SYS_truncate    104  /* int truncate(const char *path, off_t length) */
+#define SYS_ftruncate   105  /* int ftruncate(int fd, off_t length) */
+#define SYS_umask       106  /* mode_t umask(mode_t mask) */
+/* 107 = SYS_lstat (already defined above) */
+#define SYS_fchdir      108  /* int fchdir(int fd) */
+#define SYS_utimensat   109  /* int utimensat(int dirfd, const char *, const struct timespec[2], int) */
+#define SYS_chown       110  /* int chown(const char *, uid_t, gid_t) */
+#define SYS_lchown      111  /* int lchown(const char *, uid_t, gid_t) */
+#define SYS_fchown      112  /* int fchown(int fd, uid_t uid, gid_t gid) */
+#define SYS_select      113  /* int select(int, fd_set*, fd_set*, fd_set*, timeval*) */
 
 /* Kernel-side fd_set — ABI-identical to libc/include/sys/select.h fd_set */
 #define KSELECT_SETSIZE  1024
@@ -142,6 +152,7 @@ int sys_fs_getdents(int fd, void *dirp, uint32_t count);
 int sys_stat(const char *upath, struct stat *ustat);
 int sys_fstat(int fd, struct stat *ustat);
 int sys_lstat(const char *upath, struct stat *ustat);
+int sys_access(const char *upath, int mode);
 int sys_fstatat(int dirfd, const char *upath, struct stat *ustat, int flags);
 int sys_chmod(const char *upath, mode_t mode);
 int sys_fchmod(int fd, mode_t mode);
@@ -180,5 +191,13 @@ int sys_setrlimit(int resource, const struct rlimit *user_rlim);
 long pathconf(const char *path, int name);
 long fpathconf(int fd, int name);
 int sys_sigreturn(trap_frame *frame);
+int sys_truncate(const char *upath, off_t length);
+int sys_ftruncate(int fd, off_t length);
+mode_t sys_umask(mode_t mask);
+int sys_fchdir(int fd);
+int sys_utimensat(int dirfd, const char *upath, const struct timespec *utimes, int flags);
+int sys_chown(const char *upath, uid_t uid, gid_t gid);
+int sys_lchown(const char *upath, uid_t uid, gid_t gid);
+int sys_fchown(int fd, uid_t uid, gid_t gid);
 int sys_select(int nfds, k_fd_set *urfds, k_fd_set *uwfds, k_fd_set *uefds,
                struct timeval_k *utv);

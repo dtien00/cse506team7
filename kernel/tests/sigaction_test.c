@@ -46,11 +46,16 @@ static void apply_sigign_filter(struct proc *p) {
     }
 }
 
-/* Simulate the exec() handler-reset loop from process.c. */
+/* Mirror the exec() handler-reset loop from process.c exactly. */
 static void apply_exec_handler_reset(struct proc *p) {
-    for (int i = 0; i < 32; i++) {
-        if (p->handlers[i] != (void *)SIG_IGN)
-            p->handlers[i] = (void *)SIG_DFL;
+    for (int i = 1; i < 32; i++) {
+        if (p->handlers[i] != (void *)SIG_IGN &&
+            p->handlers[i] != (void *)SIG_DFL) {
+            p->handlers[i]    = (void *)SIG_DFL;
+            p->sig_flags[i]   = 0;
+            p->sa_masks[i]    = 0;
+            p->sa_restorer[i] = NULL;
+        }
     }
 }
 
@@ -102,6 +107,25 @@ void sigaction_test_run(void) {
             TEST("sigaction-set: query returns 0", r == 0);
             TEST("sigaction-set: query returns SIG_IGN",
                  oldact.sa_handler == SIG_IGN);
+
+            /* ── sa_restorer round-trip (Tier 2b) ──────────────────────── */
+            /* Install a custom handler with a fake sa_restorer trampoline. */
+            void *fake_trampoline = (void *)sigaction_test_run;
+            act.sa_handler   = (sighandler_t)sigaction_test_run;
+            act.sa_flags     = SA_RESTORER;
+            act.sa_restorer  = (void (*)(void))fake_trampoline;
+            act.sa_mask      = (1U << KERNEL_SIGUSR2) | (1U << KERNEL_SIGALRM); /* no unmaskable bits */
+            r = sys_sigaction(KERNEL_SIGTERM, &act, NULL);
+            TEST("restorer round-trip: install custom handler", r == 0);
+            /* Query old action — oldact must include sa_restorer */
+            r = sys_sigaction(KERNEL_SIGTERM, NULL, &oldact);
+            TEST("restorer round-trip: query returns 0", r == 0);
+            TEST("restorer round-trip: sa_restorer returned in oldact",
+                 oldact.sa_restorer == (void (*)(void))fake_trampoline);
+            TEST("restorer round-trip: sa_flags has SA_RESTORER",
+                 (oldact.sa_flags & SA_RESTORER) != 0);
+            TEST("restorer round-trip: sa_mask returned correctly",
+                 oldact.sa_mask == ((1U << KERNEL_SIGUSR2) | (1U << KERNEL_SIGALRM)));
 
             proc_free(p);
         }
@@ -364,8 +388,11 @@ void sigaction_test_run(void) {
             p->handlers[KERNEL_SIGTERM]  = (void *)SIG_IGN;  /* must survive */
             p->handlers[KERNEL_SIGINT]   = (void *)SIG_DFL;  /* already DFL */
             p->handlers[KERNEL_SIGPIPE]  = (void *)SIG_IGN;  /* must survive */
-            /* Simulate a caught handler (non-DFL/non-IGN); exec must reset it. */
-            p->handlers[SIGUSR1]  = (void *)sigaction_test_run; /* fake */
+            /* Simulate a caught handler with sa_mask and sa_restorer set */
+            p->handlers[SIGUSR1]    = (void *)sigaction_test_run; /* fake */
+            p->sig_flags[SIGUSR1]   = SA_RESTORER;
+            p->sa_masks[SIGUSR1]    = 0xFFFF;
+            p->sa_restorer[SIGUSR1] = (void *)sigaction_test_run; /* fake trampoline */
 
             apply_exec_handler_reset(p);
 
@@ -377,6 +404,12 @@ void sigaction_test_run(void) {
                  p->handlers[KERNEL_SIGINT] == (void *)SIG_DFL);
             TEST("exec-reset: caught handler for SIGUSR1 reset to SIG_DFL",
                  p->handlers[SIGUSR1] == (void *)SIG_DFL);
+            TEST("exec-reset: sig_flags cleared for reset handler",
+                 p->sig_flags[SIGUSR1] == 0);
+            TEST("exec-reset: sa_masks cleared for reset handler",
+                 p->sa_masks[SIGUSR1] == 0);
+            TEST("exec-reset: sa_restorer cleared for reset handler",
+                 p->sa_restorer[SIGUSR1] == NULL);
             TEST("exec-reset: SIGKILL still SIG_DFL after reset",
                  p->handlers[KERNEL_SIGKILL] == (void *)SIG_DFL);
 
