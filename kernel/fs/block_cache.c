@@ -23,6 +23,11 @@ static inline void intr_unlock(uint64_t saved) {
 
 static block_cache_t cache;
 static int cache_initialized = 0;
+static void (*race_hook)(uint32_t) = NULL;
+
+void block_cache_debug_set_race_hook(void (*fn)(uint32_t block_num)) {
+    race_hook = fn;
+}
 
 // Initialize block cache
 void block_cache_init(void) {
@@ -43,6 +48,7 @@ void block_cache_init(void) {
         }
         cache.blocks[i].valid = 0;
         cache.blocks[i].dirty = 0;
+        cache.blocks[i].in_flight = 0;
         cache.blocks[i].block_num = 0;
         cache.blocks[i].last_access = 0;
     }
@@ -65,21 +71,29 @@ static cached_block_t *find_cache_block(uint32_t block_num) {
 
 // Find an empty or LRU slot. If the LRU slot is dirty, write it back first
 // (with interrupts enabled so the virtio IRQ can fire).
-// Returns the slot with valid=0 and dirty=0, ready for use.
+// Returns the slot with valid=0, dirty=0, in_flight=1 — caller owns it.
+// Must be called with interrupts ENABLED. Caller must clear in_flight when done.
 static cached_block_t *find_free_cache_block(void) {
-    // First, try to find an invalid (empty) block
+    // First, try to find an invalid (empty) block that isn't in-flight
     for (int i = 0; i < BLOCK_CACHE_SIZE; i++) {
-        if (!cache.blocks[i].valid) {
+        if (!cache.blocks[i].valid && !cache.blocks[i].in_flight) {
+            cache.blocks[i].in_flight = 1;
             return &cache.blocks[i];
         }
     }
 
-    // All blocks are valid, find LRU (least recently used)
-    cached_block_t *lru = &cache.blocks[0];
-    for (int i = 1; i < BLOCK_CACHE_SIZE; i++) {
-        if (cache.blocks[i].last_access < lru->last_access) {
+    // All blocks are valid (or in-flight); find LRU non-in-flight slot
+    cached_block_t *lru = NULL;
+    for (int i = 0; i < BLOCK_CACHE_SIZE; i++) {
+        if (cache.blocks[i].in_flight)
+            continue;
+        if (!lru || cache.blocks[i].last_access < lru->last_access)
             lru = &cache.blocks[i];
-        }
+    }
+
+    if (!lru) {
+        printk("block_cache: all slots in-flight\n");
+        return NULL;
     }
 
     if (lru->dirty) {
@@ -95,6 +109,7 @@ static cached_block_t *find_free_cache_block(void) {
     }
 
     lru->valid = 0;
+    lru->in_flight = 1;
     return lru;
 }
 
@@ -119,28 +134,46 @@ int block_cache_read(uint32_t block_num, void *buf) {
     // write back a dirty block via virtio (IRQ-driven sleep requires IRQs on).
     intr_unlock(s);
 
+    // find_free_cache_block returns slot with in_flight=1 to prevent Race 2
+    // (two concurrent misses grabbing the same LRU slot).
     cb = find_free_cache_block();
     if (!cb) {
         printk("block_cache: no free cache blocks\n");
         return -1;
     }
 
-    // Reserve the slot while we do I/O with interrupts enabled.
+    // Fire test hook here: interrupts ON, lock dropped, slot reserved with
+    // in_flight=1.  A concurrent caller would insert block_num right here.
+    if (race_hook) race_hook(block_num);
+
+    // Recheck: another thread may have loaded block_num during our unlock window.
+    s = intr_lock();
+    cached_block_t *existing = find_cache_block(block_num);
+    if (existing) {
+        // Race 1 resolved: someone else populated it; release our reserved slot.
+        cb->in_flight = 0;
+        existing->last_access = ++cache.access_counter;
+        memcpy(buf, existing->data, BLOCK_SIZE);
+        intr_unlock(s);
+        return 0;
+    }
+    // Claim the slot under lock before dropping again for I/O.
     cb->block_num = block_num;
     cb->valid = 0;
     cb->dirty = 0;
+    intr_unlock(s);
 
     // Read from disk (1 block = 2 sectors for 1KB blocks); IRQ must be enabled.
     uint64_t sector = block_num * 2;
-    // printk("block_cache: reading block %u (sector %llu)\n", block_num, (unsigned long long)sector);
     if (virtio_blk_read(sector, cb->data, 2) != 0) {
         printk("block_cache: failed to read block %u\n", block_num);
+        cb->in_flight = 0;
         return -1;
     }
-    // printk("block_cache: read block %u done\n", block_num);
 
     s = intr_lock();
     cb->valid = 1;
+    cb->in_flight = 0;
     cb->last_access = ++cache.access_counter;
     memcpy(buf, cb->data, BLOCK_SIZE);
     intr_unlock(s);
@@ -162,14 +195,27 @@ int block_cache_write(uint32_t block_num, const void *buf) {
         // find_free_cache_block may write back a dirty block with interrupts on.
         // Release lock first so virtio_blk_write can sleep on IRQ.
         intr_unlock(s);
+        // find_free_cache_block returns slot with in_flight=1 to prevent Race 2.
         cb = find_free_cache_block();
         if (!cb) {
             printk("block_cache: no free cache blocks\n");
             return -1;
         }
-        cb->block_num = block_num;
-        cb->valid = 1;
+        // Fire test hook here: same window as read path.
+        if (race_hook) race_hook(block_num);
+
+        // Recheck: another thread may have loaded block_num during our unlock window.
         s = intr_lock();
+        cached_block_t *existing = find_cache_block(block_num);
+        if (existing) {
+            // Race 1 resolved: use existing slot, release reserved one.
+            cb->in_flight = 0;
+            cb = existing;
+        } else {
+            cb->block_num = block_num;
+            cb->valid = 1;
+            cb->in_flight = 0;
+        }
     }
 
     memcpy(cb->data, buf, BLOCK_SIZE);
@@ -192,6 +238,38 @@ int block_cache_flush_block(uint32_t block_num) {
     }
     cb->dirty = 0;
     return 0;
+}
+
+/* Test-only: count valid slots claiming block_num. >1 ⇒ duplicate-slot bug. */
+int block_cache_debug_count_block(uint32_t block_num) {
+    if (!cache_initialized) return -1;
+    int n = 0;
+    uint64_t s = intr_lock();
+    for (int i = 0; i < BLOCK_CACHE_SIZE; i++) {
+        if (cache.blocks[i].valid && cache.blocks[i].block_num == block_num)
+            n++;
+    }
+    intr_unlock(s);
+    return n;
+}
+
+/* Test-only: reserve an empty slot for block_num as if a concurrent caller
+ * had populated it during another caller's unlocked virtio window. */
+int block_cache_debug_reserve_slot(uint32_t block_num) {
+    if (!cache_initialized) return -1;
+    uint64_t s = intr_lock();
+    for (int i = 0; i < BLOCK_CACHE_SIZE; i++) {
+        if (!cache.blocks[i].valid) {
+            cache.blocks[i].block_num = block_num;
+            cache.blocks[i].valid = 1;
+            cache.blocks[i].dirty = 0;
+            cache.blocks[i].last_access = ++cache.access_counter;
+            intr_unlock(s);
+            return 0;
+        }
+    }
+    intr_unlock(s);
+    return -1;
 }
 
 int block_cache_flush(void) {
