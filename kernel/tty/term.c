@@ -70,6 +70,17 @@ static inline uint32_t ibuf_count(terminal_t *t)
     return (t->ihead - t->itail + TERM_IBUF_SIZE) % TERM_IBUF_SIZE;
 }
 
+/* Wake the line-discipline reader AND any select() waiter.  Safe from ISR. */
+static inline void term_wake(terminal_t *t)
+{
+    proc_wakeup(t);
+    if (t->select_waiter) {
+        struct proc *w = t->select_waiter;
+        t->select_waiter = NULL;
+        proc_wakeup(w);
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Output helper — applies c_oflag processing then calls console_write().
 // Safe to call from both ISR (for echo) and process context (for term_write).
@@ -206,7 +217,7 @@ void term_handle_input(terminal_t *t, char c)
             } else {
                 // No foreground pgid — legacy path: record for term_read()
                 t->sig_pending = sig;
-                proc_wakeup(t);
+                term_wake(t);
             }
             return;
         }
@@ -238,7 +249,7 @@ void term_handle_input(terminal_t *t, char c)
         // EOF on an empty line  (^D) — wake reader to return 0 bytes
         if (c == (char)tm->c_cc[VEOF] && t->llen == 0) {
             t->line_ready = 1;
-            proc_wakeup(t);
+            term_wake(t);
             return;
         }
 
@@ -253,7 +264,7 @@ void term_handle_input(terminal_t *t, char c)
         // Newline or extra EOL character — line is complete
         if (c == '\n' || (tm->c_cc[VEOL] && c == (char)tm->c_cc[VEOL])) {
             t->line_ready = 1;
-            proc_wakeup(t);
+            term_wake(t);
         }
         return;
     }
@@ -269,7 +280,7 @@ void term_handle_input(terminal_t *t, char c)
     // still wakes in case the reader is sleeping on a VTIME timeout (future).
     uint8_t vmin = tm->c_cc[VMIN];
     if (vmin == 0 || ibuf_count(t) >= (uint32_t)vmin)
-        proc_wakeup(t);
+        term_wake(t);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -374,6 +385,16 @@ int term_read(terminal_t *t, char *buf, uint32_t n)
         clear_csr_bit(sstatus, SSTATUS_SUM);
         return (int)got;
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// term_has_input — non-blocking readability check (used by sys_select)
+// ─────────────────────────────────────────────────────────────────────────────
+int term_has_input(terminal_t *t)
+{
+    if (t->termios.c_lflag & ICANON)
+        return t->line_ready;
+    return !ibuf_empty(t);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

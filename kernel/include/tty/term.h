@@ -167,6 +167,11 @@ typedef struct terminal {
 
     // pid of process that opened this terminal as controlling
     pid_t session_leader;
+
+    // Process sleeping in sys_select() waiting for stdin to become readable.
+    // Set by sys_select before sleeping on current; cleared on return.
+    // The ISR calls proc_wakeup(select_waiter) to unblock the select caller.
+    struct proc *select_waiter;
 } terminal_t;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -194,6 +199,10 @@ int term_tcsetattr(terminal_t *t, int action, const struct termios *in);
 
 // Discard unread input
 void term_flush_input(terminal_t *t);
+
+// Return non-zero if the terminal has data ready for reading.
+// Canonical mode: a complete line (line_ready). Raw mode: ibuf non-empty.
+int term_has_input(terminal_t *t);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Global singleton — the one UART-backed terminal

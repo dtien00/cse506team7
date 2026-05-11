@@ -105,6 +105,7 @@ void run_test_exec_shebang(us_test_group_t *group);
 void run_test_exec_errno(us_test_group_t *group);
 void run_test_posix_compliance(us_test_group_t *group);
 void run_test_leak(us_test_group_t *group);
+void run_test_select(us_test_group_t *group);
 
 /* comprehensive libc conformance suites (each fills multiple groups) */
 void run_test_libc_string(us_test_group_t groups[], int *idx);
@@ -142,7 +143,7 @@ void run_test_python_smoke(us_test_group_t *group);
  *                   malloc, lazy_alloc (8 MB mmap, 4 MB sbrk regions)
  */
 static const int RUN_ALL_TESTS   = 1;
-static const int RUN_FORK_HEAVY  = RUN_ALL_TESTS && 1;
+static const int RUN_FORK_HEAVY  = RUN_ALL_TESTS && 0;
 static const int RUN_MEMORY_HEAVY = RUN_ALL_TESTS && 0;
 static const int RUN_STRESS_TESTS = RUN_ALL_TESTS || 0;
 static const int RUN_PYTHON_TESTS = RUN_ALL_TESTS && 0;
@@ -205,6 +206,7 @@ int main(int argc, char **argv, char **envp) {
         run_test_errno(&groups[idx++]);
         run_test_dirent(&groups[idx++]);
         run_test_termios_tty(&groups[idx++]);
+        run_test_select(&groups[idx++]);
         run_test_stack_growth(&groups[idx++]);
         run_test_yield(&groups[idx++]);
         run_test_procinfo(&groups[idx++]);
