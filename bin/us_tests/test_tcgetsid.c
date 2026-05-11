@@ -2,10 +2,10 @@
  * test_tcgetsid.c — Tests for tcgetsid() (libc/ioctl.c).
  *
  * tcgetsid(fd) returns the session ID of the foreground process group leader
- * of the terminal.  Our libc returns getpid() — correct because the kernel
- * lacks per-terminal session tracking and every shell process is its own
- * session leader after setsid().
- *
+ * of the terminal.  Our libc validates fd via tcgetattr (ENOTTY on non-tty)
+ * and returns getpid() for valid tty fds — correct because every shell process
+ * is its own session leader after setsid(), and the kernel lacks a getsid()
+ * syscall for a more precise answer.
  * No fork() needed: all checks are pure libc comparisons.
  */
 
@@ -38,8 +38,19 @@ void run_test_tcgetsid(us_test_group_t *group) {
     TEST(group, "tcgetsid(stdin) == getpid(): job-control gate passes",
          tcgetsid(STDIN_FILENO) == getpid());
 
-    /* Non-tty fd: implementation ignores fd, still returns getpid() */
-    TEST(group, "tcgetsid(-1): returns getpid() (fd ignored)", tcgetsid(-1) == my_pid);
+    /* Non-tty fd (regular file): must return -1 and set errno=ENOTTY (POSIX) */
+    {
+        int rfd = open("/hello.txt", 0 /* O_RDONLY */);
+        if (rfd < 0) {
+            SKIP(group, "tcgetsid(regular file): returns -1 (ENOTTY)", "open(/hello.txt) failed");
+        } else {
+            errno = 0;
+            pid_t sid_file = tcgetsid(rfd);
+            TEST(group, "tcgetsid(regular file): returns -1 (ENOTTY)",
+                 sid_file == (pid_t)-1 && errno == ENOTTY);
+            close(rfd);
+        }
+    }
 
     ut_group_end(group);
 }
