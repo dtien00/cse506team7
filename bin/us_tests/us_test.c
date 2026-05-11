@@ -109,6 +109,8 @@ void run_test_leak(us_test_group_t *group);
 void run_test_getopt(us_test_group_t *group);
 void run_test_getopt_long(us_test_group_t *group);
 void run_test_realpath(us_test_group_t *group);
+void run_test_select(us_test_group_t *group);
+void run_test_tcgetsid(us_test_group_t *group);
 
 /* comprehensive libc conformance suites (each fills multiple groups) */
 void run_test_libc_string(us_test_group_t groups[], int *idx);
@@ -209,6 +211,8 @@ int main(int argc, char **argv, char **envp) {
         run_test_errno(&groups[idx++]);
         run_test_dirent(&groups[idx++]);
         run_test_termios_tty(&groups[idx++]);
+        run_test_select(&groups[idx++]);
+        run_test_tcgetsid(&groups[idx++]);
         run_test_stack_growth(&groups[idx++]);
         run_test_yield(&groups[idx++]);
         run_test_procinfo(&groups[idx++]);

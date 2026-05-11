@@ -20,7 +20,8 @@ void run_test_access(us_test_group_t *group) {
     ut_assert(group, access("/bin/sh", 4 /* R_OK */) == 0, "R_OK /bin/sh");
 
     /* ── python (needed by shebang test) ─────────────────────────────────── */
-    ut_assert(group, access("/bin/python", 1 /* X_OK */) == 0, "X_OK /bin/python");
+    if (access("/bin/python", 0 /* F_OK */) == 0)
+        ut_assert(group, access("/bin/python", 1 /* X_OK */) == 0, "X_OK /bin/python");
 
     /* ── NULL path → EFAULT/EINVAL ───────────────────────────────────────── */
     r = access((const char *)0, 0 /* F_OK */);

@@ -565,6 +565,11 @@ void syscall_handler(trap_frame *frame) {
         case SYS_pathconf:
             ret = sys_pathconf((const char *)arg0, (int)arg1);
             break;
+        
+        case SYS_select:
+            ret = sys_select((int)arg0, (k_fd_set *)arg1, (k_fd_set *)arg2,
+                             (k_fd_set *)arg3, (struct timeval_k *)arg4);
+            break;
 
         case SYS_fpathconf:
             ret = sys_fpathconf((int)arg0, (int)arg1);
@@ -969,6 +974,131 @@ int sys_tcsetattr(int fd, int action, const struct termios *termios_p) {
 pid_t sys_wait(int *status) {
     // Use the new proc_wait implementation for process reaping and blocking
     return proc_wait(status);
+}
+
+/* ------------------------------------------------------------------ */
+/* sys_select                                                           */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Minimal POSIX select for SBUnix:
+ *
+ * readfds:   stdin (FILE_STDIN) blocks until term_has_input(); all other fds
+ *            (regular files, pipes, stdout) are always considered readable.
+ * writefds:  all fds are always writable — SBUnix has no non-blocking writes.
+ * exceptfds: ignored (no OOB data in this kernel).
+ * timeout:   NULL = infinite wait; {0,0} = non-blocking poll; else timed wait.
+ *
+ * Blocking strategy:
+ *   - Set console_term.select_waiter = current so the TTY ISR (term_wake)
+ *     calls proc_wakeup(current) when a line becomes available.
+ *   - Use current->wake_tick for timer-based wakeup (same as nanosleep).
+ *   - Sleep on (current) so both wakeup paths use the same channel.
+ */
+int sys_select(int nfds, k_fd_set *urfds, k_fd_set *uwfds, k_fd_set *uefds,
+               struct timeval_k *utv)
+{
+    if (!current) return -EINVAL;
+    if (nfds < 0 || nfds > KSELECT_SETSIZE) return -EINVAL;
+    (void)uefds;  /* exceptfds not supported */
+
+    k_fd_set krf, kwf;
+    int has_rf = (urfds != NULL);
+    int has_wf = (uwfds != NULL);
+
+    KFD_ZERO(&krf);
+    KFD_ZERO(&kwf);
+    if (has_rf) copy_from_user(&krf, urfds, sizeof(k_fd_set));
+    if (has_wf) copy_from_user(&kwf, uwfds, sizeof(k_fd_set));
+
+    /* Parse timeout */
+    int infinite = (utv == NULL);
+    int nonblock = 0;
+    uint64_t deadline = 0;
+
+    if (utv) {
+        struct timeval_k ktv;
+        copy_from_user(&ktv, utv, sizeof(struct timeval_k));
+        if (ktv.tv_sec == 0 && ktv.tv_usec == 0) {
+            nonblock = 1;
+        } else {
+            uint64_t tks = (uint64_t)ktv.tv_sec * TICKS_PER_SEC +
+                           ((uint64_t)ktv.tv_usec * TICKS_PER_SEC + 999999ULL) / 1000000ULL;
+            if (tks == 0) tks = 1;  /* round up to at least 1 tick */
+            deadline = timer_ticks + tks;
+        }
+    }
+
+    /* Determine whether stdin appears in rfds (needs ISR-based wakeup) */
+    int stdin_selected = 0;
+    if (has_rf) {
+        for (int i = 0; i < nfds; i++) {
+            if (!KFD_ISSET(i, &krf)) continue;
+            file_t *f = f_get(current, i);
+            if (!f) continue;
+            int is_stdin = (f->type == FILE_STDIN);
+            f_put(f);
+            if (is_stdin) { stdin_selected = 1; break; }
+        }
+    }
+
+    for (;;) {
+        k_fd_set out_rf, out_wf;
+        KFD_ZERO(&out_rf);
+        KFD_ZERO(&out_wf);
+        int ready = 0;
+
+        /* Evaluate readfds */
+        if (has_rf) {
+            for (int i = 0; i < nfds; i++) {
+                if (!KFD_ISSET(i, &krf)) continue;
+                file_t *f = f_get(current, i);
+                if (!f) continue;
+                int readable = (f->type == FILE_STDIN)
+                               ? term_has_input(&console_term) : 1;
+                f_put(f);
+                if (readable) { KFD_SET(i, &out_rf); ready++; }
+            }
+        }
+
+        /* Evaluate writefds — all fds always writable in SBUnix */
+        if (has_wf) {
+            for (int i = 0; i < nfds; i++) {
+                if (KFD_ISSET(i, &kwf)) { KFD_SET(i, &out_wf); ready++; }
+            }
+        }
+
+        /* Check for signal interruption */
+        if (current->pending_signals & ~current->signal_mask)
+            return -EINTR;
+
+        /* Return if ready, non-blocking, or deadline passed */
+        if (ready > 0 || nonblock || (!infinite && timer_ticks >= deadline)) {
+            if (urfds) copy_to_user(urfds, &out_rf, sizeof(k_fd_set));
+            if (uwfds) copy_to_user(uwfds, &out_wf, sizeof(k_fd_set));
+            return ready;
+        }
+
+        /* Sleep until stdin has data, timeout fires, or a signal arrives */
+        if (stdin_selected)
+            console_term.select_waiter = current;
+        if (!infinite)
+            current->wake_tick = deadline;
+
+        proc_sleep(current);
+
+        /* Clear waiter in case we were woken by timer or signal (not ISR) */
+        console_term.select_waiter = NULL;
+
+        if (!infinite && current->wake_tick == 0) {
+            /* Timer expired cleanly — return 0 (no fds ready) */
+            if (urfds) copy_to_user(urfds, &out_rf, sizeof(k_fd_set));
+            if (uwfds) copy_to_user(uwfds, &out_wf, sizeof(k_fd_set));
+            return 0;
+        }
+        current->wake_tick = 0;
+        /* Loop: re-evaluate fds (may have been woken by ISR or signal) */
+    }
 }
 
 pid_t sys_waitpid(pid_t pid, int *status, int options) {
