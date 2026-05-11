@@ -96,6 +96,8 @@ static cached_block_t *find_free_cache_block(void) {
         return NULL;
     }
 
+    lru->in_flight = 1;
+
     if (lru->dirty) {
         printk("block_cache: evicting dirty block %u\n", lru->block_num);
         uint64_t sector = lru->block_num * 2;
@@ -103,13 +105,13 @@ static cached_block_t *find_free_cache_block(void) {
         // Callers of find_free_cache_block must ensure interrupts are enabled.
         if (virtio_blk_write(sector, lru->data, 2) != 0) {
             printk("block_cache: failed to write back block %u\n", lru->block_num);
+            lru->in_flight = 0;
             return NULL;
         }
         lru->dirty = 0;
     }
 
     lru->valid = 0;
-    lru->in_flight = 1;
     return lru;
 }
 
