@@ -106,6 +106,9 @@ void run_test_exec_shebang(us_test_group_t *group);
 void run_test_exec_errno(us_test_group_t *group);
 void run_test_posix_compliance(us_test_group_t *group);
 void run_test_leak(us_test_group_t *group);
+void run_test_getopt(us_test_group_t *group);
+void run_test_getopt_long(us_test_group_t *group);
+void run_test_realpath(us_test_group_t *group);
 void run_test_select(us_test_group_t *group);
 void run_test_tcgetsid(us_test_group_t *group);
 
@@ -289,6 +292,9 @@ int main(int argc, char **argv, char **envp) {
 
     /* ── Comprehensive libc conformance tests (always run, no forks) ────────── */
     if (RUN_ALL_TESTS) {
+        run_test_getopt(&groups[idx++]);
+        run_test_getopt_long(&groups[idx++]);
+        run_test_realpath(&groups[idx++]);
         run_test_libc_string(groups, &idx);
         run_test_libc_ctype(groups, &idx);
         run_test_libc_stdio(groups, &idx);

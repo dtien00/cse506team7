@@ -2,6 +2,10 @@
 #include "ctype.h"
 #include "string.h"
 #include "signal.h"
+#include "unistd.h"
+#include "errno.h"
+#include "limits.h"
+#include "sys/stat.h"
 
 void _Exit(int status) {
     exit(status);
@@ -425,12 +429,12 @@ void* bsearch(const void* key, const void* base, size_t nmemb, size_t size,
               int (*compar)(const void*, const void*)) {
     const char* arr = (const char*)base;
     size_t low = 0, high = nmemb;
-    
+
     while (low < high) {
         size_t mid = low + (high - low) / 2;
         const void* mid_elem = arr + mid * size;
         int cmp = compar(key, mid_elem);
-        
+
         if (cmp == 0) {
             return (void*)mid_elem;
         } else if (cmp < 0) {
@@ -439,6 +443,169 @@ void* bsearch(const void* key, const void* base, size_t nmemb, size_t size,
             low = mid + 1;
         }
     }
-    
+
     return NULL;
+}
+
+/*
+ * realpath — resolve a pathname to its canonical absolute form.
+ *
+ * Every component of path must exist.  Symlinks are expanded up to
+ * SYMLOOP_MAX times; exceeding that limit sets errno = ELOOP.
+ *
+ * If resolved is non-NULL it must point to a buffer of at least PATH_MAX
+ * bytes; that buffer is used directly.  If resolved is NULL a PATH_MAX
+ * buffer is malloc'd and the caller is responsible for free'ing it.
+ */
+char *realpath(const char *restrict path, char *restrict resolved)
+{
+    if (!path || path[0] == '\0') {
+        errno = ENOENT;
+        return (char *)0;
+    }
+
+    char *out;
+    int   out_allocated = 0;
+
+    if (resolved) {
+        out = resolved;
+    } else {
+        out = (char *)malloc(PATH_MAX);
+        if (!out) return (char *)0;
+        out_allocated = 1;
+    }
+
+    /* work[] holds the remaining path still to be processed.
+     * We rebuild it in-place when following a symlink. */
+    char work[PATH_MAX];
+    char link[PATH_MAX];
+
+    if (path[0] == '/') {
+        if (strlen(path) >= PATH_MAX) {
+            errno = ENAMETOOLONG;
+            goto fail;
+        }
+        memcpy(work, path, strlen(path) + 1);
+    } else {
+        /* Relative path: prepend cwd */
+        if (!getcwd(work, PATH_MAX))
+            goto fail;
+        size_t cwdlen  = strlen(work);
+        size_t pathlen = strlen(path);
+        if (cwdlen + 1 + pathlen >= PATH_MAX) {
+            errno = ENAMETOOLONG;
+            goto fail;
+        }
+        work[cwdlen] = '/';
+        memcpy(work + cwdlen + 1, path, pathlen + 1);
+    }
+
+    /* Initialise output to "/" */
+    out[0] = '/';
+    out[1] = '\0';
+    size_t rlen = 1;  /* number of valid bytes in out[], not counting NUL */
+
+    int symlinks = 0;
+    char *p = work;
+    while (*p == '/') p++;   /* skip leading slashes */
+
+    while (*p) {
+        /* Locate end of this component */
+        char *end = p;
+        while (*end && *end != '/') end++;
+        size_t complen = (size_t)(end - p);
+
+        /* Skip runs of slashes */
+        char *next = end;
+        while (*next == '/') next++;
+
+        /* "." — no-op */
+        if (complen == 1 && p[0] == '.') {
+            p = next;
+            continue;
+        }
+
+        /* ".." — remove the last component from out */
+        if (complen == 2 && p[0] == '.' && p[1] == '.') {
+            if (rlen > 1) {
+                size_t i = rlen - 1;
+                while (i > 0 && out[i] != '/') i--;
+                rlen = (i == 0) ? 1 : i;
+                out[rlen] = '\0';
+            }
+            p = next;
+            continue;
+        }
+
+        /* Normal component: append separator (if not at root) and name */
+        if (complen + (rlen > 1 ? 1 : 0) + rlen >= PATH_MAX) {
+            errno = ENAMETOOLONG;
+            goto fail;
+        }
+        if (rlen > 1) out[rlen++] = '/';
+        memcpy(out + rlen, p, complen);
+        rlen += complen;
+        out[rlen] = '\0';
+
+        /* Every component must exist; detect symlinks */
+        struct stat st;
+        if (lstat(out, &st) < 0)
+            goto fail;
+
+        if (!S_ISLNK(st.st_mode)) {
+            /* Regular file or directory: keep it, advance to next component */
+            p = next;
+            continue;
+        }
+
+        /* Symlink: resolve it */
+        if (++symlinks > SYMLOOP_MAX) {
+            errno = ELOOP;
+            goto fail;
+        }
+
+        ssize_t llen = readlink(out, link, PATH_MAX - 1);
+        if (llen < 0)
+            goto fail;
+        link[llen] = '\0';
+
+        /* Pop the symlink name from out so we can append the target */
+        if (rlen > 1) {
+            size_t i = rlen - 1;
+            while (i > 0 && out[i] != '/') i--;
+            rlen = (i == 0) ? 1 : i;
+            out[rlen] = '\0';
+        }
+
+        /* Build new work[] = link_target + "/" + remaining_path.
+         * Use memmove because next points into work[]. */
+        size_t remlen = strlen(next);
+        size_t newlen = (size_t)llen + (remlen ? 1 + remlen : 0);
+        if (newlen >= PATH_MAX) {
+            errno = ENAMETOOLONG;
+            goto fail;
+        }
+
+        if (remlen) {
+            memmove(work + llen + 1, next, remlen + 1);
+            work[llen] = '/';
+        } else {
+            work[llen] = '\0';
+        }
+        memcpy(work, link, (size_t)llen);
+
+        /* Absolute symlink: reset out to "/" and treat work as absolute */
+        if (link[0] == '/') {
+            out[0] = '/'; out[1] = '\0'; rlen = 1;
+        }
+
+        p = work;
+        while (*p == '/') p++;
+    }
+
+    return out;
+
+fail:
+    if (out_allocated) free(out);
+    return (char *)0;
 }
