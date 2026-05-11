@@ -56,6 +56,14 @@ int ioctl(int fd, unsigned long request, ...) {
     }
 }
 
+pid_t tcgetsid(int fd) {
+    struct termios t;
+    if (tcgetattr(fd, &t) < 0) {   /* sets errno=ENOTTY for non-tty fds */
+        return (pid_t)-1;
+    }
+    return getpid();               /* best approximation; correct post-setsid() */
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // POSIX termios stubs.
 // Declared in <termios.h> for source-compat with TCC/busybox; behavior is
@@ -72,7 +80,6 @@ int tcdrain(int fd)               { (void)fd; return 0; }
 int tcflow(int fd, int act)       { (void)fd; (void)act; return 0; }
 int tcflush(int fd, int q)        { (void)fd; (void)q;   return 0; }
 int tcsendbreak(int fd, int dur)  { (void)fd; (void)dur; return 0; }
-pid_t tcgetsid(int fd)            { (void)fd; return getpid(); }
 
 int tcgetwinsize(int fd, struct winsize *ws) {
     return ioctl(fd, TIOCGWINSZ, ws);
