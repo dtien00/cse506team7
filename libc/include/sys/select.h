@@ -6,7 +6,7 @@
 #include "signal.h"       /* sigset_t — required by pselect() */
 
 typedef struct {
-    unsigned long fds_bits[16];
+    unsigned long fds_bits[16]; /* 16 × 64-bit words = 1024 bits; assumes LP64 (RISC-V 64) */
 } fd_set;
 
 #define FD_SETSIZE 1024
