@@ -277,6 +277,7 @@ static void test_fork_many_writers(us_test_group_t *group) {
     for (int i = 0; i < N; i++) {
         pids[i] = fork();
         if (pids[i] == 0) {
+            usleep(200000); // sleep a little bit to give parent time to complete
             /* child: build path, create file, write one byte, close, exit */
             make_path(path, sizeof(path), "/mnt/bcs_fork_", i);
             int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
