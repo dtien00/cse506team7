@@ -222,6 +222,9 @@ void proc_free(struct proc *p) {
 void proc_exit(int code) {
     if (!current) return;
 
+    if (code != 0)
+        printk("proc_exit: pid=%d code=%d\n", current->pid, code);
+
     proc_destroy(current); // to protect from memory leaks
 
     // Store exit code and mark as ZOMBIE

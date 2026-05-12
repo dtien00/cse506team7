@@ -153,8 +153,17 @@ static void handle_interrupt(trap_frame *frame) {
             uint32_t irq = plic_claim();
             if (irq == PLIC_UART_IRQ) {
                 uart_handle_interrupt();
-            } else if (irq == virtio_blk_get_irq()) {
+            } else if (irq >= PLIC_PCIE_INTA_IRQ && irq < PLIC_PCIE_INTA_IRQ + 4) {
+                // Accept any of IRQs 32-35: PCIe INTx swizzling means the exact
+                // source depends on the device slot.  Print if it differs from
+                // what we computed during init so we can correct the formula.
+                if (irq != virtio_blk_get_irq())
+                    printk("plic: virtio IRQ %u fired (init computed %u) — updating\n",
+                           irq, virtio_blk_get_irq());
                 virtio_blk_irq();
+            } else if (irq != 0) {
+                printk("plic: unexpected IRQ %u (virtio expects %u)\n",
+                       irq, virtio_blk_get_irq());
             }
             if (irq != 0) {
                 plic_complete(irq);

@@ -7,8 +7,10 @@
 // UART is IRQ 10 on the QEMU virt machine
 #define PLIC_UART_IRQ 10
 
-// virtio-blk is IRQ 1 on the QEMU virt machine (first virtio device)
+// virtio-blk MMIO is IRQ 1 on the QEMU virt machine (first MMIO virtio device)
 #define PLIC_VIRTIO_IRQ 1
+// PCIe INTA is IRQ 32 on the QEMU virt machine (first PCIe slot, used by virtio-blk-pci)
+#define PLIC_PCIE_INTA_IRQ 32
 
 // Register addresses (supervisor-mode, hart 0)
 // Priority:  one uint32_t per IRQ source
@@ -25,6 +27,8 @@
 #define PLIC_S_CLAIM (*(volatile uint32_t *) (PLIC_BASE + 0x201004))
 
 void plic_init(void);
-void plic_enable_irq(uint32_t irq); // called by each driver for its own IRQ
+void plic_enable_irq(uint32_t irq);
+void plic_disable_irq(uint32_t irq);
 uint32_t plic_claim(void);
 void plic_complete(uint32_t irq);
+void plic_dump_pending(void);

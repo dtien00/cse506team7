@@ -4,6 +4,29 @@
 #include "kernel/printk.h"
 #include "mm/kmalloc.h"
 #include "lib/string.h"
+#include "process/process.h"
+#include "trap/trap.h"
+
+// Global sleeping mutex that serializes all ext2 top-level operations.
+// Prevents directory-block, inode-allocation, and inode-table races that
+// occur when multiple processes concurrently create, write, or unlink files.
+static int ext2_fs_lock = 0;
+
+static void ext2_lock(void) {
+    interrupts_off();
+    while (ext2_fs_lock) {
+        proc_sleep(&ext2_fs_lock);
+        // proc_sleep returns with interrupts ON; re-disable before rechecking
+        interrupts_off();
+    }
+    ext2_fs_lock = 1;
+    interrupts_on();
+}
+
+static void ext2_unlock(void) {
+    ext2_fs_lock = 0;
+    proc_wakeup(&ext2_fs_lock);
+}
 
 static fs_type_t ext2_fs_type;
 
@@ -651,6 +674,8 @@ vnode_t *ext2_lookup(mount_t *mnt, const char *path) {
 int ext2_read(vnode_t *vnode, void *buf, size_t offset, size_t len) {
     if (!vnode || !vnode->fs_data || !buf) return -1;
 
+    ext2_lock();
+
     ext2_inode_t *inode = (ext2_inode_t *)vnode->fs_data;
     ext2_mount_data_t *mnt = (ext2_mount_data_t *)vnode->mount->fs_data;
 
@@ -660,45 +685,50 @@ int ext2_read(vnode_t *vnode, void *buf, size_t offset, size_t len) {
 
     // Check if reading past end of file
     if (offset >= inode->i_size) {
+        ext2_unlock();
         return 0;
     }
-    
+
     // Adjust length if reading past EOF
     if (offset + len > inode->i_size) {
         len = inode->i_size - offset;
     }
-    
+
     size_t bytes_read = 0;
     uint8_t *block_buf = (uint8_t *)kmalloc(mnt->block_size);
-    if (!block_buf) return -1;
-    
+    if (!block_buf) { ext2_unlock(); return -1; }
+
     while (bytes_read < len) {
         uint32_t block_idx = (offset + bytes_read) / mnt->block_size;
         uint32_t block_offset = (offset + bytes_read) % mnt->block_size;
         uint32_t to_read = mnt->block_size - block_offset;
-        
+
         if (to_read > len - bytes_read) {
             to_read = len - bytes_read;
         }
-        
+
         // Read the block
         if (ext2_read_inode_block(mnt, inode, block_idx, block_buf) != 0) {
             kfree(block_buf);
+            ext2_unlock();
             return bytes_read > 0 ? (int)bytes_read : -1;
         }
-        
+
         // Copy data to output buffer
         memcpy((uint8_t *)buf + bytes_read, block_buf + block_offset, to_read);
         bytes_read += to_read;
     }
-    
+
     kfree(block_buf);
+    ext2_unlock();
     return (int)bytes_read;
 }
 
 // Write to ext2 file
 int ext2_write(vnode_t *vnode, const void *buf, size_t offset, size_t len) {
     if (!vnode || !vnode->fs_data || !buf) return -1;
+
+    ext2_lock();
 
     ext2_inode_t *inode = (ext2_inode_t *)vnode->fs_data;
     ext2_mount_data_t *mnt = (ext2_mount_data_t *)vnode->mount->fs_data;
@@ -709,7 +739,7 @@ int ext2_write(vnode_t *vnode, const void *buf, size_t offset, size_t len) {
 
     size_t bytes_written = 0;
     uint8_t *block_buf = (uint8_t *)kmalloc(mnt->block_size);
-    if (!block_buf) return -1;
+    if (!block_buf) { ext2_unlock(); return -1; }
 
     while (bytes_written < len) {
         uint32_t block_idx    = (offset + bytes_written) / mnt->block_size;
@@ -722,6 +752,7 @@ int ext2_write(vnode_t *vnode, const void *buf, size_t offset, size_t len) {
         if (block_offset != 0 || to_write != mnt->block_size) {
             if (ext2_read_inode_block(mnt, inode, block_idx, block_buf) != 0) {
                 kfree(block_buf);
+                ext2_unlock();
                 return bytes_written > 0 ? (int)bytes_written : -1;
             }
         } else {
@@ -732,6 +763,7 @@ int ext2_write(vnode_t *vnode, const void *buf, size_t offset, size_t len) {
 
         if (ext2_write_inode_block(mnt, inode, block_idx, block_buf) != 0) {
             kfree(block_buf);
+            ext2_unlock();
             return bytes_written > 0 ? (int)bytes_written : -1;
         }
 
@@ -751,6 +783,7 @@ int ext2_write(vnode_t *vnode, const void *buf, size_t offset, size_t len) {
     ext2_write_superblock(mnt);
     ext2_write_gdt(mnt);
 
+    ext2_unlock();
     return (int)bytes_written;
 }
 
@@ -777,8 +810,28 @@ static int ext2_dirent_append(uint8_t *block_buf, uint32_t block_size,
         uint16_t slack   = de->rec_len - min_len;
 
         if (de->inode == 0) {
-            /* Deleted entry — reuse it if big enough */
+            /* Coalesce adjacent deleted slots so larger entries can be served.
+             * ext2 unlink leaves rec_len intact, so a directory that saw many
+             * short-lived small files accumulates a run of tiny deleted slots
+             * that on their own are too small for a longer new name. */
+            uint32_t next_off = offset + de->rec_len;
+            while (next_off + 8 <= block_size) {
+                ext2_dirent_t *nx = (ext2_dirent_t *)(block_buf + next_off);
+                if (nx->rec_len == 0 || nx->inode != 0) break;
+                de->rec_len = (uint16_t)(de->rec_len + nx->rec_len);
+                next_off += nx->rec_len;
+            }
+
+            /* Deleted entry — reuse it if big enough, splitting the remainder */
             if (de->rec_len >= need) {
+                uint16_t old_rec_len = de->rec_len;
+                if (old_rec_len - need >= 8) {
+                    ext2_dirent_t *rump = (ext2_dirent_t *)(block_buf + offset + need);
+                    rump->inode    = 0;
+                    rump->rec_len  = old_rec_len - need;
+                    rump->name_len = 0;
+                    de->rec_len    = need;
+                }
                 de->inode     = new_ino;
                 de->name_len  = name_len;
                 de->file_type = file_type;
@@ -817,24 +870,25 @@ static int ext2_dirent_append(uint8_t *block_buf, uint32_t block_size,
 // Create a new file in ext2
 int ext2_create(mount_t *mnt, const char *path, uint32_t mode) {
     if (!mnt || !mnt->fs_data || !path) return -1;
-    
+
+    ext2_lock();
+
     ext2_mount_data_t *ext2_mnt = (ext2_mount_data_t *)mnt->fs_data;
 
     // Parse path to get parent directory and filename
     char *path_copy = (char *)kmalloc(strlen(path) + 1);
-    if (!path_copy) return -1;
+    if (!path_copy) { ext2_unlock(); return -1; }
     strcpy(path_copy, path);
 
-    
     // Find last slash
     char *last_slash = NULL;
     for (char *p = path_copy; *p; p++) {
         if (*p == '/') last_slash = p;
     }
-    
+
     char *filename;
     char *parent_path;
-    
+
     if (last_slash) {
         *last_slash = '\0';
         filename = last_slash + 1;
@@ -844,26 +898,28 @@ int ext2_create(mount_t *mnt, const char *path, uint32_t mode) {
         filename = path_copy;
         parent_path = "/";
     }
-    
+
     // Lookup parent directory
     vnode_t *parent_vnode = ext2_lookup(mnt, parent_path);
     if (!parent_vnode) {
         printk("ext2: parent directory not found: %s\n", parent_path);
         kfree(path_copy);
+        ext2_unlock();
         return -1;
     }
-    
+
     ext2_inode_t *parent_inode = (ext2_inode_t *)parent_vnode->fs_data;
-    
+
     // Allocate new inode
     uint32_t new_ino = ext2_alloc_inode(ext2_mnt);
     if (new_ino == 0) {
         kfree(parent_vnode->fs_data);
         kfree(parent_vnode);
         kfree(path_copy);
+        ext2_unlock();
         return -1;
     }
-    
+
     // Initialize new inode
     ext2_inode_t new_inode;
     memset(&new_inode, 0, sizeof(ext2_inode_t));
@@ -873,15 +929,16 @@ int ext2_create(mount_t *mnt, const char *path, uint32_t mode) {
     new_inode.i_size = 0;
     new_inode.i_links_count = 1;
     new_inode.i_blocks = 0;
-    
+
     // Write new inode to disk
     if (ext2_write_inode(ext2_mnt, new_ino, &new_inode) != 0) {
         kfree(parent_vnode->fs_data);
         kfree(parent_vnode);
         kfree(path_copy);
+        ext2_unlock();
         return -1;
     }
-    
+
     // Add directory entry to parent
     // Find space in parent directory
     uint8_t *block_buf = (uint8_t *)kmalloc(ext2_mnt->block_size);
@@ -889,6 +946,7 @@ int ext2_create(mount_t *mnt, const char *path, uint32_t mode) {
         kfree(parent_vnode->fs_data);
         kfree(parent_vnode);
         kfree(path_copy);
+        ext2_unlock();
         return -1;
     }
 
@@ -900,6 +958,7 @@ int ext2_create(mount_t *mnt, const char *path, uint32_t mode) {
             kfree(parent_vnode->fs_data);
             kfree(parent_vnode);
             kfree(path_copy);
+            ext2_unlock();
             return -1;
         }
         parent_inode->i_block[0] = new_block;
@@ -911,6 +970,7 @@ int ext2_create(mount_t *mnt, const char *path, uint32_t mode) {
             kfree(parent_vnode->fs_data);
             kfree(parent_vnode);
             kfree(path_copy);
+            ext2_unlock();
             return -1;
         }
     }
@@ -923,6 +983,7 @@ int ext2_create(mount_t *mnt, const char *path, uint32_t mode) {
         kfree(parent_vnode->fs_data);
         kfree(parent_vnode);
         kfree(path_copy);
+        ext2_unlock();
         return -1;
     }
 
@@ -932,6 +993,7 @@ int ext2_create(mount_t *mnt, const char *path, uint32_t mode) {
         kfree(parent_vnode->fs_data);
         kfree(parent_vnode);
         kfree(path_copy);
+        ext2_unlock();
         return -1;
     }
 
@@ -947,7 +1009,7 @@ int ext2_create(mount_t *mnt, const char *path, uint32_t mode) {
     kfree(parent_vnode);
     kfree(path_copy);
 
-    block_cache_flush();
+    ext2_unlock();
     printk("ext2: created file %s (inode %d)\n", path, new_ino);
     return 0;
 }
@@ -955,23 +1017,24 @@ int ext2_create(mount_t *mnt, const char *path, uint32_t mode) {
 // Delete a file from ext2
 int ext2_unlink(mount_t *mnt, const char *path) {
     if (!mnt || !mnt->fs_data || !path) return -1;
-    
+
+    ext2_lock();
+
     ext2_mount_data_t *ext2_mnt = (ext2_mount_data_t *)mnt->fs_data;
 
     // Parse path to get parent directory and filename
     char *path_copy = (char *)kmalloc(strlen(path) + 1);
-    if (!path_copy) return -1;
+    if (!path_copy) { ext2_unlock(); return -1; }
     strcpy(path_copy, path);
 
-    
     char *last_slash = NULL;
     for (char *p = path_copy; *p; p++) {
         if (*p == '/') last_slash = p;
     }
-    
+
     char *filename;
     char *parent_path;
-    
+
     if (last_slash) {
         *last_slash = '\0';
         filename = last_slash + 1;
@@ -981,22 +1044,24 @@ int ext2_unlink(mount_t *mnt, const char *path) {
         filename = path_copy;
         parent_path = "/";
     }
-    
+
     // Lookup parent directory
     vnode_t *parent_vnode = ext2_lookup(mnt, parent_path);
     if (!parent_vnode) {
         kfree(path_copy);
+        ext2_unlock();
         return -1;
     }
-    
+
     ext2_inode_t *parent_inode = (ext2_inode_t *)parent_vnode->fs_data;
-    
+
     // Find and remove directory entry
     uint8_t *block_buf = (uint8_t *)kmalloc(ext2_mnt->block_size);
     if (!block_buf) {
         kfree(parent_vnode->fs_data);
         kfree(parent_vnode);
         kfree(path_copy);
+        ext2_unlock();
         return -1;
     }
 
@@ -1035,28 +1100,28 @@ int ext2_unlink(mount_t *mnt, const char *path) {
 
     if (!found) {
         printk("ext2: file not found for unlink: %s\n", path);
+        ext2_unlock();
         return -1;
     }
 
-    // Decrement link count. Per POSIX, data blocks must remain accessible via
-    // open fds until the last fd is closed. Since there is no VFS release hook
-    // to defer freeing, we mark the inode deleted (i_dtime) but leave blocks
-    // and the inode bitmap entry intact so open fds keep reading valid data.
-    // The inode and its blocks will be reclaimed by fsck on next mount.
+    // Per POSIX, data blocks must remain accessible via open fds until the last
+    // fd closes. We only decrement links and mark the inode deleted here; the
+    // actual block/bitmap reclaim happens in ext2_release, which is called from
+    // file_release on last close, or from vfs_unlink when ref_count == 1.
     ext2_inode_t inode;
     if (ext2_read_inode(ext2_mnt, file_ino, &inode) == 0) {
         if (inode.i_links_count > 0)
             inode.i_links_count--;
 
         if (inode.i_links_count == 0)
-            inode.i_dtime = 1; // marks inode as deleted; blocks freed by fsck
+            inode.i_dtime = 1;
 
         ext2_write_inode(ext2_mnt, file_ino, &inode);
         ext2_write_superblock(ext2_mnt);
         ext2_write_gdt(ext2_mnt);
     }
 
-    block_cache_flush();
+    ext2_unlock();
     printk("ext2: unlinked %s\n", path);
     return 0;
 }
@@ -1639,12 +1704,16 @@ int ext2_readlink(vnode_t *vnode, char *buf, size_t size) {
 static int ext2_release(vnode_t *vnode) {
     if (!vnode || !vnode->fs_data || !vnode->mount) return 0;
 
+    ext2_lock();
+
     ext2_mount_data_t *mnt = (ext2_mount_data_t *)vnode->mount->fs_data;
     ext2_inode_t inode;
-    if (ext2_read_inode(mnt, (uint32_t)vnode->ino, &inode) != 0) return 0;
+    if (ext2_read_inode(mnt, (uint32_t)vnode->ino, &inode) != 0) { ext2_unlock(); return 0; }
 
-    if (inode.i_links_count != 0 || inode.i_dtime == 0)
+    if (inode.i_links_count != 0 || inode.i_dtime == 0) {
+        ext2_unlock();
         return 0; // still linked or not deleted — nothing to do
+    }
 
     // Free direct data blocks
     for (int i = 0; i < EXT2_NDIR_BLOCKS; i++) {
@@ -1662,6 +1731,45 @@ static int ext2_release(vnode_t *vnode) {
         if (bmap) kfree(bmap);
         inode.i_block[i] = 0;
     }
+
+    // Free single-indirect tree: every data block referenced by the index
+    // block, then the index block itself. The write path (ext2_write_inode_block)
+    // only allocates through single-indirect, so DIND/TIND need not be walked.
+    if (inode.i_block[EXT2_IND_BLOCK] != 0) {
+        uint32_t ind_blk = inode.i_block[EXT2_IND_BLOCK];
+        uint32_t *ind_buf = (uint32_t *)kmalloc(mnt->block_size);
+        if (ind_buf && block_cache_read(ind_blk, ind_buf) == 0) {
+            uint32_t ptrs = mnt->block_size / sizeof(uint32_t);
+            for (uint32_t i = 0; i < ptrs; i++) {
+                uint32_t blk = ind_buf[i];
+                if (blk == 0) continue;
+                uint32_t grp = (blk - mnt->sb->s_first_data_block) / mnt->blocks_per_group;
+                uint32_t bit = (blk - mnt->sb->s_first_data_block) % mnt->blocks_per_group;
+                uint8_t *bmap = (uint8_t *)kmalloc(mnt->block_size);
+                if (bmap && block_cache_read(mnt->group_desc[grp].bg_block_bitmap, bmap) == 0) {
+                    bmap[bit / 8] &= ~(uint8_t)(1 << (bit % 8));
+                    block_cache_write(mnt->group_desc[grp].bg_block_bitmap, bmap);
+                    mnt->group_desc[grp].bg_free_blocks_count++;
+                    mnt->sb->s_free_blocks_count++;
+                }
+                if (bmap) kfree(bmap);
+            }
+        }
+        if (ind_buf) kfree(ind_buf);
+
+        uint32_t grp = (ind_blk - mnt->sb->s_first_data_block) / mnt->blocks_per_group;
+        uint32_t bit = (ind_blk - mnt->sb->s_first_data_block) % mnt->blocks_per_group;
+        uint8_t *bmap = (uint8_t *)kmalloc(mnt->block_size);
+        if (bmap && block_cache_read(mnt->group_desc[grp].bg_block_bitmap, bmap) == 0) {
+            bmap[bit / 8] &= ~(uint8_t)(1 << (bit % 8));
+            block_cache_write(mnt->group_desc[grp].bg_block_bitmap, bmap);
+            mnt->group_desc[grp].bg_free_blocks_count++;
+            mnt->sb->s_free_blocks_count++;
+        }
+        if (bmap) kfree(bmap);
+        inode.i_block[EXT2_IND_BLOCK] = 0;
+    }
+
     inode.i_blocks = 0;
 
     // Free inode bitmap entry
@@ -1680,6 +1788,7 @@ static int ext2_release(vnode_t *vnode) {
     ext2_write_superblock(mnt);
     ext2_write_gdt(mnt);
     block_cache_flush();
+    ext2_unlock();
     return 0;
 }
 
