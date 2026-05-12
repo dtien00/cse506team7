@@ -155,6 +155,43 @@ test: build/disk.img
 		-device virtio-net-pci-non-transitional,netdev=net0 \
 		-netdev user,id=net0 \
 		-nographic
+
+OS_TEST_DIR ?= tests/os-test
+# Suites to build; start with process+signal since those syscalls are implemented.
+# Add more (io, stdio, limits, malloc, namespace, paths) as your kernel grows.
+
+# OS_TEST_SUITES ?= basic include limits io malloc namespace paths process pty signal stdio udp
+
+OS_TEST_SUITES ?= basic
+
+# Compilation flags matching how user binaries are built, but without -Werror
+# so os-test's own -Werror=implicit-function-declaration controls strictness.
+OS_TEST_CFLAGS := -Os -ffreestanding -fno-builtin -nostdlib -nostdinc \
+	-isystem $(shell $(CC) -print-file-name=include) \
+	-isystem /usr/include \
+	-mcmodel=medany -march=rv64imac_zicsr_zifencei -mabi=lp64 \
+	-ffunction-sections -fdata-sections \
+	-I$(CURDIR)/libc/include
+
+# crt.S.o must precede the test .o at link time so _start is defined first.
+OS_TEST_LDFLAGS := $(CURDIR)/build/libc/crt.S.o $(CURDIR)/build/libc.a \
+	-Wl,--gc-sections
+
+$(OS_TEST_DIR):
+	@echo "Cloning os-test..."
+	git clone https://gitlab.com/sortix/os-test $(OS_TEST_DIR)
+
+# Build os-test suites cross-compiled for RISC-V using the kernel's libc,
+# copy the resulting ELF binaries into rootfs/os-test/, then rebuild the kernel.
+# After "make qemu" you can run /os-test/<test-name> from the kernel shell.
+.PHONY: os-test
+os-test: build/libc/crt.S.o build/libc.a $(OS_TEST_DIR)
+	cd $(OS_TEST_DIR) && make CC="$(CC)" CC_FOR_BUILD=cc CFLAGS="$(OS_TEST_CFLAGS)" CFLAGS_FOR_BUILD="" CPPFLAGS="" CPPFLAGS_FOR_BUILD="" LDFLAGS="$(OS_TEST_LDFLAGS)" LDFLAGS_FOR_BUILD="" EXTRA_LDFLAGS="" SUITE_LIST="$(OS_TEST_SUITES)" NO_SHARED=1 all
+	mkdir -p build/rootfs/os-test
+	find $(OS_TEST_DIR) -type f -executable | xargs -I {} cp {} build/rootfs/os-test/
+	$(MAKE) all
+	cd $(OS_TEST_DIR) && make SUITE_LIST="$(OS_TEST_SUITES)" html
+
 # ********************** TEST (NOT IN ORIGINAL /shared)
 
 .PHONY: all qemu clean thirdparty submit
