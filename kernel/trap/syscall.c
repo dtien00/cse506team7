@@ -575,6 +575,10 @@ void syscall_handler(trap_frame *frame) {
             ret = sys_fpathconf((int)arg0, (int)arg1);
             break;
 
+        case SYS_clock_gettime:
+            ret = sys_clock_gettime((clockid_t)arg0, (struct timespec *)arg1);
+            break;
+
         default:
             // Unknown syscall number from user space will be recognized as delivering SIGSYS (Bad system call)
             // Set a0 = -ENOSYS so masked SIGSYS callers see a defined return value.
@@ -1913,6 +1917,32 @@ int sys_gettimeofday(struct timeval_k *tv, void *tz) {
         int zeros[2] = {0, 0};
         copy_to_user(tz, zeros, sizeof(zeros));
     }
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* sys_clock_gettime                                                    */
+/* ------------------------------------------------------------------ */
+
+int sys_clock_gettime(clockid_t clockid, struct timespec *tp) {
+    if (!tp) return -EFAULT;
+
+    switch (clockid) {
+    case CLOCK_REALTIME:
+    case CLOCK_MONOTONIC:
+    case CLOCK_PROCESS_CPUTIME_ID:
+    case CLOCK_THREAD_CPUTIME_ID:
+        break;
+    default:
+        return -EINVAL;
+    }
+
+    uint64_t ns = rtc_read_ns();
+    struct timespec kts;
+    kts.tv_sec  = (time_t)(ns / 1000000000ULL);
+    kts.tv_nsec = (long)  (ns % 1000000000ULL);
+
+    if (copy_to_user(tp, &kts, sizeof(kts)) < 0) return -EFAULT;
     return 0;
 }
 

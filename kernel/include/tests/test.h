@@ -51,3 +51,4 @@ void kstack_overflow_test_run(void);
 void leak_test_run(void);
 void mm_vma_test_run(void);
 void access_test_run(void);
+void clock_gettime_test_run(void);
