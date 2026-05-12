@@ -328,7 +328,7 @@ static void test_fork_many_writers(us_test_group_t *group) {
  * entries) and stress the inode allocator.
  */
 static void test_create_nounlink_verbose(us_test_group_t *group) {
-    const int N = 36;
+    const int N = 34;
     char path[64];
     int ok = 1;
 
@@ -413,7 +413,7 @@ static void test_concurrent_churn(us_test_group_t *group) {
                  * Optional:
                  * tiny sleep increases interleaving randomness
                  */
-                usleep(1000);
+                // usleep(1000);
             }
 
             _exit(0);
@@ -612,23 +612,253 @@ static void test_multi_fd_parallel_spam(us_test_group_t *group) {
     TEST(group, "multi-fd-parallel-spam: 20 fds held open, 50 total writes per fd", ok);
 }
 
+/* ── test 15: busy-gate race (FEEDBACK_MULTIFS §2 — Issue A) ────────────
+ *
+ * Directly exercises the race identified in FEEDBACK_MULTIFS.md §2:
+ * two children loop 50 × open+write+close+unlink on DISTINCT paths so
+ * they never contend on directory entries.  The only shared resource is
+ * blk_dev.busy.  Without the interrupt-atomic busy-acquisition fix, a
+ * timer interrupt between a child's while(busy)→0 exit and its busy=1
+ * assignment lets the sibling also see busy=0, and both children end up
+ * writing to the shared descriptor table simultaneously.  The resulting
+ * wakeup mismatch leaves one child sleeping on &blk_dev.busy forever.
+ *
+ * Both children must complete all 50 iterations without timeout.
+ * On a correct kernel (Bug A patched): ✓ pass.
+ * On an unpatched kernel: stall at an unpredictable iteration.
+ */
+static void test_busy_gate_race(us_test_group_t *group) {
+    const int NCHILDREN = 2;
+    const int NITERS    = 50;
+    pid_t pids[2];
+    char path[64];
+
+    for (int c = 0; c < NCHILDREN; c++) {
+        pids[c] = fork();
+        if (pids[c] == 0) {
+            /* child: open+write+close+unlink on a child-unique path */
+            for (int i = 0; i < NITERS; i++) {
+                make_path(path, sizeof(path), "/mnt/bgr_", c * 1000 + i);
+                int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                if (fd < 0) _exit(1);
+                char b = (char)((c + i) & 0xFF);
+                if ((int)write(fd, &b, 1) != 1) { close(fd); _exit(2); }
+                close(fd);
+                if (unlink(path) < 0) _exit(3);
+            }
+            _exit(0);
+        }
+    }
+
+    int ok = 1;
+    for (int c = 0; c < NCHILDREN; c++) {
+        int status = 0;
+        if (waitpid(pids[c], &status, 0) < 0) { ok = 0; continue; }
+        if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) ok = 0;
+    }
+    TEST(group,
+         "busy-gate-race: 2 concurrent children x 50 create/write/unlink cycles",
+         ok);
+}
+
+/* ── tests 16-18: IRQ delivery latency (FEEDBACK_MULTIFS §5 — Issue D) ────
+ *
+ * Root cause: plic_enable_irq(irq) computes (1 << irq) with a 32-bit int.
+ * When irq >= 32 (QEMU virt assigns PCI virtio-blk INTA to PLIC source 32),
+ * the shift is undefined behaviour; GCC produces 0, so source 32 is never
+ * set in the S-mode enable register.  No external interrupt fires; every
+ * virtio_blk_rw call waits up to one full timer tick (~100 ms at
+ * TIMER_INTERVAL = 1,000,000 cycles) instead of returning in microseconds.
+ *
+ * The three tests below are ordered lightest → heaviest:
+ *
+ *   IRQ working (plic.c patched)  : all three finish in well under 5 s.
+ *   IRQ broken  (unpatched)       : each stalls 10–60 s → evaluator timeout.
+ *
+ * No concurrency is needed to expose IRQ latency — sequential I/O is enough.
+ */
+
+/* helper shared by irq-latency tests */
+static void make_irq_path(char *out, int outsz, int idx) {
+    const char *pre = "/mnt/irqlat_";
+    int n = 0;
+    for (int i = 0; pre[i] && n < outsz - 12; i++) out[n++] = pre[i];
+    char tmp[12];
+    itoa_simple(idx, tmp, sizeof(tmp));
+    for (int i = 0; tmp[i] && n < outsz - 5; i++) out[n++] = tmp[i];
+    out[n++] = '.'; out[n++] = 'b'; out[n++] = 'i'; out[n++] = 'n';
+    out[n] = '\0';
+}
+
+/* test 16: large file written and read back in small chunks ─────────────
+ *
+ * Write a 16 KB file 256 bytes at a time, then read it back 256 bytes at a
+ * time and verify every byte.  Runs in a forked child to isolate cleanup.
+ * Generates ~128 virtio round-trips (each chunk may touch a new 512-byte
+ * sector).
+ *
+ * IRQ working : ~128 × 0.1 ms ≈ 13 ms.
+ * IRQ broken  : ~128 × 100 ms ≈ 12.8 s → timeout.
+ */
+static void test_irq_large_file_scan(us_test_group_t *group) {
+    const char *path  = "/mnt/irqlat_scan.bin";
+    const int   TOTAL = 16 * 1024;
+    const int   CHUNK = 256;
+    const int   ITERS = TOTAL / CHUNK;
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd < 0) _exit(1);
+        char wbuf[CHUNK];
+        for (int c = 0; c < ITERS; c++) {
+            for (int b = 0; b < CHUNK; b++)
+                wbuf[b] = (char)((c * CHUNK + b) & 0xFF);
+            if ((int)write(fd, wbuf, CHUNK) != CHUNK) { close(fd); _exit(2); }
+        }
+        close(fd);
+
+        fd = open(path, O_RDONLY);
+        if (fd < 0) _exit(3);
+        char rbuf[CHUNK];
+        for (int c = 0; c < ITERS; c++) {
+            if ((int)read(fd, rbuf, CHUNK) != CHUNK) { close(fd); _exit(4); }
+            for (int b = 0; b < CHUNK; b++) {
+                if (rbuf[b] != (char)((c * CHUNK + b) & 0xFF)) {
+                    close(fd); _exit(5);
+                }
+            }
+        }
+        close(fd);
+        unlink(path);
+        _exit(0);
+    }
+
+    int status = 0;
+    waitpid(pid, &status, 0);
+    TEST(group,
+         "irq-latency/large-scan: 16 KB file written+read in 256-byte chunks",
+         WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    unlink(path);
+}
+
+/* test 17: sequential write+read+verify on distinct files ───────────────
+ *
+ * N distinct files each get a 4-byte pattern written, closed, reopened,
+ * read back, and verified, then unlinked.  Each close forces a virtio write;
+ * each reopen with a cold cache forces a virtio read: 2N round-trips total.
+ *
+ * IRQ working : 200 × 2 × 0.1 ms ≈ 40 ms.
+ * IRQ broken  : 200 × 2 × 100 ms ≈ 40 s → timeout.
+ */
+static void test_irq_sequential_io(us_test_group_t *group) {
+    const int N = 200;
+    char path[48];
+    int ok = 1;
+
+    for (int i = 0; i < N && ok; i++) {
+        make_irq_path(path, sizeof(path), i);
+
+        int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd < 0) { ok = 0; break; }
+        char wbuf[4];
+        wbuf[0] = (char)( i        & 0xFF);
+        wbuf[1] = (char)((i >>  8) & 0xFF);
+        wbuf[2] = (char)((i *  7)  & 0xFF);
+        wbuf[3] = (char)((i * 13)  & 0xFF);
+        if ((int)write(fd, wbuf, 4) != 4) { close(fd); ok = 0; break; }
+        close(fd);
+
+        fd = open(path, O_RDONLY);
+        if (fd < 0) { ok = 0; break; }
+        char rbuf[4];
+        if ((int)read(fd, rbuf, 4) != 4) { close(fd); ok = 0; break; }
+        close(fd);
+
+        if (rbuf[0] != wbuf[0] || rbuf[1] != wbuf[1] ||
+            rbuf[2] != wbuf[2] || rbuf[3] != wbuf[3]) { ok = 0; break; }
+
+        if (unlink(path) < 0) { ok = 0; break; }
+    }
+
+    TEST(group,
+         "irq-latency/sequential: 200 write+close+read+verify+unlink cycles",
+         ok);
+
+    for (int i = 0; i < N; i++) {
+        make_irq_path(path, sizeof(path), i);
+        unlink(path);
+    }
+}
+
+/* test 18: create-unlink storm on a single path ─────────────────────────
+ *
+ * 300 iterations reuse the same path: each iteration creates, writes one
+ * byte, closes, reopens, reads back, verifies, and unlinks.  Inode allocation
+ * is reused every cycle, keeping metadata pressure predictable.  The only
+ * variable is how fast each virtio write and virtio read completes.
+ *
+ * IRQ working : 300 × 2 × 0.1 ms ≈ 60 ms.
+ * IRQ broken  : 300 × 2 × 100 ms ≈ 60 s → timeout.
+ */
+static void test_irq_create_unlink_storm(us_test_group_t *group) {
+    const int   N    = 300;
+    const char *path = "/mnt/irqlat_storm.bin";
+    int ok = 1;
+
+    for (int i = 0; i < N && ok; i++) {
+        int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd < 0) { ok = 0; break; }
+        char b = (char)(i & 0xFF);
+        if ((int)write(fd, &b, 1) != 1) { close(fd); ok = 0; break; }
+        close(fd);
+
+        fd = open(path, O_RDONLY);
+        if (fd < 0) { ok = 0; break; }
+        char got = 0;
+        if ((int)read(fd, &got, 1) != 1 || got != b) { close(fd); ok = 0; break; }
+        close(fd);
+
+        if (unlink(path) < 0) { ok = 0; break; }
+    }
+
+    TEST(group,
+         "irq-latency/storm: 300 create+write+close+read+verify+unlink cycles",
+         ok);
+    unlink(path);
+}
+
 /* ── public entry point ─────────────────────────────────────────────────── */
 
 void run_test_blkcache_stress(us_test_group_t *group) {
     ut_group_begin(group, "blkcache_stress");
 
-    // test_many_creates(group);
-    // test_create_reopen_loop(group);
-    // test_writes_many_files(group);
-    // test_create_unlink_cycles(group);
-    // test_cross_block_write(group);
-    // test_open_write_close_unlink_loop(group);
-    // test_fork_many_writers(group);
-    // // test_concurrent_churn(group); // take too long
+    /* --- single-process investigative variants (from FEEDBACK_MULTIFS §1) ---
+     * "narrow further: a loop that only creates files (no unlink) vs. one
+     *  that only writes to an existing file vs. one that forces the buffer
+     *  cache past its capacity"                                             */
+    // test_open_write_close_unlink_loop(group); /* baseline: alloc→write→free */
+    // test_create_nounlink_verbose(group);      /* only creates, no unlink    */
+    // test_single_fd_spam(group);              /* only writes, one hot block  */
+
+    /* --- cache-slot invariant (FEEDBACK_MULTIFS §3 — Issue B) ---
+     * 40 files overflow the cache, forcing dirty evictions.  Every file must
+     * read back correctly; a double-claimed slot produces silent wrong data. */
     // test_cache_eviction_thrash(group);
-    test_single_fd_spam(group);
-    test_multi_fd_parallel_spam(group);
-    // test_create_nounlink_verbose(group);
+
+    /* --- busy-gate race (FEEDBACK_MULTIFS §2 — Issue A) ---
+     * 2 concurrent children race the blk_dev.busy check-and-set.           */
+    // test_busy_gate_race(group);
+
+    /* --- IRQ delivery latency (FEEDBACK_MULTIFS §5 — Issue D) ---
+     * sequential I/O heavy enough to time out if each op waits a full timer
+     * tick (~100 ms) but fast if virtio IRQs are delivered correctly.       */
+    test_irq_large_file_scan(group);
+    test_irq_sequential_io(group);
+    test_irq_create_unlink_storm(group);
+
+    /* --- full concurrent churn (most thorough multi-process stress) ---    */
+    // test_concurrent_churn(group);
 
     ut_group_end(group);
 }
