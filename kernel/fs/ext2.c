@@ -674,6 +674,8 @@ vnode_t *ext2_lookup(mount_t *mnt, const char *path) {
 int ext2_read(vnode_t *vnode, void *buf, size_t offset, size_t len) {
     if (!vnode || !vnode->fs_data || !buf) return -1;
 
+    ext2_lock();
+
     ext2_inode_t *inode = (ext2_inode_t *)vnode->fs_data;
     ext2_mount_data_t *mnt = (ext2_mount_data_t *)vnode->mount->fs_data;
 
@@ -683,39 +685,42 @@ int ext2_read(vnode_t *vnode, void *buf, size_t offset, size_t len) {
 
     // Check if reading past end of file
     if (offset >= inode->i_size) {
+        ext2_unlock();
         return 0;
     }
-    
+
     // Adjust length if reading past EOF
     if (offset + len > inode->i_size) {
         len = inode->i_size - offset;
     }
-    
+
     size_t bytes_read = 0;
     uint8_t *block_buf = (uint8_t *)kmalloc(mnt->block_size);
-    if (!block_buf) return -1;
-    
+    if (!block_buf) { ext2_unlock(); return -1; }
+
     while (bytes_read < len) {
         uint32_t block_idx = (offset + bytes_read) / mnt->block_size;
         uint32_t block_offset = (offset + bytes_read) % mnt->block_size;
         uint32_t to_read = mnt->block_size - block_offset;
-        
+
         if (to_read > len - bytes_read) {
             to_read = len - bytes_read;
         }
-        
+
         // Read the block
         if (ext2_read_inode_block(mnt, inode, block_idx, block_buf) != 0) {
             kfree(block_buf);
+            ext2_unlock();
             return bytes_read > 0 ? (int)bytes_read : -1;
         }
-        
+
         // Copy data to output buffer
         memcpy((uint8_t *)buf + bytes_read, block_buf + block_offset, to_read);
         bytes_read += to_read;
     }
-    
+
     kfree(block_buf);
+    ext2_unlock();
     return (int)bytes_read;
 }
 
@@ -1699,12 +1704,16 @@ int ext2_readlink(vnode_t *vnode, char *buf, size_t size) {
 static int ext2_release(vnode_t *vnode) {
     if (!vnode || !vnode->fs_data || !vnode->mount) return 0;
 
+    ext2_lock();
+
     ext2_mount_data_t *mnt = (ext2_mount_data_t *)vnode->mount->fs_data;
     ext2_inode_t inode;
-    if (ext2_read_inode(mnt, (uint32_t)vnode->ino, &inode) != 0) return 0;
+    if (ext2_read_inode(mnt, (uint32_t)vnode->ino, &inode) != 0) { ext2_unlock(); return 0; }
 
-    if (inode.i_links_count != 0 || inode.i_dtime == 0)
+    if (inode.i_links_count != 0 || inode.i_dtime == 0) {
+        ext2_unlock();
         return 0; // still linked or not deleted — nothing to do
+    }
 
     // Free direct data blocks
     for (int i = 0; i < EXT2_NDIR_BLOCKS; i++) {
@@ -1779,6 +1788,7 @@ static int ext2_release(vnode_t *vnode) {
     ext2_write_superblock(mnt);
     ext2_write_gdt(mnt);
     block_cache_flush();
+    ext2_unlock();
     return 0;
 }
 

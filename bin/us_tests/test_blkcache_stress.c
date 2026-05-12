@@ -385,6 +385,11 @@ static void test_concurrent_churn(us_test_group_t *group) {
     for (int p = 0; p < NPROC; p++) {
         pids[p] = fork();
 
+        if (pids[p] < 0) {
+            printf("churn-diag: fork[%d] failed (pids[%d]=%d)\n", p, p, pids[p]);
+            continue;
+        }
+
         if (pids[p] == 0) {
             /* child */
             for (int i = 0; i < NITER; i++) {
@@ -393,11 +398,15 @@ static void test_concurrent_churn(us_test_group_t *group) {
 
                 /* create/write */
                 int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-                if (fd < 0) _exit(10);
+                if (fd < 0) {
+                    printf("churn-diag: p=%d i=%d open(O_CREAT) failed\n", p, i);
+                    _exit(10);
+                }
 
                 char b = (char)((p + i) & 0xFF);
 
                 if ((int)write(fd, &b, 1) != 1) {
+                    printf("churn-diag: p=%d i=%d write failed\n", p, i);
                     close(fd);
                     _exit(11);
                 }
@@ -406,11 +415,17 @@ static void test_concurrent_churn(us_test_group_t *group) {
 
                 /* reopen/readback */
                 fd = open(path, O_RDONLY);
-                if (fd < 0) _exit(12);
+                if (fd < 0) {
+                    printf("churn-diag: p=%d i=%d open(O_RDONLY) failed\n", p, i);
+                    _exit(12);
+                }
 
                 char got = 0;
 
-                if ((int)read(fd, &got, 1) != 1 || got != b) {
+                int rret = (int)read(fd, &got, 1);
+                if (rret != 1 || got != b) {
+                    printf("churn-diag: p=%d i=%d read=%d got=%d expected=%d\n",
+                           p, i, rret, (int)got, (int)b);
                     close(fd);
                     _exit(13);
                 }
@@ -418,7 +433,10 @@ static void test_concurrent_churn(us_test_group_t *group) {
                 close(fd);
 
                 /* unlink immediately */
-                if (unlink(path) < 0) _exit(14);
+                if (unlink(path) < 0) {
+                    printf("churn-diag: p=%d i=%d unlink failed\n", p, i);
+                    _exit(14);
+                }
 
                 /*
                  * Optional:
@@ -436,12 +454,17 @@ static void test_concurrent_churn(us_test_group_t *group) {
     for (int i = 0; i < NPROC; i++) {
         int status = 0;
 
+        if (pids[i] < 0) { ok = 0; continue; }
+
         if (waitpid(pids[i], &status, 0) < 0) {
+            printf("churn-diag: waitpid(pids[%d]=%d) returned -1\n", i, pids[i]);
             ok = 0;
             continue;
         }
 
         if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+            printf("churn-diag: pids[%d]=%d status=0x%x WIFEXITED=%d WEXITSTATUS=%d\n",
+                   i, pids[i], status, WIFEXITED(status), WEXITSTATUS(status));
             ok = 0;
         }
     }
@@ -915,18 +938,18 @@ void run_test_blkcache_stress(us_test_group_t *group) {
      * "narrow further: a loop that only creates files (no unlink) vs. one
      *  that only writes to an existing file vs. one that forces the buffer
      *  cache past its capacity"                                             */
-    // test_open_write_close_unlink_loop(group); /* baseline: alloc→write→free */
-    // test_create_nounlink_verbose(group);      /* only creates, no unlink    */
-    // test_single_fd_spam(group);              /* only writes, one hot block  */
+    test_open_write_close_unlink_loop(group); /* baseline: alloc→write→free */
+    test_create_nounlink_verbose(group);      /* only creates, no unlink    */
+    test_single_fd_spam(group);              /* only writes, one hot block  */
 
     /* --- cache-slot invariant (FEEDBACK_MULTIFS §3 — Issue B) ---
      * 40 files overflow the cache, forcing dirty evictions.  Every file must
      * read back correctly; a double-claimed slot produces silent wrong data. */
-    // test_cache_eviction_thrash(group);
+    test_cache_eviction_thrash(group);
 
     /* --- busy-gate race (FEEDBACK_MULTIFS §2 — Issue A) ---
      * 2 concurrent children race the blk_dev.busy check-and-set.           */
-    // test_busy_gate_race(group);
+    test_busy_gate_race(group);
 
     /* --- IRQ delivery latency (FEEDBACK_MULTIFS §5 — Issue D) ---
      * probe first: 1 write + 1 read → exactly 2 "IRQ fired" kernel prints.
