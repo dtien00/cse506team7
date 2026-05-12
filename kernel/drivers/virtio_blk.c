@@ -209,8 +209,10 @@ static int virtio_blk_rw(uint64_t sector, void *buf, size_t count, int write) {
 
     if (scheduler_live && current) {
         interrupts_off();
-        while (blk_dev.busy)
+        while (blk_dev.busy) {
             proc_sleep(&blk_dev.busy);
+            interrupts_off();
+        }
         blk_dev.busy = 1;
         interrupts_on();
     }
