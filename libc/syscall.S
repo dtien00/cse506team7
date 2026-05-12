@@ -54,6 +54,7 @@
 .global setpgid
 .global setsid
 .global getpgid
+.global getsid
 .global tcsetpgrp
 .global tcgetpgrp
 .global nanosleep
@@ -350,6 +351,11 @@ setsid:
 
 getpgid:
     li a7, 53
+    ecall
+    j __syscall_ret
+
+getsid:
+    li a7, 156
     ecall
     j __syscall_ret
 

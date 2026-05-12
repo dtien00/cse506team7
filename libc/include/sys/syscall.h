@@ -51,6 +51,7 @@
 #define SYS_setpgid          51
 #define SYS_setsid           52
 #define SYS_getpgid          53
+#define SYS_getsid           156  /* Linux RISC-V ABI */
 #define SYS_rmdir            54
 #define SYS_fs_getdents      61
 #define SYS_stat             79

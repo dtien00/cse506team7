@@ -503,6 +503,10 @@ void syscall_handler(trap_frame *frame) {
             ret = sys_getpgid((pid_t)arg0);
             break;
 
+        case SYS_getsid:
+            ret = sys_getsid((pid_t)arg0);
+            break;
+
         case SYS_tcsetpgrp:
             ret = sys_tcsetpgrp((pid_t)arg1);
             break;
@@ -2435,6 +2439,22 @@ pid_t sys_getpgid(pid_t pid) {
     if (!p || p->state == PROC_UNUSED || p->state == PROC_ZOMBIE)
         return -1;
     return p->pgid;
+}
+
+/*
+ * sys_getsid — return the session id of process pid.
+ * pid == 0 means the calling process.
+ * POSIX: -ESRCH if no such process. SBUnix has a single implicit session
+ * domain (no security partitioning), so the XSI EPERM clause does not apply.
+ */
+pid_t sys_getsid(pid_t pid) {
+    if (!current) return -1;
+    if (pid == 0 || pid == current->pid)
+        return current->sid;
+    struct proc *p = proc_find(pid);
+    if (!p || p->state == PROC_UNUSED || p->state == PROC_ZOMBIE)
+        return -ESRCH;
+    return p->sid;
 }
 
 /*
