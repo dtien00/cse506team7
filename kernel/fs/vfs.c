@@ -931,6 +931,37 @@ int vfs_fchmod(vnode_t *vn, mode_t mode) {
     return -EROFS;
 }
 
+int vfs_ftruncate(vnode_t *vn, off_t length) {
+    if (!vn || length < 0) return -EINVAL;
+    /* tmpfs stores only permission bits in vnode->mode (no S_IFREG type bits),
+     * so check S_ISDIR rather than !S_ISREG to avoid false rejections. */
+    if (S_ISDIR(vn->mode)) return -EISDIR;
+    if (!vn->mount || !vn->mount->fs_type->ops.truncate_to) return -EROFS;
+    return vn->mount->fs_type->ops.truncate_to(vn, length);
+}
+
+int vfs_truncate_to(const char *path, off_t length) {
+    if (!path || length < 0) return -EINVAL;
+
+    dentry_t *d = NULL;
+    int err = vfs_lookup_from(
+        current && current->fs ? current->fs->cwd : vfs_root,
+        path, &d);
+    if (err) return err;
+
+    vnode_t *vn = d->d_vnode;
+    int ret;
+    if (S_ISDIR(vn->mode))
+        ret = -EISDIR;
+    else if (!vn->mount || !vn->mount->fs_type->ops.truncate_to)
+        ret = -EROFS;
+    else
+        ret = vn->mount->fs_type->ops.truncate_to(vn, length);
+
+    dentry_put(d);
+    return ret;
+}
+
 int vfs_rmdir(const char *path) {
     if (!path) return -EINVAL;
 

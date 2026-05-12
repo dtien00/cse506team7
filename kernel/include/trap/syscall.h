@@ -86,6 +86,8 @@
 #define SYS_fstatat     102  /* int fstatat(int dirfd, const char *, struct stat *, int flags) */
 #define SYS_sigreturn   103  /* int sigreturn(trap_frame *frame) */
 #define SYS_select      104  /* int select(int, fd_set*, fd_set*, fd_set*, timeval*) */
+#define SYS_truncate    45   /* int truncate(const char *path, off_t length) — Linux RISC-V ABI */
+#define SYS_ftruncate   46   /* int ftruncate(int fd, off_t length) — Linux RISC-V ABI */
 #define SYS_clock_gettime 113 /* int clock_gettime(clockid_t, struct timespec *) — Linux RISC-V ABI */
 
 /* Kernel-side fd_set — ABI-identical to libc/include/sys/select.h fd_set */
@@ -185,3 +187,5 @@ int sys_sigreturn(trap_frame *frame);
 int sys_select(int nfds, k_fd_set *urfds, k_fd_set *uwfds, k_fd_set *uefds,
                struct timeval_k *utv);
 int sys_clock_gettime(clockid_t clockid, struct timespec *tp);
+int sys_ftruncate(int fd, off_t length);
+int sys_truncate(const char *upath, off_t length);

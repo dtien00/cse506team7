@@ -72,6 +72,8 @@
 .global __syscall_fcntl
 .global select
 .global clock_gettime
+.global ftruncate
+.global truncate
 
 mmap:
     li a7, 14
@@ -436,6 +438,16 @@ select:
 
 clock_gettime:
     li a7, 113
+    ecall
+    j __syscall_ret
+
+ftruncate:
+    li a7, 46
+    ecall
+    j __syscall_ret
+
+truncate:
+    li a7, 45
     ecall
     j __syscall_ret
 

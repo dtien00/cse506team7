@@ -1233,45 +1233,79 @@ int ext2_mkdir(mount_t *mnt, const char *path, uint32_t mode) {
 }
 
 // Truncate an ext2 file to zero length: free all data blocks and reset size.
-static int ext2_truncate(vnode_t *vnode) {
-    if (!vnode || !vnode->fs_data || !vnode->mount) return -1;
+static void ext2_free_block(ext2_mount_data_t *mnt, uint32_t blk)
+{
+    uint32_t group = (blk - mnt->sb->s_first_data_block) / mnt->blocks_per_group;
+    uint32_t bit   = (blk - mnt->sb->s_first_data_block) % mnt->blocks_per_group;
+    uint8_t *bitmap = (uint8_t *)kmalloc(mnt->block_size);
+    if (!bitmap) return;
+    if (block_cache_read(mnt->group_desc[group].bg_block_bitmap, bitmap) == 0) {
+        bitmap[bit / 8] &= ~(1u << (bit % 8));
+        block_cache_write(mnt->group_desc[group].bg_block_bitmap, bitmap);
+        mnt->group_desc[group].bg_free_blocks_count++;
+        mnt->sb->s_free_blocks_count++;
+        ext2_write_superblock(mnt);
+        ext2_write_gdt(mnt);
+    }
+    kfree(bitmap);
+}
+
+static int ext2_truncate_to(vnode_t *vnode, off_t length)
+{
+    if (!vnode || !vnode->fs_data || !vnode->mount) return -EINVAL;
+    if (length < 0) return -EINVAL;
 
     ext2_inode_t *inode = (ext2_inode_t *)vnode->fs_data;
     ext2_mount_data_t *mnt = (ext2_mount_data_t *)vnode->mount->fs_data;
 
-    // Refresh from disk so we don't clobber fields (e.g. i_links_count) updated
-    // via another vnode pointing to the same inode (hardlinks).
+    /* Refresh from disk to avoid clobbering shared fields (e.g. hardlinks). */
     ext2_read_inode(mnt, (uint32_t)vnode->ino, inode);
 
-    // Free each allocated direct block
+    off_t cur_size = (off_t)inode->i_size;
+    uint32_t bsz   = mnt->block_size;
+
+    /* Extension: just advance EOF; unallocated blocks read back as zero. */
+    if (length >= cur_size) {
+        if (length != cur_size) {
+            inode->i_size = (uint32_t)length;
+            vnode->size   = (size_t)length;
+            ext2_write_inode(mnt, vnode->ino, inode);
+        }
+        return 0;
+    }
+
+    /* Shrink: walk direct blocks only (same scope as the original truncate). */
     for (int i = 0; i < EXT2_NDIR_BLOCKS; i++) {
         uint32_t blk = inode->i_block[i];
         if (blk == 0) continue;
 
-        // Determine which group owns this block
-        uint32_t group = (blk - mnt->sb->s_first_data_block) / mnt->blocks_per_group;
-        uint32_t bit   = (blk - mnt->sb->s_first_data_block) % mnt->blocks_per_group;
+        off_t block_start = (off_t)i * (off_t)bsz;
+        off_t block_end   = block_start + (off_t)bsz;
 
-        uint8_t *bitmap = (uint8_t *)kmalloc(mnt->block_size);
-        if (!bitmap) continue;
-
-        if (block_cache_read(mnt->group_desc[group].bg_block_bitmap, bitmap) == 0) {
-            bitmap[bit / 8] &= ~(1 << (bit % 8));
-            block_cache_write(mnt->group_desc[group].bg_block_bitmap, bitmap);
-            mnt->group_desc[group].bg_free_blocks_count++;
-            mnt->sb->s_free_blocks_count++;
-            ext2_write_superblock(mnt);
-            ext2_write_gdt(mnt);
+        if (block_start >= length) {
+            ext2_free_block(mnt, blk);
+            inode->i_block[i] = 0;
+        } else if (block_end > length) {
+            /* Zero the tail of the partial last block. */
+            uint32_t tail = (uint32_t)(length - block_start);
+            uint8_t *buf = (uint8_t *)kmalloc(bsz);
+            if (buf) {
+                if (block_cache_read(blk, buf) == 0) {
+                    memset(buf + tail, 0, bsz - tail);
+                    block_cache_write(blk, buf);
+                }
+                kfree(buf);
+            }
         }
-        kfree(bitmap);
-
-        inode->i_block[i] = 0;
     }
 
-    inode->i_blocks = 0;
-    inode->i_size   = 0;
-    vnode->size     = 0;
+    uint32_t kept = 0;
+    for (int i = 0; i < EXT2_NDIR_BLOCKS; i++)
+        if (inode->i_block[i]) kept++;
+    inode->i_blocks = kept * (bsz / 512);
 
+    inode->i_size = (uint32_t)length;
+    vnode->size   = (size_t)length;
     ext2_write_inode(mnt, vnode->ino, inode);
     return 0;
 }
@@ -1884,7 +1918,7 @@ void ext2_init(void) {
     ext2_fs_type.ops.create = ext2_create;
     ext2_fs_type.ops.unlink = ext2_unlink;
     ext2_fs_type.ops.mkdir = ext2_mkdir;
-    ext2_fs_type.ops.truncate = ext2_truncate;
+    ext2_fs_type.ops.truncate_to = ext2_truncate_to;
     ext2_fs_type.ops.readdir  = ext2_readdir;
     ext2_fs_type.ops.chmod    = ext2_chmod;
     ext2_fs_type.ops.rmdir    = ext2_rmdir;

@@ -579,6 +579,14 @@ void syscall_handler(trap_frame *frame) {
             ret = sys_clock_gettime((clockid_t)arg0, (struct timespec *)arg1);
             break;
 
+        case SYS_ftruncate:
+            ret = sys_ftruncate((int)arg0, (off_t)arg1);
+            break;
+
+        case SYS_truncate:
+            ret = sys_truncate((const char *)arg0, (off_t)arg1);
+            break;
+
         default:
             // Unknown syscall number from user space will be recognized as delivering SIGSYS (Bad system call)
             // Set a0 = -ENOSYS so masked SIGSYS callers see a defined return value.
@@ -1944,6 +1952,44 @@ int sys_clock_gettime(clockid_t clockid, struct timespec *tp) {
 
     if (copy_to_user(tp, &kts, sizeof(kts)) < 0) return -EFAULT;
     return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* sys_ftruncate / sys_truncate                                         */
+/* ------------------------------------------------------------------ */
+
+int sys_ftruncate(int fd, off_t length) {
+    if (length < 0) return -EINVAL;
+    if (!current) return -EINVAL;
+    file_t *f = fd_get(&current->fds, fd);
+    if (!f) return -EBADF;
+    if (f->type != FILE_VNODE || !f->vnode) return -EBADF;
+    if ((f->flags & O_ACCMODE) == O_RDONLY) return -EACCES;
+    return vfs_ftruncate(f->vnode, length);
+}
+
+int sys_truncate(const char *upath, off_t length) {
+    if (length < 0) return -EINVAL;
+    if (!current || !upath) return -EFAULT;
+
+    char *_bufs = kmalloc(2 * MAX_PATH);
+    if (!_bufs) return -ENOMEM;
+    char *kpath    = _bufs;
+    char *resolved = _bufs + MAX_PATH;
+
+    if (strncpy_from_user(kpath, upath, MAX_PATH - 1) < 0) {
+        kfree(_bufs); return -EFAULT;
+    }
+    kpath[MAX_PATH - 1] = '\0';
+
+    if (dentry_normalize_path(current->fs->cwd, vfs_get_root(),
+                              kpath, resolved, MAX_PATH) < 0) {
+        kfree(_bufs); return -ENAMETOOLONG;
+    }
+
+    int ret = vfs_truncate_to(resolved, length);
+    kfree(_bufs);
+    return ret;
 }
 
 /* ------------------------------------------------------------------ */
