@@ -106,41 +106,33 @@ uintptr_t pci_virtio_cap_addr(pci_addr_t a, uint8_t cfg_type,
                                uint32_t *notify_off_multiplier) {
     if (notify_off_multiplier) *notify_off_multiplier = 4;
 
-    // Enable bus-mastering and memory space decoding
+    // Enable bus-mastering and memory space decoding; clear Interrupt Disable
+    // (bit 10) so the device can assert INTx.  The bit-OR approach would
+    // leave a firmware-set Interrupt Disable bit in place, so mask it out.
     uint32_t cmd = pci_read32(a.bus, a.dev, a.fn, PCI_COMMAND);
     pci_write32(a.bus, a.dev, a.fn, PCI_COMMAND,
-                cmd | PCI_CMD_BUS_MASTER | PCI_CMD_MEM_SPACE);
+                (cmd | PCI_CMD_BUS_MASTER | PCI_CMD_MEM_SPACE) & ~PCI_CMD_INT_DISABLE);
 
     // Walk the PCI capability list
     uint8_t cap_ptr = pci_read8(a.bus, a.dev, a.fn, PCI_CAP_PTR) & 0xFC;
-    printk("pci: cap_ptr=%d looking for cfg_type=%d\n", cap_ptr, cfg_type);
     while (cap_ptr != 0) {
         uint8_t cap_id   = pci_read8(a.bus, a.dev, a.fn, cap_ptr + 0);
         uint8_t cap_next = pci_read8(a.bus, a.dev, a.fn, cap_ptr + 1);
-        printk("pci:   cap @ %d id=%d next=%d\n", cap_ptr, cap_id, cap_next);
 
         if (cap_id == PCI_CAP_ID_VNDR) {
-            uint8_t  ct  = pci_read8 (a.bus, a.dev, a.fn, cap_ptr + 3);  // cfg_type
-            uint8_t  bar = pci_read8 (a.bus, a.dev, a.fn, cap_ptr + 4);  // BAR index
-            uint32_t off = pci_read32(a.bus, a.dev, a.fn, cap_ptr + 8);  // offset in BAR
-            printk("pci:     vendor cap: ct=%d bar=%d off=%ld\n", ct, bar, (long)off);
+            uint8_t  ct  = pci_read8 (a.bus, a.dev, a.fn, cap_ptr + 3);
+            uint8_t  bar = pci_read8 (a.bus, a.dev, a.fn, cap_ptr + 4);
+            uint32_t off = pci_read32(a.bus, a.dev, a.fn, cap_ptr + 8);
 
             if (ct == cfg_type) {
                 uintptr_t bar_base = pci_bar_base(a, bar);
-                uint32_t raw_bar = pci_read32(a.bus, a.dev, a.fn, PCI_BAR0 + bar * 4);
-                printk("pci:     BAR[%d] raw=%ld base=%ld addr=%ld\n",
-                       bar, (long)raw_bar, (long)bar_base, (long)(bar_base + off));
-                if (notify_off_multiplier && cfg_type == VIRTIO_PCI_CAP_NOTIFY_CFG) {
-                    // The 4-byte notify_off_multiplier follows at cap_ptr+16
+                if (notify_off_multiplier && cfg_type == VIRTIO_PCI_CAP_NOTIFY_CFG)
                     *notify_off_multiplier = pci_read32(a.bus, a.dev, a.fn, cap_ptr + 16);
-                    printk("pci:     notify_off_mult=%ld\n", (long)*notify_off_multiplier);
-                }
                 return bar_base + off;
             }
         }
 
         cap_ptr = cap_next & 0xFC;
     }
-    printk("pci: cfg_type=%d not found\n", cfg_type);
     return 0;
 }

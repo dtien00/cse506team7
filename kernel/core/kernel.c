@@ -91,6 +91,7 @@ void run_all_tests(void) {
     access_test_run();
     clock_gettime_test_run();
     truncate_test_run();
+    block_cache_race_test_run();
 
     // kstack_overflow_test_run();   // DESTRUCTIVE: must be last — triggers kernel stack overflow panic
 

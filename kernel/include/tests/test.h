@@ -53,3 +53,4 @@ void mm_vma_test_run(void);
 void access_test_run(void);
 void clock_gettime_test_run(void);
 void truncate_test_run(void);
+void block_cache_race_test_run(void);

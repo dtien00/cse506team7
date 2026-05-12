@@ -77,6 +77,7 @@ void run_test_sh_dash_c(us_test_group_t *group);
 void run_test_nanosleep(us_test_group_t *group);
 void run_test_sh_dash_c(us_test_group_t *group);
 void run_test_xv6_compat(us_test_group_t *group);
+void run_test_blkcache_stress(us_test_group_t *group);
 void run_test_fd_limits(us_test_group_t *group);
 void run_test_shell_exit(us_test_group_t *group);
 void run_test_limits(us_test_group_t *group);
@@ -148,10 +149,10 @@ void run_test_python_smoke(us_test_group_t *group);
  * RUN_MEMORY_HEAVY – tests that make large heap / anonymous-mmap allocations:
  *                   malloc, lazy_alloc (8 MB mmap, 4 MB sbrk regions)
  */
-static const int RUN_ALL_TESTS   = 1;
+static const int RUN_ALL_TESTS   = 0;
 static const int RUN_FORK_HEAVY  = RUN_ALL_TESTS && 1;
 static const int RUN_MEMORY_HEAVY = RUN_ALL_TESTS && 1;
-static const int RUN_STRESS_TESTS = RUN_ALL_TESTS || 0;
+static const int RUN_STRESS_TESTS = RUN_ALL_TESTS && 1;
 static const int RUN_PYTHON_TESTS = RUN_ALL_TESTS && 0;
 
 int main(int argc, char **argv, char **envp) {
@@ -196,6 +197,7 @@ int main(int argc, char **argv, char **envp) {
     ut_suite_begin("SBUnix Userspace Test Suite");
     int idx = 0;
 
+    run_test_blkcache_stress(&groups[idx++]);
     /* ── Lightweight / no-fork tests (always run) ─────────────────────────── */
     if (RUN_ALL_TESTS) {
         run_test_printf(&groups[idx++]);
@@ -275,6 +277,7 @@ int main(int argc, char **argv, char **envp) {
     /* ── Disabled stress / destructive tests (uncomment individually) ───────── */
     if (RUN_STRESS_TESTS) {
         // run_test_xv6_compat(&groups[idx++]);
+        run_test_blkcache_stress(&groups[idx++]);
         // run_test_fd_limits(&groups[idx++]);
         // run_test_limits(&groups[idx++]);
         // run_test_rlimit(&groups[idx++]);

@@ -18,10 +18,12 @@
 #define PCI_BAR5            0x24
 #define PCI_CAP_PTR         0x34
 #define PCI_INTERRUPT_LINE  0x3C
+#define PCI_INTERRUPT_PIN   0x3D
 
 // PCI command register bits
 #define PCI_CMD_BUS_MASTER  (1 << 2)
 #define PCI_CMD_MEM_SPACE   (1 << 1)
+#define PCI_CMD_INT_DISABLE (1 << 10)
 
 // VirtIO PCI capability ID (vendor-specific)
 #define PCI_CAP_ID_VNDR     0x09
