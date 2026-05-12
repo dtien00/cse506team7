@@ -173,8 +173,8 @@ int virtio_blk_init(void) {
     blk_dev.irq = pci_read8(pci.bus, pci.dev, pci.fn, PCI_INTERRUPT_LINE);
     printk("virtio_blk: PCI interrupt_line = %u\n", blk_dev.irq);
     if (blk_dev.irq == 0 || blk_dev.irq == 0xFF) {
-        printk("virtio_blk: WARNING: invalid interrupt_line, falling back to IRQ 1\n");
-        blk_dev.irq = 1;
+        printk("virtio_blk: WARNING: invalid interrupt_line, falling back to PCIe INTA IRQ 32\n");
+        blk_dev.irq = 32;
     }
     plic_enable_irq(blk_dev.irq);
     #undef CFG_R8
@@ -252,6 +252,10 @@ static int virtio_blk_rw(uint64_t sector, void *buf, size_t count, int write) {
     __sync_synchronize();
     blk_dev.avail->idx = avail_idx + 1;
     __sync_synchronize();
+
+    // Re-arm the IRQ for this submission (disabled by virtio_blk_irq after
+    // the previous completion to prevent INTx level-trigger storms).
+    plic_enable_irq(blk_dev.irq);
 
     // Notify device: write queue index 0 to the notify address
     *(volatile uint32_t *)blk_dev.notify_addr = 0;
@@ -354,6 +358,7 @@ int virtio_blk_flush(void) {
     blk_dev.avail->idx = avail_idx + 1;
     __sync_synchronize();
 
+    plic_enable_irq(blk_dev.irq);
     *(volatile uint32_t *)blk_dev.notify_addr = 0;
 
     if (scheduler_live && current) {
@@ -402,17 +407,20 @@ uint32_t virtio_blk_get_irq(void) {
 
 // Called from the external interrupt handler when the virtio IRQ fires.
 // Advances last_used_idx and wakes whoever is sleeping on &blk_dev.
-// for some reason this does not seem to get called
+// NOTE: was not called before plic_enable_irq fix (irq/32 word index was wrong)
 void virtio_blk_irq(void) {
-    // Read ISR status to acknowledge the interrupt at the device level.
-    // For VirtIO PCI legacy interrupts, reading the ISR register deasserts
-    // the interrupt line. Without this, the PLIC re-raises the IRQ immediately
-    // after plic_complete(), causing an interrupt storm that starves the timer.
+    // Disable this PLIC source immediately so plic_complete() in the caller
+    // cannot re-deliver the interrupt if the device INTx line is still asserted
+    // (which happens when isr_addr is NULL and the ISR register goes unread).
+    // The source is re-armed in virtio_blk_rw() before the next submission.
+    plic_disable_irq(blk_dev.irq);
+
+    // Read ISR status to deassert the device-level interrupt line.
     if (blk_dev.isr_addr)
         (void)*blk_dev.isr_addr;
 
-    printk("virtio_blk: IRQ fired last_used=%u used->idx=%u sstatus=%lx\n",
-           blk_dev.last_used_idx, blk_dev.used->idx, read_csr(sstatus));
+    printk("virtio_blk: IRQ fired last_used=%u used->idx=%u\n",
+           blk_dev.last_used_idx, blk_dev.used->idx);
     while (blk_dev.last_used_idx != blk_dev.used->idx) {
         blk_dev.last_used_idx++;
     }

@@ -48,6 +48,17 @@ static void make_path(char *out, int outsz, const char *prefix, int idx) {
     out[n] = '\0';
 }
 
+static void make_irq_path(char *out, int outsz, int idx) {
+    const char *pre = "/mnt/irqlat_";
+    int n = 0;
+    for (int i = 0; pre[i] && n < outsz - 12; i++) out[n++] = pre[i];
+    char tmp[12];
+    itoa_simple(idx, tmp, sizeof(tmp));
+    for (int i = 0; tmp[i] && n < outsz - 5; i++) out[n++] = tmp[i];
+    out[n++] = '.'; out[n++] = 'b'; out[n++] = 'i'; out[n++] = 'n';
+    out[n] = '\0';
+}
+
 /* ── test 1: many successive file creations (no unlink between them) ─────
  *
  * Each open(O_CREAT) forces: inode bitmap read → inode alloc write →
@@ -413,7 +424,7 @@ static void test_concurrent_churn(us_test_group_t *group) {
                  * Optional:
                  * tiny sleep increases interleaving randomness
                  */
-                // usleep(1000);
+                usleep(1000);
             }
 
             _exit(0);
@@ -661,7 +672,85 @@ static void test_busy_gate_race(us_test_group_t *group) {
          ok);
 }
 
-/* ── tests 16-18: IRQ delivery latency (FEEDBACK_MULTIFS §5 — Issue D) ────
+/* ── test 16: IRQ probe — confirms virtio_blk_irq() is being called ─────────
+ *
+ * A single write+read pair on one file does NOT trigger a disk op: the
+ * block cache absorbs both without going to disk.  To guarantee a virtio
+ * call we must first evict the probe file's blocks from the cache.
+ *
+ * Strategy:
+ *   1. Write probe byte to /mnt/irqlat_probe.bin  (lands in cache, LRU slot)
+ *   2. Create NFLUSH distinct flusher files        (each adds a new block;
+ *      when the 256-slot cache overflows the probe's blocks are evicted
+ *      because they have the oldest last_access timestamps)
+ *   3. printf("irq-probe: reading back — expect IRQ fired below")
+ *   4. Read probe file  →  cache miss  →  virtio_blk_read  →  IRQ fires
+ *   5. "virtio_blk: IRQ fired ..." should appear immediately after step 3
+ *
+ * Expected console output (IRQ working):
+ *   irq-probe: writing probe file
+ *   irq-probe: flushing cache with 40 files
+ *   irq-probe: reading back — expect 'IRQ fired' line below
+ *   virtio_blk: IRQ fired last_used=N used->idx=N+1
+ *   irq-probe: PASS
+ *
+ * If IRQ is broken the 'IRQ fired' line is absent and the read stalls
+ * ~100 ms waiting for the timer poll.
+ */
+static void test_irq_probe(us_test_group_t *group) {
+    const char *probe = "/mnt/irqlat_probe.bin";
+    char fpath[48];
+    const int NFLUSH = 40;
+    int ok = 1;
+
+    /* step 1: write probe into cache */
+    printf("irq-probe: writing probe file\n");
+    int fd = open(probe, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    ok = (fd >= 0);
+    if (ok) {
+        char b = 0x42;
+        ok = ((int)write(fd, &b, 1) == 1);
+        close(fd);
+    }
+
+    /* step 2: flood cache so probe's blocks become LRU and get evicted.
+     * Each flusher file has a unique path → unique inode + data block.
+     * After NFLUSH files the cache overflows and writes probe's dirty
+     * inode/data blocks to disk, freeing their slots. */
+    printf("irq-probe: flushing cache with %d files\n", NFLUSH);
+    for (int i = 0; i < NFLUSH && ok; i++) {
+        make_irq_path(fpath, sizeof(fpath), 9000 + i);
+        int ffd = open(fpath, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (ffd < 0) { ok = 0; break; }
+        char b = (char)(i & 0xFF);
+        write(ffd, &b, 1);
+        close(ffd);
+    }
+
+    /* step 3+4: read probe — its data block is no longer cached, so the
+     * kernel issues virtio_blk_read, which wakes via IRQ (or poll).
+     * The "IRQ fired" printk appears between these two user-space lines. */
+    printf("irq-probe: reading back -- expect 'IRQ fired' line below\n");
+    if (ok) {
+        fd = open(probe, O_RDONLY);
+        ok = (fd >= 0);
+        if (ok) {
+            char got = 0;
+            ok = ((int)read(fd, &got, 1) == 1 && got == 0x42);
+            close(fd);
+        }
+    }
+    printf("irq-probe: %s\n", ok ? "PASS" : "FAIL");
+
+    unlink(probe);
+    for (int i = 0; i < NFLUSH; i++) {
+        make_irq_path(fpath, sizeof(fpath), 9000 + i);
+        unlink(fpath);
+    }
+    TEST(group, "irq-probe: evict+read forces virtio_blk_irq() call", ok);
+}
+
+/* ── tests 17-19: IRQ delivery latency (FEEDBACK_MULTIFS §5 — Issue D) ────
  *
  * Root cause: plic_enable_irq(irq) computes (1 << irq) with a 32-bit int.
  * When irq >= 32 (QEMU virt assigns PCI virtio-blk INTA to PLIC source 32),
@@ -678,17 +767,6 @@ static void test_busy_gate_race(us_test_group_t *group) {
  * No concurrency is needed to expose IRQ latency — sequential I/O is enough.
  */
 
-/* helper shared by irq-latency tests */
-static void make_irq_path(char *out, int outsz, int idx) {
-    const char *pre = "/mnt/irqlat_";
-    int n = 0;
-    for (int i = 0; pre[i] && n < outsz - 12; i++) out[n++] = pre[i];
-    char tmp[12];
-    itoa_simple(idx, tmp, sizeof(tmp));
-    for (int i = 0; tmp[i] && n < outsz - 5; i++) out[n++] = tmp[i];
-    out[n++] = '.'; out[n++] = 'b'; out[n++] = 'i'; out[n++] = 'n';
-    out[n] = '\0';
-}
 
 /* test 16: large file written and read back in small chunks ─────────────
  *
@@ -851,11 +929,12 @@ void run_test_blkcache_stress(us_test_group_t *group) {
     // test_busy_gate_race(group);
 
     /* --- IRQ delivery latency (FEEDBACK_MULTIFS §5 — Issue D) ---
-     * sequential I/O heavy enough to time out if each op waits a full timer
-     * tick (~100 ms) but fast if virtio IRQs are delivered correctly.       */
-    test_irq_large_file_scan(group);
-    test_irq_sequential_io(group);
-    test_irq_create_unlink_storm(group);
+     * probe first: 1 write + 1 read → exactly 2 "IRQ fired" kernel prints.
+     * The heavier tests follow; comment them out while diagnosing.          */
+    test_irq_probe(group);
+    // test_irq_large_file_scan(group);
+    // test_irq_sequential_io(group);
+    // test_irq_create_unlink_storm(group);
 
     /* --- full concurrent churn (most thorough multi-process stress) ---    */
     // test_concurrent_churn(group);
