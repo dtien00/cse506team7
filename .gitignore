@@ -17,3 +17,4 @@ dump/**
 /.gdbinit
 /thirdparty/python/
 flat_kernel.sh
+tests/
