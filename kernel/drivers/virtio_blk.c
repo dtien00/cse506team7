@@ -27,13 +27,9 @@ int virtio_blk_init(void) {
 
     // Step 2: Locate CommonCfg, Notify, and DeviceCfg capability regions
     uint32_t notify_off_mult = 4;
-    printk("looking for VIRTIO_PCI_CAP_COMMON_CFG (%d)\n", VIRTIO_PCI_CAP_COMMON_CFG);
     uintptr_t common_addr = pci_virtio_cap_addr(pci, VIRTIO_PCI_CAP_COMMON_CFG, NULL);
-    printk("looking for VIRTIO_PCI_CAP_NOTIFY_CFG (%d)\n", VIRTIO_PCI_CAP_NOTIFY_CFG);
     uintptr_t notify_base = pci_virtio_cap_addr(pci, VIRTIO_PCI_CAP_NOTIFY_CFG, &notify_off_mult);
-    printk("looking for VIRTIO_PCI_CAP_DEVICE_CFG (%d)\n", VIRTIO_PCI_CAP_DEVICE_CFG);
     uintptr_t devcfg_addr = pci_virtio_cap_addr(pci, VIRTIO_PCI_CAP_DEVICE_CFG, NULL);
-    printk("looking for VIRTIO_PCI_CAP_ISR_CFG (%d)\n", VIRTIO_PCI_CAP_ISR_CFG);
     uintptr_t isr_addr    = pci_virtio_cap_addr(pci, VIRTIO_PCI_CAP_ISR_CFG, NULL);
 
     if (!common_addr) {
@@ -44,9 +40,6 @@ int virtio_blk_init(void) {
         printk("virtio_blk: Notify capability not found\n");
         return -1;
     }
-
-    printk("virtio_blk: CommonCfg @ %ld, Notify @ %ld, DevCfg @ %ld, ISR @ %ld\n",
-           common_addr, notify_base, devcfg_addr, isr_addr);
 
     blk_dev.dev_cfg  = (volatile uint32_t *)devcfg_addr;
     blk_dev.isr_addr = (volatile uint8_t *)isr_addr;
@@ -76,14 +69,9 @@ int virtio_blk_init(void) {
     // Step 4: ACKNOWLEDGE + DRIVER
     CFG_W8(20, VIRTIO_STATUS_ACKNOWLEDGE | VIRTIO_STATUS_DRIVER);
 
-    // Step 5: Feature negotiation
-    CFG_W32(0, 0);
-    uint32_t dev_feat0 = CFG_R32(4);
-    CFG_W32(0, 1);
-    uint32_t dev_feat1 = CFG_R32(4);
-    printk("virtio_blk: device features word0=%ld word1=%ld\n",
-           (long)dev_feat0, (long)dev_feat1);
-
+    // Step 5: Feature negotiation (read device features, negotiate VERSION_1)
+    CFG_W32(0, 0); CFG_R32(4);  // word 0 (unused)
+    CFG_W32(0, 1); CFG_R32(4);  // word 1 (unused)
     CFG_W32(8, 0);
     CFG_W32(12, 0);
     CFG_W32(8, 1);
@@ -93,7 +81,6 @@ int virtio_blk_init(void) {
     CFG_W8(20, VIRTIO_STATUS_ACKNOWLEDGE | VIRTIO_STATUS_DRIVER | VIRTIO_STATUS_FEATURES_OK);
     __sync_synchronize();
     uint8_t st = CFG_R8(20);
-    printk("virtio_blk: device_status after FEATURES_OK = %d\n", (int)st);
     if (!(st & VIRTIO_STATUS_FEATURES_OK)) {
         printk("virtio_blk: FEATURES_OK not accepted by device\n");
         return -1;
@@ -104,9 +91,13 @@ int virtio_blk_init(void) {
     CFG_W16(22, 0);
     __sync_synchronize();
 
+    // Disable MSI-X for config and queue 0 to force INTx mode.
+    // Without this the device defaults to MSI-X vector 0, bypassing the INTx
+    // line and preventing the PLIC from ever seeing an interrupt.
+    CFG_W16(16, 0xFFFF);  // config_msix_vector = VIRTIO_MSI_NO_VECTOR
+    CFG_W16(26, 0xFFFF);  // queue_msix_vector  = VIRTIO_MSI_NO_VECTOR
+    __sync_synchronize();
     uint16_t queue_max = CFG_R16(24);
-    printk("virtio_blk: num_queues=%d queue_max=%d status=%d\n",
-           (int)CFG_R16(18), (int)queue_max, (int)CFG_R8(20));
     if (queue_max == 0) {
         printk("virtio_blk: queue not available\n");
         return -1;
@@ -114,7 +105,6 @@ int virtio_blk_init(void) {
 
     uint16_t queue_size = (queue_max < VIRTIO_RING_SIZE) ? queue_max : VIRTIO_RING_SIZE;
     CFG_W16(24, queue_size);
-    printk("virtio_blk: queue size = %d (max %d)\n", queue_size, queue_max);
 
     // Allocate descriptor table, available ring, used ring
     // Must be page-aligned so the device (DMA) can access them correctly.
@@ -170,13 +160,31 @@ int virtio_blk_init(void) {
            (long)blk_dev.capacity, (long)((blk_dev.capacity * 512) / (1024 * 1024)));
 
     initialized = 1;
-    blk_dev.irq = pci_read8(pci.bus, pci.dev, pci.fn, PCI_INTERRUPT_LINE);
-    printk("virtio_blk: PCI interrupt_line = %u\n", blk_dev.irq);
-    if (blk_dev.irq == 0 || blk_dev.irq == 0xFF) {
-        printk("virtio_blk: WARNING: invalid interrupt_line, falling back to PCIe INTA IRQ 32\n");
-        blk_dev.irq = 32;
+
+    // Compute the real PLIC IRQ using QEMU virt PCIe INTx swizzling:
+    //   PLIC_IRQ = PLIC_PCIE_INTA_IRQ + (slot + pin - 1) % 4
+    // where pin comes from PCI_INTERRUPT_PIN (1=INTA..4=INTD, 0=none).
+    // PCI_INTERRUPT_LINE is a firmware hint that QEMU leaves as 0 for PCIe,
+    // so we never rely on it.
+    uint8_t interrupt_pin  = pci_read8(pci.bus, pci.dev, pci.fn, PCI_INTERRUPT_PIN);
+    uint8_t interrupt_line = pci_read8(pci.bus, pci.dev, pci.fn, PCI_INTERRUPT_LINE);
+    printk("virtio_blk: PCI slot=%u interrupt_pin=%u interrupt_line=%u\n",
+           pci.dev, interrupt_pin, interrupt_line);
+
+    if (interrupt_pin == 0) {
+        printk("virtio_blk: WARNING: INTERRUPT_PIN=0 (no INTx), falling back to IRQ 32\n");
+        blk_dev.irq = PLIC_PCIE_INTA_IRQ;
+    } else {
+        blk_dev.irq = PLIC_PCIE_INTA_IRQ + ((pci.dev + interrupt_pin - 1) % 4);
     }
-    plic_enable_irq(blk_dev.irq);
+    printk("virtio_blk: computed PLIC IRQ = %u (slot=%u pin=%u)\n",
+           blk_dev.irq, pci.dev, interrupt_pin);
+
+    // Enable all four PCIe INTx sources (32-35) so a swizzling mis-estimate
+    // still gets handled — the unexpected-IRQ path in trap.c will print which
+    // one actually fires if our formula is off.
+    for (uint32_t i = PLIC_PCIE_INTA_IRQ; i < PLIC_PCIE_INTA_IRQ + 4; i++)
+        plic_enable_irq(i);
     #undef CFG_R8
     #undef CFG_R16
     #undef CFG_R32
@@ -259,6 +267,7 @@ static int virtio_blk_rw(uint64_t sector, void *buf, size_t count, int write) {
 
     // Notify device: write queue index 0 to the notify address
     *(volatile uint32_t *)blk_dev.notify_addr = 0;
+
 
     if (scheduler_live && current) {
         // Check condition with interrupts disabled to close the race where the
@@ -415,12 +424,17 @@ void virtio_blk_irq(void) {
     // The source is re-armed in virtio_blk_rw() before the next submission.
     plic_disable_irq(blk_dev.irq);
 
+    // One-shot confirmation that interrupt-driven I/O is working.
+    static int irq_confirmed = 0;
+    if (!irq_confirmed) {
+        irq_confirmed = 1;
+        printk("virtio_blk: IRQ confirmed (first IRQ fired)\n");
+    }
+
     // Read ISR status to deassert the device-level interrupt line.
     if (blk_dev.isr_addr)
         (void)*blk_dev.isr_addr;
 
-    printk("virtio_blk: IRQ fired last_used=%u used->idx=%u\n",
-           blk_dev.last_used_idx, blk_dev.used->idx);
     while (blk_dev.last_used_idx != blk_dev.used->idx) {
         blk_dev.last_used_idx++;
     }

@@ -62,7 +62,12 @@ void block_cache_init(void) {
 // Find a cache block for the given block number
 static cached_block_t *find_cache_block(uint32_t block_num) {
     for (int i = 0; i < BLOCK_CACHE_SIZE; i++) {
-        if (cache.blocks[i].valid && cache.blocks[i].block_num == block_num) {
+        // Skip in_flight slots: the slot is being evicted (its old data is being
+        // written to disk).  Treating it as a miss forces concurrent readers and
+        // writers to a fresh slot, preventing them from overwriting cb->data
+        // while virtio_blk_write is still DMA-ing the old version to disk.
+        if (cache.blocks[i].valid && !cache.blocks[i].in_flight &&
+            cache.blocks[i].block_num == block_num) {
             return &cache.blocks[i];
         }
     }
@@ -173,7 +178,20 @@ int block_cache_read(uint32_t block_num, void *buf) {
         return -1;
     }
 
+    // Post-I/O recheck: a concurrent block_cache_write may have populated
+    // block_num into a fresh slot while we slept in virtio_blk_read.  If so,
+    // their data is newer (they wrote it after we started reading the old disk
+    // version); use their slot and discard ours to avoid two valid slots
+    // diverging for the same block number.
     s = intr_lock();
+    existing = find_cache_block(block_num);
+    if (existing) {
+        cb->in_flight = 0;   // free our slot (valid still 0)
+        existing->last_access = ++cache.access_counter;
+        memcpy(buf, existing->data, BLOCK_SIZE);
+        intr_unlock(s);
+        return 0;
+    }
     cb->valid = 1;
     cb->in_flight = 0;
     cb->last_access = ++cache.access_counter;
@@ -213,14 +231,18 @@ int block_cache_write(uint32_t block_num, const void *buf) {
             // Race 1 resolved: use existing slot, release reserved one.
             cb->in_flight = 0;
             cb = existing;
+            // existing is not in_flight (find_cache_block skips in_flight slots)
         } else {
             cb->block_num = block_num;
-            cb->valid = 1;
-            cb->in_flight = 0;
+            cb->valid = 0;   // keep invalid until data is written below
         }
     }
 
+    // Write data into slot while holding the lock, then mark valid + clear
+    // in_flight atomically so no concurrent caller sees valid=1 with stale data.
     memcpy(cb->data, buf, BLOCK_SIZE);
+    cb->valid = 1;
+    cb->in_flight = 0;
     cb->dirty = 1;
     cb->last_access = ++cache.access_counter;
 
@@ -230,15 +252,46 @@ int block_cache_write(uint32_t block_num, const void *buf) {
 
 int block_cache_flush_block(uint32_t block_num) {
     if (!cache_initialized) return -1;
+
+    uint64_t s = intr_lock();
     cached_block_t *cb = find_cache_block(block_num);
-    if (!cb || !cb->dirty)
+    if (!cb || !cb->dirty) {
+        intr_unlock(s);
         return 0;
-    uint64_t sector = block_num * 2;
-    if (virtio_blk_write(sector, cb->data, 2) != 0) {
-        printk("block_cache: failed to flush block %d\n", block_num);
+    }
+
+    // Snapshot the data into a local buffer while holding the lock.
+    // This prevents a concurrent find_free_cache_block from evicting the slot
+    // (reusing cb->data for a different block) mid-DMA, which would write the
+    // wrong block's data to disk and corrupt cb->dirty for the wrong block.
+    uint8_t *snap = (uint8_t *)kmalloc(BLOCK_SIZE);
+    if (!snap) {
+        intr_unlock(s);
         return -1;
     }
+    memcpy(snap, cb->data, BLOCK_SIZE);
+
+    // Clear dirty optimistically before dropping the lock.  Any concurrent
+    // block_cache_write that fires after this point sets dirty=1 again and
+    // will be picked up by the next flush — so we never lose a write.
     cb->dirty = 0;
+    intr_unlock(s);
+
+    uint64_t sector = block_num * 2;
+    if (virtio_blk_write(sector, snap, 2) != 0) {
+        printk("block_cache: failed to flush block %d\n", block_num);
+        // Re-mark dirty so the next flush retries.  Re-check that the slot
+        // still belongs to block_num (it could have been evicted and reused).
+        s = intr_lock();
+        cb = find_cache_block(block_num);
+        if (cb)
+            cb->dirty = 1;
+        intr_unlock(s);
+        kfree(snap);
+        return -1;
+    }
+
+    kfree(snap);
     return 0;
 }
 

@@ -4,6 +4,29 @@
 #include "kernel/printk.h"
 #include "mm/kmalloc.h"
 #include "lib/string.h"
+#include "process/process.h"
+#include "trap/trap.h"
+
+// Global sleeping mutex that serializes all ext2 top-level operations.
+// Prevents directory-block, inode-allocation, and inode-table races that
+// occur when multiple processes concurrently create, write, or unlink files.
+static int ext2_fs_lock = 0;
+
+static void ext2_lock(void) {
+    interrupts_off();
+    while (ext2_fs_lock) {
+        proc_sleep(&ext2_fs_lock);
+        // proc_sleep returns with interrupts ON; re-disable before rechecking
+        interrupts_off();
+    }
+    ext2_fs_lock = 1;
+    interrupts_on();
+}
+
+static void ext2_unlock(void) {
+    ext2_fs_lock = 0;
+    proc_wakeup(&ext2_fs_lock);
+}
 
 static fs_type_t ext2_fs_type;
 
@@ -700,6 +723,8 @@ int ext2_read(vnode_t *vnode, void *buf, size_t offset, size_t len) {
 int ext2_write(vnode_t *vnode, const void *buf, size_t offset, size_t len) {
     if (!vnode || !vnode->fs_data || !buf) return -1;
 
+    ext2_lock();
+
     ext2_inode_t *inode = (ext2_inode_t *)vnode->fs_data;
     ext2_mount_data_t *mnt = (ext2_mount_data_t *)vnode->mount->fs_data;
 
@@ -709,7 +734,7 @@ int ext2_write(vnode_t *vnode, const void *buf, size_t offset, size_t len) {
 
     size_t bytes_written = 0;
     uint8_t *block_buf = (uint8_t *)kmalloc(mnt->block_size);
-    if (!block_buf) return -1;
+    if (!block_buf) { ext2_unlock(); return -1; }
 
     while (bytes_written < len) {
         uint32_t block_idx    = (offset + bytes_written) / mnt->block_size;
@@ -722,6 +747,7 @@ int ext2_write(vnode_t *vnode, const void *buf, size_t offset, size_t len) {
         if (block_offset != 0 || to_write != mnt->block_size) {
             if (ext2_read_inode_block(mnt, inode, block_idx, block_buf) != 0) {
                 kfree(block_buf);
+                ext2_unlock();
                 return bytes_written > 0 ? (int)bytes_written : -1;
             }
         } else {
@@ -732,6 +758,7 @@ int ext2_write(vnode_t *vnode, const void *buf, size_t offset, size_t len) {
 
         if (ext2_write_inode_block(mnt, inode, block_idx, block_buf) != 0) {
             kfree(block_buf);
+            ext2_unlock();
             return bytes_written > 0 ? (int)bytes_written : -1;
         }
 
@@ -751,6 +778,7 @@ int ext2_write(vnode_t *vnode, const void *buf, size_t offset, size_t len) {
     ext2_write_superblock(mnt);
     ext2_write_gdt(mnt);
 
+    ext2_unlock();
     return (int)bytes_written;
 }
 
@@ -777,8 +805,16 @@ static int ext2_dirent_append(uint8_t *block_buf, uint32_t block_size,
         uint16_t slack   = de->rec_len - min_len;
 
         if (de->inode == 0) {
-            /* Deleted entry — reuse it if big enough */
+            /* Deleted entry — reuse it if big enough, splitting the remainder */
             if (de->rec_len >= need) {
+                uint16_t old_rec_len = de->rec_len;
+                if (old_rec_len - need >= 8) {
+                    ext2_dirent_t *rump = (ext2_dirent_t *)(block_buf + offset + need);
+                    rump->inode    = 0;
+                    rump->rec_len  = old_rec_len - need;
+                    rump->name_len = 0;
+                    de->rec_len    = need;
+                }
                 de->inode     = new_ino;
                 de->name_len  = name_len;
                 de->file_type = file_type;
@@ -817,24 +853,25 @@ static int ext2_dirent_append(uint8_t *block_buf, uint32_t block_size,
 // Create a new file in ext2
 int ext2_create(mount_t *mnt, const char *path, uint32_t mode) {
     if (!mnt || !mnt->fs_data || !path) return -1;
-    
+
+    ext2_lock();
+
     ext2_mount_data_t *ext2_mnt = (ext2_mount_data_t *)mnt->fs_data;
 
     // Parse path to get parent directory and filename
     char *path_copy = (char *)kmalloc(strlen(path) + 1);
-    if (!path_copy) return -1;
+    if (!path_copy) { ext2_unlock(); return -1; }
     strcpy(path_copy, path);
 
-    
     // Find last slash
     char *last_slash = NULL;
     for (char *p = path_copy; *p; p++) {
         if (*p == '/') last_slash = p;
     }
-    
+
     char *filename;
     char *parent_path;
-    
+
     if (last_slash) {
         *last_slash = '\0';
         filename = last_slash + 1;
@@ -844,26 +881,28 @@ int ext2_create(mount_t *mnt, const char *path, uint32_t mode) {
         filename = path_copy;
         parent_path = "/";
     }
-    
+
     // Lookup parent directory
     vnode_t *parent_vnode = ext2_lookup(mnt, parent_path);
     if (!parent_vnode) {
         printk("ext2: parent directory not found: %s\n", parent_path);
         kfree(path_copy);
+        ext2_unlock();
         return -1;
     }
-    
+
     ext2_inode_t *parent_inode = (ext2_inode_t *)parent_vnode->fs_data;
-    
+
     // Allocate new inode
     uint32_t new_ino = ext2_alloc_inode(ext2_mnt);
     if (new_ino == 0) {
         kfree(parent_vnode->fs_data);
         kfree(parent_vnode);
         kfree(path_copy);
+        ext2_unlock();
         return -1;
     }
-    
+
     // Initialize new inode
     ext2_inode_t new_inode;
     memset(&new_inode, 0, sizeof(ext2_inode_t));
@@ -873,15 +912,16 @@ int ext2_create(mount_t *mnt, const char *path, uint32_t mode) {
     new_inode.i_size = 0;
     new_inode.i_links_count = 1;
     new_inode.i_blocks = 0;
-    
+
     // Write new inode to disk
     if (ext2_write_inode(ext2_mnt, new_ino, &new_inode) != 0) {
         kfree(parent_vnode->fs_data);
         kfree(parent_vnode);
         kfree(path_copy);
+        ext2_unlock();
         return -1;
     }
-    
+
     // Add directory entry to parent
     // Find space in parent directory
     uint8_t *block_buf = (uint8_t *)kmalloc(ext2_mnt->block_size);
@@ -889,6 +929,7 @@ int ext2_create(mount_t *mnt, const char *path, uint32_t mode) {
         kfree(parent_vnode->fs_data);
         kfree(parent_vnode);
         kfree(path_copy);
+        ext2_unlock();
         return -1;
     }
 
@@ -900,6 +941,7 @@ int ext2_create(mount_t *mnt, const char *path, uint32_t mode) {
             kfree(parent_vnode->fs_data);
             kfree(parent_vnode);
             kfree(path_copy);
+            ext2_unlock();
             return -1;
         }
         parent_inode->i_block[0] = new_block;
@@ -911,6 +953,7 @@ int ext2_create(mount_t *mnt, const char *path, uint32_t mode) {
             kfree(parent_vnode->fs_data);
             kfree(parent_vnode);
             kfree(path_copy);
+            ext2_unlock();
             return -1;
         }
     }
@@ -923,6 +966,7 @@ int ext2_create(mount_t *mnt, const char *path, uint32_t mode) {
         kfree(parent_vnode->fs_data);
         kfree(parent_vnode);
         kfree(path_copy);
+        ext2_unlock();
         return -1;
     }
 
@@ -932,6 +976,7 @@ int ext2_create(mount_t *mnt, const char *path, uint32_t mode) {
         kfree(parent_vnode->fs_data);
         kfree(parent_vnode);
         kfree(path_copy);
+        ext2_unlock();
         return -1;
     }
 
@@ -947,7 +992,7 @@ int ext2_create(mount_t *mnt, const char *path, uint32_t mode) {
     kfree(parent_vnode);
     kfree(path_copy);
 
-    block_cache_flush();
+    ext2_unlock();
     printk("ext2: created file %s (inode %d)\n", path, new_ino);
     return 0;
 }
@@ -955,23 +1000,24 @@ int ext2_create(mount_t *mnt, const char *path, uint32_t mode) {
 // Delete a file from ext2
 int ext2_unlink(mount_t *mnt, const char *path) {
     if (!mnt || !mnt->fs_data || !path) return -1;
-    
+
+    ext2_lock();
+
     ext2_mount_data_t *ext2_mnt = (ext2_mount_data_t *)mnt->fs_data;
 
     // Parse path to get parent directory and filename
     char *path_copy = (char *)kmalloc(strlen(path) + 1);
-    if (!path_copy) return -1;
+    if (!path_copy) { ext2_unlock(); return -1; }
     strcpy(path_copy, path);
 
-    
     char *last_slash = NULL;
     for (char *p = path_copy; *p; p++) {
         if (*p == '/') last_slash = p;
     }
-    
+
     char *filename;
     char *parent_path;
-    
+
     if (last_slash) {
         *last_slash = '\0';
         filename = last_slash + 1;
@@ -981,22 +1027,24 @@ int ext2_unlink(mount_t *mnt, const char *path) {
         filename = path_copy;
         parent_path = "/";
     }
-    
+
     // Lookup parent directory
     vnode_t *parent_vnode = ext2_lookup(mnt, parent_path);
     if (!parent_vnode) {
         kfree(path_copy);
+        ext2_unlock();
         return -1;
     }
-    
+
     ext2_inode_t *parent_inode = (ext2_inode_t *)parent_vnode->fs_data;
-    
+
     // Find and remove directory entry
     uint8_t *block_buf = (uint8_t *)kmalloc(ext2_mnt->block_size);
     if (!block_buf) {
         kfree(parent_vnode->fs_data);
         kfree(parent_vnode);
         kfree(path_copy);
+        ext2_unlock();
         return -1;
     }
 
@@ -1035,6 +1083,7 @@ int ext2_unlink(mount_t *mnt, const char *path) {
 
     if (!found) {
         printk("ext2: file not found for unlink: %s\n", path);
+        ext2_unlock();
         return -1;
     }
 
@@ -1056,7 +1105,7 @@ int ext2_unlink(mount_t *mnt, const char *path) {
         ext2_write_gdt(ext2_mnt);
     }
 
-    block_cache_flush();
+    ext2_unlock();
     printk("ext2: unlinked %s\n", path);
     return 0;
 }

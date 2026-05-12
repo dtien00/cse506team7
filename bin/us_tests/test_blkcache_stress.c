@@ -932,12 +932,12 @@ void run_test_blkcache_stress(us_test_group_t *group) {
      * probe first: 1 write + 1 read → exactly 2 "IRQ fired" kernel prints.
      * The heavier tests follow; comment them out while diagnosing.          */
     test_irq_probe(group);
-    // test_irq_large_file_scan(group);
-    // test_irq_sequential_io(group);
-    // test_irq_create_unlink_storm(group);
+    test_irq_large_file_scan(group);
+    test_irq_sequential_io(group);
+    test_irq_create_unlink_storm(group);
 
     /* --- full concurrent churn (most thorough multi-process stress) ---    */
-    // test_concurrent_churn(group);
+    test_concurrent_churn(group);
 
     ut_group_end(group);
 }
