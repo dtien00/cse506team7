@@ -60,6 +60,7 @@
 #define SYS_setpgid  51
 #define SYS_setsid   52
 #define SYS_getpgid  53
+#define SYS_getsid   156   /* Linux RISC-V ABI; matches libc */
 #define SYS_rmdir    54    /* was 52; moved to avoid conflict with SYS_setsid */
 #define SYS_rename   56
 #define SYS_fs_getdents  61
@@ -165,6 +166,7 @@ pid_t sys_getpgrp(void);
 int   sys_setpgid(pid_t pid, pid_t pgid);
 pid_t sys_setsid(void);
 pid_t sys_getpgid(pid_t pid);
+pid_t sys_getsid(pid_t pid);
 int   sys_tcsetpgrp(pid_t pgid);
 pid_t sys_tcgetpgrp(void);
 int sys_nanosleep(const struct timespec *req, struct timespec *rem);
