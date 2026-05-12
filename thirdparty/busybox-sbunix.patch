@@ -149,3 +149,29 @@ index cb8d2c2ec..52f3cd846 100644
  lib-y += xreadlink.o
  lib-y += xrealloc_vector.o
  
+diff --git a/scripts/Makefile.lib b/scripts/Makefile.lib
+--- a/scripts/Makefile.lib
++++ b/scripts/Makefile.lib
+@@ -122,7 +122,10 @@ basename_flags = -D"KBUILD_BASENAME=$(call name-fix,$(basetarget))"
+ # yet ld_flags is fed to ld.
+ #ld_flags       = $(LDFLAGS) $(EXTRA_LDFLAGS)
+ # Remove the -Wl, prefix from linker options normally passed through gcc
+-ld_flags       = $(filter-out -Wl$(comma)%,$(LDFLAGS) $(EXTRA_LDFLAGS))
++# SBUnix: empty so partial-link (ld -r) does not slurp object paths from
++# LDFLAGS (which would pull our prelinked libc-thirdparty.o into
++# applets/built-in.o and cause duplicate symbols at final link).
++ld_flags       =
+ 
+ 
+ # Finds the multi-part object the current object will be linked into
+--- a/include/libbb.h
++++ b/include/libbb.h
+@@ -1442,7 +1442,7 @@
+  * By ~2008, OpenBSD 3.4 was changed to survive glibc-like optind = 0
+  * (to interpret it as if optreset was set).
+  */
+-#if 1 /*def __GLIBC__*/
++#if 0 /* SBUnix: students' libcs are POSIX-style; force BSD reset (optind=1) */
+ #define GETOPT_RESET() (optind = 0)
+ #else /* BSD style */
+ #define GETOPT_RESET() (optind = 1)

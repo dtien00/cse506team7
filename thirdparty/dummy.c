@@ -40,7 +40,9 @@ W int setuid(uid_t u) { (void)u; return 0; }
 W int setgid(gid_t g) { (void)g; return 0; }
 W int seteuid(uid_t u) { (void)u; return 0; }
 W int setegid(gid_t g) { (void)g; return 0; }
+#ifndef HAVE_USLEEP
 W int usleep(useconds_t usec) { (void)usec; return 0; }
+#endif
 
 /* stdio */
 W void rewind(FILE *f) { (void)f; }
