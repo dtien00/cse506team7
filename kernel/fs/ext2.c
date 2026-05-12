@@ -805,6 +805,18 @@ static int ext2_dirent_append(uint8_t *block_buf, uint32_t block_size,
         uint16_t slack   = de->rec_len - min_len;
 
         if (de->inode == 0) {
+            /* Coalesce adjacent deleted slots so larger entries can be served.
+             * ext2 unlink leaves rec_len intact, so a directory that saw many
+             * short-lived small files accumulates a run of tiny deleted slots
+             * that on their own are too small for a longer new name. */
+            uint32_t next_off = offset + de->rec_len;
+            while (next_off + 8 <= block_size) {
+                ext2_dirent_t *nx = (ext2_dirent_t *)(block_buf + next_off);
+                if (nx->rec_len == 0 || nx->inode != 0) break;
+                de->rec_len = (uint16_t)(de->rec_len + nx->rec_len);
+                next_off += nx->rec_len;
+            }
+
             /* Deleted entry — reuse it if big enough, splitting the remainder */
             if (de->rec_len >= need) {
                 uint16_t old_rec_len = de->rec_len;
@@ -1087,18 +1099,17 @@ int ext2_unlink(mount_t *mnt, const char *path) {
         return -1;
     }
 
-    // Decrement link count. Per POSIX, data blocks must remain accessible via
-    // open fds until the last fd is closed. Since there is no VFS release hook
-    // to defer freeing, we mark the inode deleted (i_dtime) but leave blocks
-    // and the inode bitmap entry intact so open fds keep reading valid data.
-    // The inode and its blocks will be reclaimed by fsck on next mount.
+    // Per POSIX, data blocks must remain accessible via open fds until the last
+    // fd closes. We only decrement links and mark the inode deleted here; the
+    // actual block/bitmap reclaim happens in ext2_release, which is called from
+    // file_release on last close, or from vfs_unlink when ref_count == 1.
     ext2_inode_t inode;
     if (ext2_read_inode(ext2_mnt, file_ino, &inode) == 0) {
         if (inode.i_links_count > 0)
             inode.i_links_count--;
 
         if (inode.i_links_count == 0)
-            inode.i_dtime = 1; // marks inode as deleted; blocks freed by fsck
+            inode.i_dtime = 1;
 
         ext2_write_inode(ext2_mnt, file_ino, &inode);
         ext2_write_superblock(ext2_mnt);
@@ -1711,6 +1722,45 @@ static int ext2_release(vnode_t *vnode) {
         if (bmap) kfree(bmap);
         inode.i_block[i] = 0;
     }
+
+    // Free single-indirect tree: every data block referenced by the index
+    // block, then the index block itself. The write path (ext2_write_inode_block)
+    // only allocates through single-indirect, so DIND/TIND need not be walked.
+    if (inode.i_block[EXT2_IND_BLOCK] != 0) {
+        uint32_t ind_blk = inode.i_block[EXT2_IND_BLOCK];
+        uint32_t *ind_buf = (uint32_t *)kmalloc(mnt->block_size);
+        if (ind_buf && block_cache_read(ind_blk, ind_buf) == 0) {
+            uint32_t ptrs = mnt->block_size / sizeof(uint32_t);
+            for (uint32_t i = 0; i < ptrs; i++) {
+                uint32_t blk = ind_buf[i];
+                if (blk == 0) continue;
+                uint32_t grp = (blk - mnt->sb->s_first_data_block) / mnt->blocks_per_group;
+                uint32_t bit = (blk - mnt->sb->s_first_data_block) % mnt->blocks_per_group;
+                uint8_t *bmap = (uint8_t *)kmalloc(mnt->block_size);
+                if (bmap && block_cache_read(mnt->group_desc[grp].bg_block_bitmap, bmap) == 0) {
+                    bmap[bit / 8] &= ~(uint8_t)(1 << (bit % 8));
+                    block_cache_write(mnt->group_desc[grp].bg_block_bitmap, bmap);
+                    mnt->group_desc[grp].bg_free_blocks_count++;
+                    mnt->sb->s_free_blocks_count++;
+                }
+                if (bmap) kfree(bmap);
+            }
+        }
+        if (ind_buf) kfree(ind_buf);
+
+        uint32_t grp = (ind_blk - mnt->sb->s_first_data_block) / mnt->blocks_per_group;
+        uint32_t bit = (ind_blk - mnt->sb->s_first_data_block) % mnt->blocks_per_group;
+        uint8_t *bmap = (uint8_t *)kmalloc(mnt->block_size);
+        if (bmap && block_cache_read(mnt->group_desc[grp].bg_block_bitmap, bmap) == 0) {
+            bmap[bit / 8] &= ~(uint8_t)(1 << (bit % 8));
+            block_cache_write(mnt->group_desc[grp].bg_block_bitmap, bmap);
+            mnt->group_desc[grp].bg_free_blocks_count++;
+            mnt->sb->s_free_blocks_count++;
+        }
+        if (bmap) kfree(bmap);
+        inode.i_block[EXT2_IND_BLOCK] = 0;
+    }
+
     inode.i_blocks = 0;
 
     // Free inode bitmap entry
