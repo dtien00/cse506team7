@@ -520,13 +520,16 @@ static uint32_t tmpfs_get_nlink(vnode_t *vnode) {
     return body->nlink;
 }
 
-static int tmpfs_truncate(vnode_t *vnode) {
-    if (!vnode) return -EINVAL;
+static int tmpfs_truncate_to(vnode_t *vnode, off_t length)
+{
+    if (!vnode || length < 0) return -EINVAL;
     tmpfs_inode_t *inode = (tmpfs_inode_t *)vnode->fs_data;
     if (!inode || inode->type != TMPFS_TYPE_FILE) return -EINVAL;
-    // printk("tmpfs_truncate: inode '%s' size %u -> 0\n", inode->name, inode->size);
-    inode->size = 0;
-    vnode->size = 0;
+    size_t new_size = (size_t)length;
+    if (new_size < inode->size && inode->data)
+        memset(inode->data + new_size, 0, inode->size - new_size);
+    inode->size = new_size;
+    vnode->size = new_size;
     return 0;
 }
 
@@ -878,7 +881,7 @@ static fs_type_t tmpfs_type = {.name = "tmpfs",
                                                .link = tmpfs_link,
                                                .symlink = tmpfs_symlink,
                                                .readlink = tmpfs_readlink,
-                                               .truncate = tmpfs_truncate,
+                                               .truncate_to = tmpfs_truncate_to,
                                                .chmod = tmpfs_chmod,
                                                .get_nlink = tmpfs_get_nlink,
                                        },

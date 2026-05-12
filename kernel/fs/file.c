@@ -289,8 +289,8 @@ int file_open_with_flags(const char *path, int flags, mode_t mode) {
     f->flags = flags;
 
     if ((flags & O_TRUNC) && (flags & (O_WRONLY | O_RDWR))) {
-        if (f->vnode && f->vnode->mount && f->vnode->mount->fs_type && f->vnode->mount->fs_type->ops.truncate)
-            f->vnode->mount->fs_type->ops.truncate(f->vnode);
+        if (f->vnode && f->vnode->mount && f->vnode->mount->fs_type && f->vnode->mount->fs_type->ops.truncate_to)
+            f->vnode->mount->fs_type->ops.truncate_to(f->vnode, 0);
     }
 
     if (flags & O_APPEND)

@@ -14,17 +14,7 @@ time_t time(time_t *tloc) {
     return (time_t)tv.tv_sec;
 }
 
-int clock_gettime(clockid_t clock_id, struct timespec *tp) {
-    if (clock_id != CLOCK_REALTIME && clock_id != CLOCK_MONOTONIC &&
-        clock_id != CLOCK_PROCESS_CPUTIME_ID && clock_id != CLOCK_THREAD_CPUTIME_ID)
-        return -1;   /* EINVAL — unknown clock */
-    if (!tp) return -1;
-    struct timeval tv;
-    if (gettimeofday(&tv, NULL) != 0) return -1;
-    tp->tv_sec  = tv.tv_sec;
-    tp->tv_nsec = tv.tv_usec * 1000L;
-    return 0;
-}
+/* clock_gettime is a direct kernel syscall — see libc/syscall.S (SYS_clock_gettime=113) */
 
 /* ------------------------------------------------------------------ */
 /*  Gregorian calendar helpers                                        */
