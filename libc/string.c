@@ -76,6 +76,37 @@ char* strncat(char *dest, const char *src, size_t n) {
     return dest;
 }
 
+size_t strlcpy(char *dest, const char *src, size_t size) {
+    const char *s = src;
+    if (size) {
+        char *d = dest;
+        size_t n = size - 1;
+        while (n && *s) { *d++ = *s++; n--; }
+        *d = '\0';
+    }
+    while (*s) s++;
+    return (size_t)(s - src);
+}
+
+size_t strlcat(char *dest, const char *src, size_t size) {
+    char *d = dest;
+    const char *s = src;
+    size_t n = size;
+    while (n-- && *d) d++;
+    size_t dlen = (size_t)(d - dest);
+    n = size - dlen;
+    if (n == 0) {
+        while (*s) s++;
+        return dlen + (size_t)(s - src);
+    }
+    while (*s) {
+        if (n > 1) { *d++ = *s; n--; }
+        s++;
+    }
+    *d = '\0';
+    return dlen + (size_t)(s - src);
+}
+
 int strcmp(const char *s1, const char *s2) {
     while (*s1 && (*s1 == *s2)) {
         s1++;
