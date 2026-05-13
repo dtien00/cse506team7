@@ -23,6 +23,13 @@ struct dirent {
     char d_name[NAME_MAX + 1];
 };
 
+struct posix_dent {
+    ino_t          d_ino;
+    unsigned short d_reclen;
+    unsigned char  d_type;
+    char           d_name[];
+};
+
 typedef struct {
     int fd;
     char buf[DIRENT_BUF_SIZE]; // raw kernel entries (fs_dent_t records)
@@ -41,5 +48,6 @@ int alphasort(const struct dirent **, const struct dirent **);
 int scandir(const char *, struct dirent ***, int (*)(const struct dirent *),
             int (*)(const struct dirent **, const struct dirent **));
 int nostat_filter(const struct dirent *); // bonus, non-POSIX name
+ssize_t posix_getdents(int fd, void *buf, size_t nbyte, int flags);
 
 #endif
