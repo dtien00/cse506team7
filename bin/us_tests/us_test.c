@@ -119,6 +119,7 @@ void run_test_libc_string(us_test_group_t groups[], int *idx);
 void run_test_libc_ctype(us_test_group_t groups[], int *idx);
 void run_test_libc_stdio(us_test_group_t groups[], int *idx);
 void run_test_libc_stdlib(us_test_group_t groups[], int *idx);
+void run_test_libc_pwd_grp(us_test_group_t groups[], int *idx);
 void run_test_exec_envp(us_test_group_t groups[], int *idx);
 void run_test_libc_time(us_test_group_t groups[], int *idx);
 /* MicroPython libc dependency tests */
@@ -304,6 +305,7 @@ int main(int argc, char **argv, char **envp) {
         run_test_libc_ctype(groups, &idx);
         run_test_libc_stdio(groups, &idx);
         run_test_libc_stdlib(groups, &idx);
+        run_test_libc_pwd_grp(groups, &idx);
         run_test_libc_time(groups, &idx);
         // is empty file has compilation issue, not necessary
     }

@@ -25,7 +25,6 @@
 .global stat
 .global lstat
 .global fstat
-.global fstatat
 .global mkdir
 .global chmod
 .global fchmod
@@ -45,16 +44,17 @@
 .global rename
 .global gettimeofday
 .global alarm
-.global __sigaction_raw
+.global sigaction
 .global sigpending
 .global sigsuspend
+.global getsid
+.global select
 .global tcgetattr
 .global tcsetattr
 .global getpgrp
 .global setpgid
 .global setsid
 .global getpgid
-.global getsid
 .global tcsetpgrp
 .global tcgetpgrp
 .global nanosleep
@@ -63,15 +63,12 @@
 .globl setitimer
 .global fsync
 .global fdatasync
-.global access
 .global sysconf
 .global getrlimit
 .global setrlimit
 .global pathconf
 .global fpathconf
-.global sigreturn
 .global __syscall_fcntl
-.global select
 
 mmap:
     li a7, 14
@@ -208,11 +205,6 @@ fstat:
     ecall
     j __syscall_ret
 
-fstatat:
-    li a7, 102
-    ecall
-    j __syscall_ret
-
 mkdir:
     li a7, 19
     ecall
@@ -313,7 +305,7 @@ tcgetattr:
     ecall
     j __syscall_ret
 
-__sigaction_raw:
+sigaction:
     li a7, 38
     ecall
     j __syscall_ret
@@ -351,11 +343,6 @@ setsid:
 
 getpgid:
     li a7, 53
-    ecall
-    j __syscall_ret
-
-getsid:
-    li a7, 156
     ecall
     j __syscall_ret
 
@@ -429,18 +416,13 @@ __syscall_fcntl:
     ecall
     j __syscall_ret
 
-access:
-    li a7, 43
-    ecall
-    j __syscall_ret
-
-select:
+getsid:
     li a7, 104
     ecall
     j __syscall_ret
 
-sigreturn:
-    li a7, 103
+select:
+    li a7, 105
     ecall
     j __syscall_ret
 

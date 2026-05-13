@@ -32,7 +32,6 @@
 #define SYS_getppid  21
 #define SYS_pipe     22
 #define SYS_dup      23
-#define SYS_access   43
 #define SYS_getuid   174  /* Linux RISC-V ABI; matches libc/syscall.S "li a7, 174" */
 #define SYS_geteuid  175
 #define SYS_getegid  177
@@ -60,7 +59,6 @@
 #define SYS_setpgid  51
 #define SYS_setsid   52
 #define SYS_getpgid  53
-#define SYS_getsid   156   /* Linux RISC-V ABI; matches libc */
 #define SYS_rmdir    54    /* was 52; moved to avoid conflict with SYS_setsid */
 #define SYS_rename   56
 #define SYS_fs_getdents  61
@@ -84,22 +82,10 @@
 #define SYS_pathconf    99   /* long pathconf(const char *path, int name) */
 #define SYS_fpathconf   100  /* long fpathconf(int fd, int name) */
 #define SYS_fcntl       101  /* int fcntl(int fd, int cmd, long arg) */
-#define SYS_fstatat     102  /* int fstatat(int dirfd, const char *, struct stat *, int flags) */
-#define SYS_sigreturn   103  /* int sigreturn(trap_frame *frame) */
-#define SYS_select      104  /* int select(int, fd_set*, fd_set*, fd_set*, timeval*) */
-
-/* Kernel-side fd_set — ABI-identical to libc/include/sys/select.h fd_set */
-#define KSELECT_SETSIZE  1024
-typedef struct {
-    uint64_t fds_bits[KSELECT_SETSIZE / 64];
-} k_fd_set;
-#define KFD_SET(fd, s)    ((s)->fds_bits[(fd)/64] |=  (1ULL << ((fd) % 64)))
-#define KFD_CLR(fd, s)    ((s)->fds_bits[(fd)/64] &= ~(1ULL << ((fd) % 64)))
-#define KFD_ISSET(fd, s)  (!!((s)->fds_bits[(fd)/64] &  (1ULL << ((fd) % 64))))
-#define KFD_ZERO(s)       do { for (int _i = 0; _i < KSELECT_SETSIZE/64; _i++) \
-                                   (s)->fds_bits[_i] = 0; } while (0)
-#define AT_FDCWD            (-100)
-#define AT_SYMLINK_NOFOLLOW 0x100
+#define SYS_mprotect    102  /* int mprotect(void *addr, size_t len, int prot) */
+#define SYS_access      103  /* int access(const char *path, int mode) */
+#define SYS_getsid      104  /* pid_t getsid(pid_t pid) */
+#define SYS_select      105  /* int select(int nfds, fd_set *r, fd_set *w, fd_set *e, struct timeval *tv) */
 
 // Initialize syscall subsystem
 void syscall_init(void);
@@ -143,8 +129,6 @@ int sys_fs_getdents(int fd, void *dirp, uint32_t count);
 int sys_stat(const char *upath, struct stat *ustat);
 int sys_fstat(int fd, struct stat *ustat);
 int sys_lstat(const char *upath, struct stat *ustat);
-int sys_access(const char *upath, int mode);
-int sys_fstatat(int dirfd, const char *upath, struct stat *ustat, int flags);
 int sys_chmod(const char *upath, mode_t mode);
 int sys_fchmod(int fd, mode_t mode);
 int sys_rmdir(const char *path);
@@ -166,7 +150,6 @@ pid_t sys_getpgrp(void);
 int   sys_setpgid(pid_t pid, pid_t pgid);
 pid_t sys_setsid(void);
 pid_t sys_getpgid(pid_t pid);
-pid_t sys_getsid(pid_t pid);
 int   sys_tcsetpgrp(pid_t pgid);
 pid_t sys_tcgetpgrp(void);
 int sys_nanosleep(const struct timespec *req, struct timespec *rem);
@@ -182,6 +165,10 @@ int sys_getrlimit(int resource, struct rlimit *user_rlim);
 int sys_setrlimit(int resource, const struct rlimit *user_rlim);
 long pathconf(const char *path, int name);
 long fpathconf(int fd, int name);
-int sys_sigreturn(trap_frame *frame);
-int sys_select(int nfds, k_fd_set *urfds, k_fd_set *uwfds, k_fd_set *uefds,
-               struct timeval_k *utv);
+int sys_mprotect(void *addr, size_t len, int prot);
+int sys_access(const char *upath, int mode);
+pid_t sys_getsid(pid_t pid);
+
+struct timeval_k;
+int sys_select(int nfds, void *readfds, void *writefds, void *exceptfds,
+               struct timeval_k *timeout);

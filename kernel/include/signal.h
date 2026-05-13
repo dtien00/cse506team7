@@ -53,16 +53,15 @@ typedef void        (*sighandler_t)(int);
 #define SA_NOCLDSTOP  0x00000001  /* don't send SIGCHLD when child stops */
 #define SA_NOCLDWAIT  0x00000002  /* don't create zombie on child exit */
 #define SA_SIGINFO    0x00000004  /* sa_sigaction takes (int,siginfo_t*,void*) -- BLOCKED */
-#define SA_ONSTACK    0x08000000  /* use alternate signal stack -- BLOCKED */
+#define SA_ONSTACK    0x08000000  /* use alternate signal stack -- XSI */
 #define SA_RESTART    0x10000000  /* restart syscall on signal return -- BLOCKED */
 #define SA_NODEFER    0x40000000  /* don't mask this signal while handling it */
 #define SA_NOMASK     SA_NODEFER
 #define SA_RESETHAND  0x80000000  /* reset disposition to SIG_DFL after delivery */
 #define SA_ONESHOT    SA_RESETHAND
-#define SA_RESTORER   0x04000000  /* sa_restorer field is valid (set by libc wrapper) */
 
 /* Mask of flags this kernel actually honors; all others are accepted but silently ignored. */
-#define SA_KNOWN_FLAGS  (SA_NOCLDSTOP | SA_NOCLDWAIT | SA_RESETHAND | SA_NODEFER | SA_RESTORER)
+#define SA_KNOWN_FLAGS  (SA_NOCLDSTOP | SA_NOCLDWAIT | SA_RESETHAND | SA_NODEFER)
 
 typedef unsigned long sigset_t;
 
@@ -86,7 +85,6 @@ struct sigaction {
     sigset_t      sa_mask;
     int           sa_flags;
     void        (*sa_sigaction)(void);  /* kernel-internal; matches libc sa_sigaction slot */
-    void        (*sa_restorer)(void);   /* libc-provided sigreturn stub; valid when SA_RESTORER set */
 };
 
 /* Field order matches libc stack_t (ss_sp, ss_size, ss_flags) for ABI consistency. */

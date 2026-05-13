@@ -173,3 +173,37 @@ void rewind(FILE *stream) {
 int feof(FILE *stream) { return stream->eof; }
 int ferror(FILE *stream) { return stream->error; }
 int fileno(FILE *stream) { return stream->fd; }
+
+ssize_t getdelim(char **lineptr, size_t *n, int delim, FILE *stream) {
+    if (!lineptr || !n || !stream) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (!*lineptr || *n == 0) {
+        size_t init = 128;
+        char *nb = realloc(*lineptr, init);
+        if (!nb) return -1;
+        *lineptr = nb;
+        *n = init;
+    }
+    size_t i = 0;
+    int c;
+    while ((c = fgetc(stream)) != EOF) {
+        if (i + 1 >= *n) {
+            size_t newsize = *n * 2;
+            char *nb = realloc(*lineptr, newsize);
+            if (!nb) return -1;
+            *lineptr = nb;
+            *n = newsize;
+        }
+        (*lineptr)[i++] = (char)c;
+        if (c == delim) break;
+    }
+    if (i == 0 && c == EOF) return -1;
+    (*lineptr)[i] = '\0';
+    return (ssize_t)i;
+}
+
+ssize_t getline(char **lineptr, size_t *n, FILE *stream) {
+    return getdelim(lineptr, n, '\n', stream);
+}

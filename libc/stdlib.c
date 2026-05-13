@@ -5,6 +5,7 @@
 #include "unistd.h"
 #include "errno.h"
 #include "limits.h"
+#include "fcntl.h"
 #include "sys/stat.h"
 
 void _Exit(int status) {
@@ -608,4 +609,82 @@ char *realpath(const char *restrict path, char *restrict resolved)
 fail:
     if (out_allocated) free(out);
     return (char *)0;
+}
+
+/* --- Multibyte / wide-character conversion (POSIX locale: 1 byte = 1 wchar) --- */
+
+int mblen(const char *s, size_t n) {
+    if (!s) return 0;
+    if (n == 0) return -1;
+    return *s ? 1 : 0;
+}
+
+int mbtowc(wchar_t *pwc, const char *s, size_t n) {
+    if (!s) return 0;
+    if (n == 0) return -1;
+    if (pwc) *pwc = (unsigned char)*s;
+    return *s ? 1 : 0;
+}
+
+int wctomb(char *s, wchar_t wc) {
+    if (!s) return 0;
+    if ((unsigned)wc > 0xff) {
+        errno = EILSEQ;
+        return -1;
+    }
+    *s = (char)wc;
+    return 1;
+}
+
+/* --- Temporary file / directory creation --- */
+
+static int tmpl_fill(char *tmpl) {
+    size_t len = strlen(tmpl);
+    if (len < 6) {
+        errno = EINVAL;
+        return -1;
+    }
+    char *suffix = tmpl + len - 6;
+    for (int i = 0; i < 6; i++) {
+        if (suffix[i] != 'X') {
+            errno = EINVAL;
+            return -1;
+        }
+    }
+    static const char chars[] =
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    for (int i = 0; i < 6; i++)
+        suffix[i] = chars[rand() % 62];
+    return 0;
+}
+
+int mkostemp(char *tmpl, int flags) {
+    size_t len = strlen(tmpl);
+    if (len < 6 || strcmp(tmpl + len - 6, "XXXXXX") != 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    for (int attempt = 0; attempt < 1000; attempt++) {
+        if (tmpl_fill(tmpl) < 0) return -1;
+        int fd = open(tmpl, O_CREAT | O_EXCL | O_RDWR | flags, 0600);
+        if (fd >= 0) return fd;
+        if (errno != EEXIST) return -1;
+    }
+    errno = EEXIST;
+    return -1;
+}
+
+char *mkdtemp(char *tmpl) {
+    size_t len = strlen(tmpl);
+    if (len < 6 || strcmp(tmpl + len - 6, "XXXXXX") != 0) {
+        errno = EINVAL;
+        return NULL;
+    }
+    for (int attempt = 0; attempt < 1000; attempt++) {
+        if (tmpl_fill(tmpl) < 0) return NULL;
+        if (mkdir(tmpl, 0700) == 0) return tmpl;
+        if (errno != EEXIST) return NULL;
+    }
+    errno = EEXIST;
+    return NULL;
 }

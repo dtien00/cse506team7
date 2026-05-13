@@ -10,8 +10,11 @@
  */
 
 #include <stdlib.h>
+#include <stddef.h>
 #include <string.h>
 #include <limits.h>
+#include <unistd.h>
+#include <sys/stat.h>
 #include "us_test_common.h"
 
 /* ----------------------------------------------------------------- helpers */
@@ -295,14 +298,93 @@ static void test_bsearch(us_test_group_t *g) {
 
 /* ================================================================ entry point */
 
+/* ---------- mblen / mbtowc / wctomb (POSIX locale = 1 byte per char) ---- */
+static void test_mb_wc(us_test_group_t *g) {
+    ut_group_begin(g, "mblen/mbtowc/wctomb");
+
+    /* mblen */
+    TEST(g, "mblen(NULL) returns 0 (no state)",  mblen(NULL, 0) == 0);
+    TEST(g, "mblen('a',1) returns 1",            mblen("a", 1) == 1);
+    TEST(g, "mblen('',1) returns 0",             mblen("", 1) == 0);
+    TEST(g, "mblen('a',0) returns -1",           mblen("a", 0) == -1);
+
+    /* mbtowc */
+    wchar_t wc = 0;
+    TEST(g, "mbtowc(NULL) returns 0",            mbtowc(NULL, NULL, 0) == 0);
+    TEST(g, "mbtowc 'x' returns 1",              mbtowc(&wc, "x", 1) == 1);
+    TEST(g, "mbtowc reads x byte",               wc == (wchar_t)'x');
+    TEST(g, "mbtowc empty returns 0",            mbtowc(&wc, "", 1) == 0);
+    TEST(g, "mbtowc n=0 returns -1",             mbtowc(&wc, "x", 0) == -1);
+
+    /* wctomb */
+    char c = 0;
+    TEST(g, "wctomb(NULL) returns 0",            wctomb(NULL, 0) == 0);
+    TEST(g, "wctomb writes byte and returns 1",  wctomb(&c, (wchar_t)'q') == 1 && c == 'q');
+    TEST(g, "wctomb high wc fails with -1",      wctomb(&c, (wchar_t)0x123) == -1);
+
+    ut_group_end(g);
+}
+
+/* ---------- mkostemp / mkdtemp ----------------------------------- */
+static void test_mkostemp_mkdtemp(us_test_group_t *g) {
+    ut_group_begin(g, "mkostemp/mkdtemp");
+
+    /* mkostemp: valid template */
+    char tmpl[] = "/tmp/usXXXXXX";
+    int fd = mkostemp(tmpl, 0);
+    TEST(g, "mkostemp returns valid fd", fd >= 0);
+    if (fd >= 0) {
+        /* template must have been mutated — last 6 chars no longer 'X' */
+        TEST(g, "mkostemp rewrote suffix",
+             strncmp(tmpl + sizeof("/tmp/us") - 1, "XXXXXX", 6) != 0);
+        TEST(g, "mkostemp file is writable", write(fd, "x", 1) == 1);
+        close(fd);
+        unlink(tmpl);
+    }
+
+    /* invalid template — no XXXXXX suffix */
+    char bad[] = "/tmp/no_suffix";
+    fd = mkostemp(bad, 0);
+    TEST(g, "mkostemp rejects bad template", fd < 0);
+
+    /* template too short */
+    char tiny[] = "XX";
+    fd = mkostemp(tiny, 0);
+    TEST(g, "mkostemp rejects too-short template", fd < 0);
+
+    /* mkdtemp: valid template */
+    char dt[] = "/tmp/usdXXXXXX";
+    char *r = mkdtemp(dt);
+    TEST(g, "mkdtemp returns template ptr", r == dt);
+    if (r) {
+        TEST(g, "mkdtemp rewrote suffix",
+             strncmp(dt + sizeof("/tmp/usd") - 1, "XXXXXX", 6) != 0);
+        /* directory should be openable for stat */
+        struct stat st;
+        TEST(g, "mkdtemp created directory", stat(dt, &st) == 0);
+        rmdir(dt);
+    }
+
+    /* mkdtemp bad template */
+    char bd[] = "/tmp/baddir";
+    r = mkdtemp(bd);
+    TEST(g, "mkdtemp rejects bad template", r == NULL);
+
+    ut_group_end(g);
+}
+
+/* ================================================================ entry point */
+
 void run_test_libc_stdlib(us_test_group_t groups[], int *idx) {
-    test_ato     (&groups[(*idx)++]);
-    test_strtol  (&groups[(*idx)++]);
-    test_strtoul (&groups[(*idx)++]);
-    test_strtoll (&groups[(*idx)++]);
-    test_abs     (&groups[(*idx)++]);
-    test_div     (&groups[(*idx)++]);
-    test_rand    (&groups[(*idx)++]);
-    test_qsort   (&groups[(*idx)++]);
-    test_bsearch (&groups[(*idx)++]);
+    test_ato            (&groups[(*idx)++]);
+    test_strtol         (&groups[(*idx)++]);
+    test_strtoul        (&groups[(*idx)++]);
+    test_strtoll        (&groups[(*idx)++]);
+    test_abs            (&groups[(*idx)++]);
+    test_div            (&groups[(*idx)++]);
+    test_rand           (&groups[(*idx)++]);
+    test_qsort          (&groups[(*idx)++]);
+    test_bsearch        (&groups[(*idx)++]);
+    test_mb_wc          (&groups[(*idx)++]);
+    test_mkostemp_mkdtemp(&groups[(*idx)++]);
 }

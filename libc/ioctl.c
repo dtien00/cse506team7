@@ -1,8 +1,8 @@
 #include "sys/ioctl.h"
 #include "stdarg.h"
 #include "termios.h"
-#include "errno.h"
 #include "unistd.h"
+#include "errno.h"
 
 int ioctl(int fd, unsigned long request, ...) {
     va_list ap;
@@ -50,40 +50,41 @@ int ioctl(int fd, unsigned long request, ...) {
         }
         case TIOCSWINSZ:
             return 0;
+        case TIOCGPGRP: {
+            va_start(ap, request);
+            pid_t *pgid = va_arg(ap, pid_t *);
+            va_end(ap);
+            if (!pgid) { errno = EINVAL; return -1; }
+            pid_t p = tcgetpgrp(fd);
+            if (p < 0) return -1;
+            *pgid = p;
+            return 0;
+        }
+        case TIOCSPGRP: {
+            va_start(ap, request);
+            const pid_t *pgid = va_arg(ap, const pid_t *);
+            va_end(ap);
+            if (!pgid) { errno = EINVAL; return -1; }
+            return tcsetpgrp(fd, *pgid);
+        }
         default:
             errno = ENOTTY;
             return -1;
     }
 }
 
+/*
+ * tcgetsid(fd) — return session id of the foreground process group of the
+ * terminal referenced by fd. Validates fd is a tty via tcgetattr; sets
+ * errno = ENOTTY and returns -1 if it isn't. For valid tty fds, returns
+ * getpid() — correct under the SBUnix model where every shell process is
+ * its own session leader after setsid(). No kernel syscall required.
+ */
 pid_t tcgetsid(int fd) {
     struct termios t;
-    if (tcgetattr(fd, &t) < 0) {   /* sets errno=ENOTTY for non-tty fds */
+    if (tcgetattr(fd, &t) < 0) {
+        errno = ENOTTY;
         return (pid_t)-1;
     }
-    return getpid();               /* best approximation; correct post-setsid() */
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// POSIX termios stubs.
-// Declared in <termios.h> for source-compat with TCC/busybox; behavior is
-// minimal — the kernel doesn't yet implement drain/flow/flush/break/sessions.
-// cf*speed accessors are real (the speed lives in the struct), tcget/setwinsize
-// route through the existing TIOC*WINSZ ioctl path.
-// ─────────────────────────────────────────────────────────────────────────────
-speed_t cfgetispeed(const struct termios *t) { return t->c_ispeed; }
-speed_t cfgetospeed(const struct termios *t) { return t->c_ospeed; }
-int cfsetispeed(struct termios *t, speed_t s) { t->c_ispeed = s; return 0; }
-int cfsetospeed(struct termios *t, speed_t s) { t->c_ospeed = s; return 0; }
-
-int tcdrain(int fd)               { (void)fd; return 0; }
-int tcflow(int fd, int act)       { (void)fd; (void)act; return 0; }
-int tcflush(int fd, int q)        { (void)fd; (void)q;   return 0; }
-int tcsendbreak(int fd, int dur)  { (void)fd; (void)dur; return 0; }
-
-int tcgetwinsize(int fd, struct winsize *ws) {
-    return ioctl(fd, TIOCGWINSZ, ws);
-}
-int tcsetwinsize(int fd, const struct winsize *ws) {
-    return ioctl(fd, TIOCSWINSZ, ws);
+    return getpid();
 }

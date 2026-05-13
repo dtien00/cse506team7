@@ -10,6 +10,7 @@
 #define SYS_exit  1
 #define SYS_sleep 11
 #define SYS_uptime 12
+#define SYS_access 103
 
 void _exit(int status) {
     register long a0 asm("a0") = status;
@@ -47,6 +48,15 @@ int isatty(int fd) {
         return 1;
     /* errno is already set by tcgetattr (ENOTTY or EBADF) */
     return 0;
+}
+
+int access(const char *pathname, int mode) {
+    register long a0 asm("a0") = (long)pathname;
+    register long a1 asm("a1") = (long)mode;
+    register long a7 asm("a7") = SYS_access;
+    asm volatile("ecall" : "+r"(a0) : "r"(a1), "r"(a7) : "memory");
+    if (a0 < 0) { errno = (int)-a0; return -1; }
+    return (int)a0;
 }
 
 /* getpgid / setpgid / getpgrp / setsid are real syscall wrappers in syscall.S.

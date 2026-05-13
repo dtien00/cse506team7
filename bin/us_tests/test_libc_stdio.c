@@ -9,6 +9,7 @@
  */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <stddef.h>
 #include <unistd.h>
@@ -396,6 +397,76 @@ static void test_fileno(us_test_group_t *g) {
 
 /* ================================================================ entry point */
 
+/* ---------- getline / getdelim ----------------------------------- */
+static void test_getline_getdelim(us_test_group_t *g) {
+    FILE *f;
+    const char *path = "/tmp/libc_test_getline.txt";
+
+    ut_group_begin(g, "getline/getdelim");
+
+    /* Create a multi-line file */
+    f = fopen(path, "w");
+    TEST(g, "fopen write for getline source", f != NULL);
+    if (!f) { ut_group_end(g); return; }
+    fputs("alpha\n", f);
+    fputs("beta\n", f);
+    fputs("no-newline-tail", f);
+    fclose(f);
+
+    f = fopen(path, "r");
+    TEST(g, "fopen read for getline source", f != NULL);
+    if (!f) { ut_group_end(g); return; }
+
+    char  *line = NULL;
+    size_t cap  = 0;
+    ssize_t n;
+
+    /* getline allocates on first call */
+    n = getline(&line, &cap, f);
+    TEST(g, "getline first read returns 6 chars (incl \\n)", n == 6);
+    TEST(g, "getline allocated buffer", line != NULL && cap > 0);
+    TEST(g, "getline first line content", line && strcmp(line, "alpha\n") == 0);
+
+    n = getline(&line, &cap, f);
+    TEST(g, "getline second line", n == 5 && strcmp(line, "beta\n") == 0);
+
+    /* trailing line without newline */
+    n = getline(&line, &cap, f);
+    TEST(g, "getline trailing-no-newline returns chars",
+         n == (ssize_t)strlen("no-newline-tail"));
+    TEST(g, "getline trailing content matches",
+         strcmp(line, "no-newline-tail") == 0);
+
+    /* EOF: returns -1 */
+    n = getline(&line, &cap, f);
+    TEST(g, "getline at EOF returns -1", n == -1);
+
+    fclose(f);
+
+    /* getdelim with custom delimiter */
+    f = fopen(path, "w");
+    if (f) { fputs("one|two|three", f); fclose(f); }
+    f = fopen(path, "r");
+    TEST(g, "fopen for getdelim", f != NULL);
+    if (f) {
+        n = getdelim(&line, &cap, '|', f);
+        TEST(g, "getdelim first token incl delim", n == 4);
+        TEST(g, "getdelim first content", strcmp(line, "one|") == 0);
+        n = getdelim(&line, &cap, '|', f);
+        TEST(g, "getdelim second token", n == 4 && strcmp(line, "two|") == 0);
+        n = getdelim(&line, &cap, '|', f);
+        TEST(g, "getdelim trailing no-delim", n == 5 && strcmp(line, "three") == 0);
+        fclose(f);
+    }
+
+    free(line);
+    unlink(path);
+
+    ut_group_end(g);
+}
+
+/* ================================================================ entry point */
+
 void run_test_libc_stdio(us_test_group_t groups[], int *idx) {
     test_sprintf_fmt       (&groups[(*idx)++]);
     test_snprintf_limits   (&groups[(*idx)++]);
@@ -407,4 +478,5 @@ void run_test_libc_stdio(us_test_group_t groups[], int *idx) {
     test_fseek_ftell_rewind(&groups[(*idx)++]);
     test_fprintf           (&groups[(*idx)++]);
     test_fileno            (&groups[(*idx)++]);
+    test_getline_getdelim  (&groups[(*idx)++]);
 }

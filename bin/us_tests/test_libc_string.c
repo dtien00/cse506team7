@@ -7,6 +7,7 @@
 
 #include <string.h>
 #include <stddef.h>
+#include <signal.h>
 #include "us_test_common.h"
 
 /* ------------------------------------------------------------------ helpers */
@@ -310,6 +311,129 @@ static void test_strerror(us_test_group_t *g) {
     ut_group_end(g);
 }
 
+/* ---------- strlcpy ----------------------------------------------- */
+static void test_strlcpy(us_test_group_t *g) {
+    char dst[16];
+
+    ut_group_begin(g, "strlcpy");
+
+    /* fits with room to spare */
+    memset(dst, 'X', sizeof(dst));
+    size_t r = strlcpy(dst, "hi", sizeof(dst));
+    TEST(g, "strlcpy short return = srclen", r == 2);
+    TEST(g, "strlcpy short copies bytes", strcmp(dst, "hi") == 0);
+
+    /* exact fit (size = srclen + 1) */
+    r = strlcpy(dst, "hello", 6);
+    TEST(g, "strlcpy exact fit return = 5", r == 5);
+    TEST(g, "strlcpy exact fit terminates", strcmp(dst, "hello") == 0);
+
+    /* truncation: size smaller than src */
+    memset(dst, 'X', sizeof(dst));
+    r = strlcpy(dst, "hello", 4);
+    TEST(g, "strlcpy truncation return = srclen=5", r == 5);
+    TEST(g, "strlcpy truncation produces 3-char string", strcmp(dst, "hel") == 0);
+    TEST(g, "strlcpy NUL-terminates on truncation", dst[3] == '\0');
+
+    /* size = 0: must not touch dst, must return srclen */
+    dst[0] = 'Z';
+    r = strlcpy(dst, "abc", 0);
+    TEST(g, "strlcpy size=0 returns srclen", r == 3);
+    TEST(g, "strlcpy size=0 leaves dst untouched", dst[0] == 'Z');
+
+    /* size = 1: only NUL */
+    dst[0] = 'Z';
+    r = strlcpy(dst, "abc", 1);
+    TEST(g, "strlcpy size=1 returns srclen", r == 3);
+    TEST(g, "strlcpy size=1 writes NUL", dst[0] == '\0');
+
+    ut_group_end(g);
+}
+
+/* ---------- strlcat ----------------------------------------------- */
+static void test_strlcat(us_test_group_t *g) {
+    char dst[16];
+
+    ut_group_begin(g, "strlcat");
+
+    /* basic concatenation with room */
+    strcpy(dst, "foo");
+    size_t r = strlcat(dst, "bar", sizeof(dst));
+    TEST(g, "strlcat basic return = dlen + srclen", r == 6);
+    TEST(g, "strlcat basic produces 'foobar'", strcmp(dst, "foobar") == 0);
+
+    /* exact fit */
+    strcpy(dst, "ab");
+    r = strlcat(dst, "cd", 5);
+    TEST(g, "strlcat exact fit return = 4", r == 4);
+    TEST(g, "strlcat exact fit produces 'abcd'", strcmp(dst, "abcd") == 0);
+
+    /* truncation: room for only some src bytes */
+    strcpy(dst, "abc");
+    r = strlcat(dst, "DEFGH", 6);
+    TEST(g, "strlcat truncate return = 3 + 5 = 8", r == 8);
+    TEST(g, "strlcat truncate produces 'abcDE'", strcmp(dst, "abcDE") == 0);
+
+    /* dst already full (no NUL within size): return size + strlen(src) */
+    memset(dst, 'X', 5);
+    /* dst has no NUL in first 5 bytes; size=5 means dlen==size */
+    r = strlcat(dst, "hello", 5);
+    TEST(g, "strlcat full-dst return = size + srclen", r == 5 + 5);
+
+    ut_group_end(g);
+}
+
+/* ---------- strerror_r -------------------------------------------- */
+static void test_strerror_r(us_test_group_t *g) {
+    char buf[32];
+
+    ut_group_begin(g, "strerror_r");
+
+    /* normal case: buf large enough */
+    buf[0] = '\0';
+    int rc = strerror_r(2 /* ENOENT */, buf, sizeof(buf));
+    TEST(g, "strerror_r returns 0 on fit", rc == 0);
+    TEST(g, "strerror_r writes a non-empty string", strlen(buf) > 0);
+    TEST(g, "strerror_r NUL-terminates", buf[strlen(buf)] == '\0');
+
+    /* tiny buf: 1 byte only — must write NUL and return ERANGE (34) */
+    buf[0] = 'Z';
+    rc = strerror_r(2, buf, 1);
+    TEST(g, "strerror_r tiny buf NUL-terminates", buf[0] == '\0');
+    TEST(g, "strerror_r tiny buf returns ERANGE", rc == 34);
+
+    /* zero-len buf — return ERANGE */
+    rc = strerror_r(2, buf, 0);
+    TEST(g, "strerror_r zero-len buf returns ERANGE", rc == 34);
+
+    ut_group_end(g);
+}
+
+/* ---------- strsignal --------------------------------------------- */
+static void test_strsignal(us_test_group_t *g) {
+    ut_group_begin(g, "strsignal");
+
+    char *s;
+
+    s = strsignal(SIGINT);
+    TEST(g, "strsignal(SIGINT) non-null", s != NULL);
+    TEST(g, "strsignal(SIGINT) non-empty", strlen(s) > 0);
+
+    s = strsignal(SIGKILL);
+    TEST(g, "strsignal(SIGKILL) non-null", s != NULL);
+    TEST(g, "strsignal(SIGKILL) non-empty", strlen(s) > 0);
+
+    s = strsignal(SIGSEGV);
+    TEST(g, "strsignal(SIGSEGV) non-null", s != NULL);
+
+    /* unknown signum must still return non-null */
+    s = strsignal(9999);
+    TEST(g, "strsignal(unknown) non-null", s != NULL);
+    TEST(g, "strsignal(unknown) non-empty", strlen(s) > 0);
+
+    ut_group_end(g);
+}
+
 /* ================================================================ entry point */
 
 void run_test_libc_string(us_test_group_t groups[], int *idx) {
@@ -327,4 +451,8 @@ void run_test_libc_string(us_test_group_t groups[], int *idx) {
     test_strdup  (&groups[(*idx)++]);
     test_strtok  (&groups[(*idx)++]);
     test_strerror(&groups[(*idx)++]);
+    test_strlcpy   (&groups[(*idx)++]);
+    test_strlcat   (&groups[(*idx)++]);
+    test_strerror_r(&groups[(*idx)++]);
+    test_strsignal (&groups[(*idx)++]);
 }

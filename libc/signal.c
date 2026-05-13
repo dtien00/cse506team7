@@ -7,33 +7,14 @@ int raise(int sig) {
     return kill(getpid(), sig);
 }
 
-/* Raw ecall stub — passes arguments straight to the kernel without modification. */
-int __sigaction_raw(int sig, const struct sigaction *act, struct sigaction *oldact);
-
 /*
- * Sigreturn trampoline: called after a user-space signal handler returns.
- * Sets a7 = SYS_sigreturn (103) and issues ecall.  The kernel restores GP
- * registers, sepc, and signal_mask from the sigframe on the user stack.
+ * sigaction() is provided directly by the ecall stub in libc/syscall.S
+ * (SYS_sigaction = 38). The earlier libc-side wrapper that injected
+ * sa_restorer / SA_RESTORER was removed — struct sigaction carries no
+ * sa_restorer field. If custom handlers are wired through later, the
+ * trampoline must be delivered via proc->sa_restorer (kernel-side write
+ * in sys_sigaction), not a userspace sigaction field. See TCC_BB.md §13.
  */
-static void __sig_restorer(void) {
-    register long a7 asm("a7") = 103;   /* SYS_sigreturn */
-    asm volatile("ecall" : : "r"(a7) : "memory");
-}
-
-/*
- * sigaction() wrapper: injects __sig_restorer and SA_RESTORER for custom
- * handlers so the kernel can set frame->ra = restorer at dispatch time.
- * SIG_DFL and SIG_IGN pass through unmodified (no restorer needed).
- */
-int sigaction(int sig, const struct sigaction *act, struct sigaction *oldact) {
-    if (act != NULL && act->sa_handler != SIG_DFL && act->sa_handler != SIG_IGN) {
-        struct sigaction kact  = *act;
-        kact.sa_restorer       = __sig_restorer;
-        kact.sa_flags         |= SA_RESTORER;
-        return __sigaction_raw(sig, &kact, oldact);
-    }
-    return __sigaction_raw(sig, act, oldact);
-}
 
 sighandler_t signal(int signum, sighandler_t handler) {
     struct sigaction act, oldact;
@@ -41,7 +22,6 @@ sighandler_t signal(int signum, sighandler_t handler) {
     act.sa_mask      = 0;
     act.sa_flags     = 0;
     act.sa_sigaction = 0;
-    act.sa_restorer  = NULL;
     if (sigaction(signum, &act, &oldact) < 0)
         return SIG_ERR;
     return oldact.sa_handler;

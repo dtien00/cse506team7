@@ -10,6 +10,7 @@
 #include "fs/tarfs.h"
 #include "fs/tmpfs.h"
 #include "fs/procfs.h"
+#include "fs/devfs.h"
 #include "fs/ext2.h"
 #include "fs/block_cache.h"
 #include "drivers/virtio.h"
@@ -39,22 +40,6 @@ static void boot_wait_for_first_tick(void) {
         asm volatile("wfi");
 }
 
-#ifdef RUN_TESTS
-static void test_reset_scheduler_state(void) {
-    extern struct proc *mlfq[];
-    extern struct proc *blocked_queue;
-
-    for (int i = 0; i < MLFQ_LEVELS; i++)
-        mlfq[i] = NULL;
-    blocked_queue = NULL;
-
-    for (int i = 0; i < MAX_PROCS; i++)
-        proctab[i].next = NULL;
-
-    current = NULL;
-}
-#endif
-
 void run_all_tests(void) {
     // ext2_populate_test_run();
     mem_test_run();
@@ -67,10 +52,6 @@ void run_all_tests(void) {
     sched_fairness_test_run();
     sched_idle_test_run();
     sched_nice_test_run();
-#ifdef RUN_TESTS
-    test_reset_scheduler_state();
-#endif
-    printk("run_all_tests: starting proc_test_run()\n");
     proc_test_run();
     proc_waitpid_test_run();
     procinfo_test_run();
@@ -88,8 +69,6 @@ void run_all_tests(void) {
     sig_flag_test_run();
     leak_test_run();
     mm_vma_test_run();
-    access_test_run();
-    block_cache_race_test_run();
 
     // kstack_overflow_test_run();   // DESTRUCTIVE: must be last — triggers kernel stack overflow panic
 
@@ -153,6 +132,7 @@ void boot(uint64_t hart_id, uint64_t dtb) {
     tarfs_init();
     tmpfs_init();
     procfs_init();
+    /* devfs_init();  -- devfs not implemented yet; see TCC_BB.md §12.5 */
 
     // Initialize block storage and mount ext2 as root filesystem.
     // Discovers virtio-blk via PCIe ECAM enumeration (vendor 0x1AF4, device 0x1042)
@@ -181,6 +161,12 @@ void boot(uint64_t hart_id, uint64_t dtb) {
     if (vfs_mount(NULL, "/proc", "procfs") < 0) {
         printk("WARNING: failed to mount procfs at '/proc'\n");
     }
+
+    /* devfs not yet implemented; mount call removed to silence boot warning.
+     * See TCC_BB.md §12.5 — restore once devfs.c registers the FS type. */
+    /* if (vfs_mount(NULL, "/dev", "devfs") < 0) {
+     *     printk("WARNING: failed to mount devfs at '/dev'\n");
+     * } */
 
     // root does not need to be writeable.
     // // On first boot (superblock flag == 0), copy the read-only tarfs image

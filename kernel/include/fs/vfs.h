@@ -14,7 +14,8 @@ typedef unsigned long ino_t; // inode number
 typedef enum {
     VNODE_REG, // regular file
     VNODE_DIR, // directory
-    VNODE_LNK  // symbolic link
+    VNODE_LNK, // symbolic link
+    VNODE_CHR  // character device
 } vnode_type_t;
 
 #define VFS_PERM_EXEC  0x1
@@ -153,6 +154,7 @@ typedef struct fs_dent {
 
 // d_type values
 #define DT_UNKNOWN 0
+#define DT_CHR 2
 #define DT_DIR 4
 #define DT_REG 8
 #define DT_LNK 10

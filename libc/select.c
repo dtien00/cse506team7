@@ -1,7 +1,7 @@
 #include "sys/select.h"
 #include "stddef.h"
 
-/* select() is implemented as a kernel syscall (SYS_select = 104) via
+/* select() is implemented as a kernel syscall (SYS_select = 105) via
  * the assembly stub in libc/syscall.S.  No C wrapper is needed. */
 
 int pselect(int nfds, fd_set *restrict rfds, fd_set *restrict wfds,

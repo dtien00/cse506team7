@@ -2,7 +2,8 @@
 #define _SIGNAL_H
 
 #include "sys/types.h"
-#include "time.h"
+
+struct timespec;  /* forward declaration for sigtimedwait */
 
 /* ---------- primitive scalar typedefs ---------- */
 typedef int           sig_atomic_t;
@@ -48,11 +49,10 @@ typedef unsigned long sigset_t;
 #define SA_NOCLDSTOP  0x00000001  /* don't send SIGCHLD when child stops */
 #define SA_NOCLDWAIT  0x00000002  /* don't create zombie on child exit */
 #define SA_SIGINFO    0x00000004  /* sa_sigaction(int,siginfo_t*,void*) -- BLOCKED */
-#define SA_ONSTACK    0x08000000  /* use alternate signal stack -- BLOCKED */
+#define SA_ONSTACK    0x08000000  /* use alternate signal stack -- XSI */
 #define SA_RESTART    0x10000000  /* restart syscall on signal return -- BLOCKED */
 #define SA_NODEFER    0x40000000  /* don't mask this signal while handling it */
 #define SA_NOMASK     SA_NODEFER
-#define SA_RESTORER   0x04000000  /* sa_restorer field is valid */
 #define SA_RESETHAND  0x80000000  /* reset disposition to SIG_DFL after delivery */
 #define SA_ONESHOT    SA_RESETHAND
 
@@ -95,49 +95,51 @@ typedef struct {
     union sigval si_value;
 } siginfo_t;
 
-/* si_code values for SIGILL [CX] */
-#define ILL_ILLOPC  1
-#define ILL_ILLOPN  2
-#define ILL_ILLADR  3
-#define ILL_ILLTRP  4
-#define ILL_PRVOPC  5
-#define ILL_PRVREG  6
-#define ILL_COPROC  7
-#define ILL_BADSTK  8
+/* ---------- si_code values [CX] ---------- */
 
-/* si_code values for SIGFPE [CX] */
-#define FPE_INTDIV  1
-#define FPE_INTOVF  2
-#define FPE_FLTDIV  3
-#define FPE_FLTOVF  4
-#define FPE_FLTUND  5
-#define FPE_FLTRES  6
-#define FPE_FLTINV  7
-#define FPE_FLTSUB  8
+/* signal-independent source codes */
+#define SI_USER    0    /* sent by kill() */
+#define SI_QUEUE   (-1) /* sent by sigqueue() */
+#define SI_TIMER   (-2) /* timer expiration */
+#define SI_MESGQ   (-3) /* message queue arrival */
+#define SI_ASYNCIO (-4) /* async I/O completion */
 
-/* si_code values for SIGSEGV [CX] */
-#define SEGV_MAPERR 1
-#define SEGV_ACCERR 2
+/* SIGILL codes */
+#define ILL_ILLOPC  1   /* illegal opcode */
+#define ILL_ILLOPN  2   /* illegal operand */
+#define ILL_ILLADR  3   /* illegal addressing mode */
+#define ILL_ILLTRP  4   /* illegal trap */
+#define ILL_PRVOPC  5   /* privileged opcode */
+#define ILL_PRVREG  6   /* privileged register */
+#define ILL_COPROC  7   /* coprocessor error */
+#define ILL_BADSTK  8   /* internal stack error */
 
-/* si_code values for SIGBUS [CX] */
-#define BUS_ADRALN  1
-#define BUS_ADRERR  2
-#define BUS_OBJERR  3
+/* SIGFPE codes */
+#define FPE_INTDIV  1   /* integer divide by zero */
+#define FPE_INTOVF  2   /* integer overflow */
+#define FPE_FLTDIV  3   /* floating-point divide by zero */
+#define FPE_FLTOVF  4   /* floating-point overflow */
+#define FPE_FLTUND  5   /* floating-point underflow */
+#define FPE_FLTRES  6   /* floating-point inexact result */
+#define FPE_FLTINV  7   /* invalid floating-point operation */
+#define FPE_FLTSUB  8   /* subscript out of range */
 
-/* si_code values for SIGCHLD [CX] */
-#define CLD_EXITED    1
-#define CLD_KILLED    2
-#define CLD_DUMPED    3
-#define CLD_TRAPPED   4
-#define CLD_STOPPED   5
-#define CLD_CONTINUED 6
+/* SIGSEGV codes */
+#define SEGV_MAPERR 1   /* address not mapped to object */
+#define SEGV_ACCERR 2   /* invalid permissions for mapped object */
 
-/* si_code values for any signal [CX] */
-#define SI_USER    0
-#define SI_QUEUE   (-1)
-#define SI_TIMER   (-2)
-#define SI_MESGQ   (-3)
-#define SI_ASYNCIO (-4)
+/* SIGBUS codes */
+#define BUS_ADRALN  1   /* invalid address alignment */
+#define BUS_ADRERR  2   /* nonexistent physical address */
+#define BUS_OBJERR  3   /* object-specific hardware error */
+
+/* SIGCHLD codes */
+#define CLD_EXITED    1 /* child has exited */
+#define CLD_KILLED    2 /* child terminated abnormally, no core */
+#define CLD_DUMPED    3 /* child terminated abnormally with core */
+#define CLD_TRAPPED   4 /* traced child has trapped */
+#define CLD_STOPPED   5 /* child has stopped */
+#define CLD_CONTINUED 6 /* stopped child has continued */
 
 typedef struct {
     unsigned long __regs[32];  /* RISC-V GP registers + pc — opaque stub */
@@ -161,7 +163,6 @@ struct sigaction {
     sigset_t     sa_mask;
     int          sa_flags;
     void        (*sa_sigaction)(int, siginfo_t *, void *);
-    void        (*sa_restorer)(void);   /* set by sigaction() wrapper when SA_RESTORER */
 };
 
 struct sigevent {

@@ -222,9 +222,6 @@ void proc_free(struct proc *p) {
 void proc_exit(int code) {
     if (!current) return;
 
-    if (code != 0)
-        printk("proc_exit: pid=%d code=%d\n", current->pid, code);
-
     proc_destroy(current); // to protect from memory leaks
 
     // Store exit code and mark as ZOMBIE
@@ -917,8 +914,6 @@ static int exec_internal(const char *path, char *const argv[],
     current->vma_list = new_vma_list;
     current->sz        = highest_seg_end;
     current->satp      = MAKE_SATP((uintptr_t)new_pt);
-    strncpy(current->exe_path, path, SBUNIX_PATH_MAX - 1);
-    current->exe_path[SBUNIX_PATH_MAX - 1] = '\0';
     
     // Reset MLFQ scheduling state so the new image starts fresh.
     current->mlfq_level = 0;
