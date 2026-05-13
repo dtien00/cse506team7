@@ -191,6 +191,7 @@ vnode_t *tarfs_mount(mount_t *mnt, const char *source) {
     root->fs_data = NULL;
     root->fs_type = mnt->fs_type;
     root->type = VNODE_DIR;
+    root->nlink = 2;
 
     printk("tarfs: mounted at '%s'\n", mnt->mountpoint);
     return root;
@@ -225,6 +226,7 @@ vnode_t *tarfs_lookup(mount_t *mnt, const char *path) {
     vnode->fs_data = entry;
     vnode->fs_type = mnt->fs_type;
     vnode->type = (entry->header->typeflag == '5') ? VNODE_DIR : VNODE_REG;
+    vnode->nlink = (vnode->type == VNODE_DIR) ? 2 : 1;
 
     return vnode;
 }
