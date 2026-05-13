@@ -255,14 +255,14 @@ static void test_ki1_pagetable_leak(void) {
 static void test_open_close(void) {
     printk("=== LEAK/FS 2.1: open/close ref cycle ===\n");
 
-    int fd = file_open("/hello.txt");
+    int fd = file_open("/test/hello.txt");
     TEST("file_open /hello.txt: fd >= 0", fd >= 0);
     if (fd < 0) return;
     int r = file_close(fd);
     TEST("file_close: returns 0", r == 0);
 
     /* fd slot must be freed: re-opening should return the same (lowest) fd */
-    int fd2 = file_open("/hello.txt");
+    int fd2 = file_open("/test/hello.txt");
     TEST("file_open after close: fd2 >= 0 (slot reused)", fd2 >= 0);
     if (fd2 >= 0) file_close(fd2);
 }
@@ -274,7 +274,7 @@ static void test_open_close_cycle(void) {
 #define OC_CYCLES 64
     int ok = 1;
     for (int i = 0; i < OC_CYCLES; i++) {
-        int fd = file_open("/hello.txt");
+        int fd = file_open("/test/hello.txt");
         if (fd < 0) { ok = 0; break; }
         file_close(fd);
     }
@@ -387,7 +387,7 @@ static void test_ki3_dentry_prune(void) {
 static void test_dup_refcount(void) {
     printk("=== LEAK/FS 2.5: dup/close refcount ===\n");
 
-    int fd = file_open("/hello.txt");
+    int fd = file_open("/test/hello.txt");
     TEST("dup-refcount: base fd open", fd >= 0);
     if (fd < 0) return;
 
@@ -405,7 +405,7 @@ static void test_dup_refcount(void) {
     file_close(fd2);   /* ref_count drops to 0 → file_t freed */
 
     /* A fresh open must still work (no dangling refcount) */
-    int fd3 = file_open("/hello.txt");
+    int fd3 = file_open("/test/hello.txt");
     TEST("dup: fresh open works after both dup'd fds closed", fd3 >= 0);
     if (fd3 >= 0) file_close(fd3);
 }
@@ -454,7 +454,7 @@ static void test_ki2_fd_error_leak(void) {
     int fds[NREAL];
     int ok = 1;
     for (int i = 0; i < NREAL; i++) {
-        fds[i] = file_open("/hello.txt");
+        fds[i] = file_open("/test/hello.txt");
         if (fds[i] < 0) {
             ok = 0;
             for (int j = 0; j < i; j++) file_close(fds[j]);
@@ -852,7 +852,7 @@ static void test_pipe_half_close(void) {
 static void test_dup2_refcount(void) {
     printk("=== LEAK/FS 2.8: dup2 refcount ===\n");
 
-    int fd = file_open("/hello.txt");
+    int fd = file_open("/test/hello.txt");
     TEST("FS-2.8: file_open base fd", fd >= 0);
     if (fd < 0) return;
 
@@ -881,7 +881,7 @@ static void test_dup2_refcount(void) {
 
     file_close(fd);
     /* f freed; verify fresh open works */
-    int fd3 = file_open("/hello.txt");
+    int fd3 = file_open("/test/hello.txt");
     TEST("FS-2.8: fresh open after dup2 cycle works", fd3 >= 0);
     if (fd3 >= 0) file_close(fd3);
 }
@@ -897,7 +897,7 @@ static void test_vnode_refcount(void) {
     printk("=== LEAK/FS 2.9: vnode ref_count tracked directly ===\n");
 
     /* Prime: open once to resolve dentry, capture the vnode pointer */
-    int fd0 = file_open("/hello.txt");
+    int fd0 = file_open("/test/hello.txt");
     TEST("FS-2.9: initial open succeeds", fd0 >= 0);
     if (fd0 < 0) return;
 
@@ -911,7 +911,7 @@ static void test_vnode_refcount(void) {
          vn->ref_count == rc_before - 1);
 
     /* Re-open, dup, close both — ref must return to baseline-1 */
-    int fd = file_open("/hello.txt");
+    int fd = file_open("/test/hello.txt");
     TEST("FS-2.9: re-open succeeds", fd >= 0);
     if (fd < 0) return;
 
@@ -968,7 +968,7 @@ static void test_fs_struct_lifecycle(void) {
 static void test_file_refcount_direct(void) {
     printk("=== LEAK/FS 8: file_t ref_count zero after last close ===\n");
 
-    int fd = file_open("/hello.txt");
+    int fd = file_open("/test/hello.txt");
     TEST("FS-8: file_open succeeds", fd >= 0);
     if (fd < 0) return;
 
@@ -988,7 +988,7 @@ static void test_file_refcount_direct(void) {
 
     file_close(fd);
     /* f is freed now — cannot dereference.  Behavioral check: re-open succeeds */
-    int fd3 = file_open("/hello.txt");
+    int fd3 = file_open("/test/hello.txt");
     TEST("FS-8: re-open succeeds after last close (ref freed cleanly)", fd3 >= 0);
     if (fd3 >= 0) file_close(fd3);
 }

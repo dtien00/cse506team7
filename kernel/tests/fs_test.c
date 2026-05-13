@@ -38,7 +38,7 @@ void vfs_test(void) {
     printk("=== vfs tests ===\n");
 
     // 1. Open a known file
-    int fd = file_open("/hello.txt");
+    int fd = file_open("/test/hello.txt");
     TEST("vfs_open /hello.txt", fd >= 0);
     if (fd < 0) return;
 
@@ -226,7 +226,7 @@ void tmpfs_test(void) {
     }
 
     // 6. Write to tarfs file returns error
-    int tarf = file_open("/hello.txt");
+    int tarf = file_open("/test/hello.txt");
     if (tarf >= 0) {
         int w = file_write(tarf, "x", 1);
         TEST("write to read-only tarfs returns error", w < 0);
@@ -425,7 +425,7 @@ void dentry_test(void) {
     // Known tarfs file at root
     {
         dentry_t *d = NULL;
-        int err = vfs_lookup("/hello.txt", &d);
+        int err = vfs_lookup("/test/hello.txt", &d);
         TEST("vfs_lookup '/hello.txt' succeeds", err == 0);
         if (d) {
             TEST("'/hello.txt' is VNODE_REG",
@@ -475,8 +475,8 @@ void dentry_test(void) {
     // Two successive lookups of the same path return the same pointer
     {
         dentry_t *d1 = NULL, *d2 = NULL;
-        int e1 = vfs_lookup("/hello.txt", &d1);
-        int e2 = vfs_lookup("/hello.txt", &d2);
+        int e1 = vfs_lookup("/test/hello.txt", &d1);
+        int e2 = vfs_lookup("/test/hello.txt", &d2);
         TEST("two lookups of '/hello.txt' both succeed", e1 == 0 && e2 == 0);
         if (e1 == 0 && e2 == 0)
             TEST("cache hit: same dentry pointer", d1 == d2);
@@ -489,8 +489,8 @@ void dentry_test(void) {
     // Relative lookup from root dentry
     {
         dentry_t *d = NULL;
-        int err = vfs_lookup_from(vfs_get_root(), "hello.txt", &d);
-        TEST("vfs_lookup_from(root, 'hello.txt') succeeds", err == 0);
+        int err = vfs_lookup_from(vfs_get_root(), "test/hello.txt", &d);
+        TEST("vfs_lookup_from(root, 'test/hello.txt') succeeds", err == 0);
         if (d) dentry_put(d);
     }
 
@@ -603,7 +603,7 @@ void symlink_readlink_test(void) {
 
     // 1. Create a symlink and verify readlink succeeds.
     vfs_unlink("/tmp/rl_link.txt");
-    int err = vfs_symlink("/hello.txt", "/tmp/rl_link.txt");
+    int err = vfs_symlink("/test/hello.txt", "/tmp/rl_link.txt");
     TEST("vfs_symlink creates link", err == 0);
     if (err == 0) {
         r = vfs_readlink("/tmp/rl_link.txt", buf, sizeof(buf) - 1);
@@ -611,7 +611,7 @@ void symlink_readlink_test(void) {
         if (r > 0) {
             buf[r] = '\0';
             TEST("readlink returns correct target",
-                 strcmp(buf, "/hello.txt") == 0);
+                 strcmp(buf, "/test/hello.txt") == 0);
         }
         vfs_unlink("/tmp/rl_link.txt");
     }
@@ -629,7 +629,7 @@ void symlink_readlink_test(void) {
     vfs_rmdir("/tmp/rl_dir");
 
     // 4. readlink on a tarfs regular file must fail with EINVAL.
-    r = vfs_readlink("/hello.txt", buf, sizeof(buf));
+    r = vfs_readlink("/test/hello.txt", buf, sizeof(buf));
     TEST("readlink on tarfs regular file fails", r == -EINVAL);
 
     // 5. readlink on the root directory must fail with EINVAL.
@@ -641,7 +641,7 @@ void symlink_readlink_test(void) {
     TEST("readlink on nonexistent path returns -ENOENT", r == -ENOENT);
 
     // 7. lstat on a symlink must report S_IFLNK.
-    vfs_symlink("/hello.txt", "/tmp/rl_lstat_link.txt");
+    vfs_symlink("/test/hello.txt", "/tmp/rl_lstat_link.txt");
     {
         struct stat st;
         int sr = file_lstat("/tmp/rl_lstat_link.txt", &st);

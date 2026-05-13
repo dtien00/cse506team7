@@ -15,7 +15,7 @@
 /* ── dup correctness ────────────────────────────────────────────────────── */
 
 static void test_dup(us_test_group_t *group) {
-    int fd = open("/hello.txt", O_RDONLY);
+    int fd = open("test/hello.txt", O_RDONLY);
     TEST(group, "dup: open base file", fd >= 0);
     if (fd < 0) return;
 
@@ -73,7 +73,7 @@ static void test_dup2(us_test_group_t *group) {
 
     /* dup2 to self — no-op, fd still valid */
     {
-        int f = open("/hello.txt", O_RDONLY);
+        int f = open("test/hello.txt", O_RDONLY);
         TEST(group, "dup2-self: open succeeds", f >= 0);
         if (f >= 0) {
             int d2 = dup2(f, f);
@@ -86,8 +86,8 @@ static void test_dup2(us_test_group_t *group) {
 
     /* dup2 closes destination if already open */
     {
-        int f1 = open("/hello.txt", O_RDONLY);
-        int f2 = open("/hello.txt", O_RDONLY);
+        int f1 = open("test/hello.txt", O_RDONLY);
+        int f2 = open("test/hello.txt", O_RDONLY);
         TEST(group, "dup2-close-dest: two fds open", f1 >= 0 && f2 >= 0);
         if (f1 >= 0 && f2 >= 0) {
             dup2(f1, f2); /* f2 should be closed then replaced by f1 alias */
@@ -167,7 +167,7 @@ static void test_fd_exhaust(us_test_group_t *group) {
     int opened[256];
     int n = 0;
     while (n < 256) {
-        int fd = open("/hello.txt", O_RDONLY);
+        int fd = open("test/hello.txt", O_RDONLY);
         if (fd < 0) break;
         opened[n++] = fd;
     }
@@ -179,7 +179,7 @@ static void test_fd_exhaust(us_test_group_t *group) {
         close(opened[i]);
 
     /* should be able to open again */
-    int fd2 = open("/hello.txt", O_RDONLY);
+    int fd2 = open("test/hello.txt", O_RDONLY);
     TEST(group, "fd-exhaust: can open after closing some", fd2 >= 0);
     if (fd2 >= 0) close(fd2);
 
