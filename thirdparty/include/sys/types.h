@@ -2,7 +2,7 @@
 #include_next <sys/types.h>
 
 #ifndef HAVE_CLOCK_T
-typedef unsigned long clock_t;
+typedef long clock_t;
 #endif
 #ifndef HAVE_USECONDS_T
 typedef unsigned int useconds_t;

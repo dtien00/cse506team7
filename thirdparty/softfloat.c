@@ -161,6 +161,72 @@ W double __floatsidf(int i) {
 	return r.d;
 }
 
+float __truncdfsf2(double a);
+
+W double __subdf3(double a, double b) {
+	du ub = {b};
+	ub.u ^= SIGN;
+	return __adddf3(a, ub.d);
+}
+
+/* Returns -1 if a<b, 0 if a==b, 1 if a>b, 2 if unordered (NaN). */
+static int dcmp(double a, double b) {
+	du ua = {a}, ub = {b};
+	uint64_t au = ua.u, bu = ub.u;
+	int ae = d_exp(au), be = d_exp(bu);
+	if ((ae == 0x7FF && d_frac(au)) || (be == 0x7FF && d_frac(bu)))
+		return 2;
+	if (((au | bu) << 1) == 0) return 0;	/* +0 == -0 */
+	int as = d_sign(au), bs = d_sign(bu);
+	if (as != bs) return as ? -1 : 1;
+	if (au == bu) return 0;
+	if (au > bu) return as ? -1 : 1;
+	return as ? 1 : -1;
+}
+
+/* IEEE comparison helpers. NaN handling per GCC ABI:
+ *   __eq/__ne return non-zero ⇒ "not equal" (NaN ≠ anything).
+ *   __lt/__le return >=0 ⇒ false on NaN (so "if (x<y)" is taken false).
+ *   __gt/__ge return <=0 ⇒ false on NaN. */
+W int __eqdf2(double a, double b) { return dcmp(a, b); }
+W int __nedf2(double a, double b) { return dcmp(a, b); }
+W int __ltdf2(double a, double b) { int r = dcmp(a, b); return r == 2 ? 1 : r; }
+W int __ledf2(double a, double b) { int r = dcmp(a, b); return r == 2 ? 1 : r; }
+W int __gtdf2(double a, double b) { int r = dcmp(a, b); return r == 2 ? -1 : r; }
+W int __gedf2(double a, double b) { int r = dcmp(a, b); return r == 2 ? -1 : r; }
+W int __unorddf2(double a, double b) { return dcmp(a, b) == 2; }
+
+/* Single-precision arithmetic via double-precision (correct, not fastest). */
+W double __extendsfdf2(float a) {
+	union { float f; uint32_t u; } fa = {a};
+	uint32_t u = fa.u;
+	int sign = u >> 31;
+	int exp = (u >> 23) & 0xFF;
+	uint32_t frac = u & 0x7FFFFF;
+	du r;
+	if (exp == 0xFF) { r.u = pack(sign, 0x7FF, frac ? 1 : 0); return r.d; }
+	if (!exp && !frac) { r.u = (uint64_t)sign << 63; return r.d; }
+	if (!exp) {
+		while (!(frac & 0x800000)) { frac <<= 1; exp--; }
+		exp++;
+	}
+	int dexp = exp - 127 + EXP_BIAS;
+	r.u = pack(sign, dexp, ((uint64_t)frac & 0x7FFFFF) << 29);
+	return r.d;
+}
+
+W float __addsf3(float a, float b) { return __truncdfsf2(__adddf3(__extendsfdf2(a), __extendsfdf2(b))); }
+W float __subsf3(float a, float b) { return __truncdfsf2(__subdf3(__extendsfdf2(a), __extendsfdf2(b))); }
+W float __mulsf3(float a, float b) { return __truncdfsf2(__muldf3(__extendsfdf2(a), __extendsfdf2(b))); }
+
+W int __eqsf2(float a, float b) { return __eqdf2(__extendsfdf2(a), __extendsfdf2(b)); }
+W int __nesf2(float a, float b) { return __nedf2(__extendsfdf2(a), __extendsfdf2(b)); }
+W int __ltsf2(float a, float b) { return __ltdf2(__extendsfdf2(a), __extendsfdf2(b)); }
+W int __lesf2(float a, float b) { return __ledf2(__extendsfdf2(a), __extendsfdf2(b)); }
+W int __gtsf2(float a, float b) { return __gtdf2(__extendsfdf2(a), __extendsfdf2(b)); }
+W int __gesf2(float a, float b) { return __gedf2(__extendsfdf2(a), __extendsfdf2(b)); }
+W int __unordsf2(float a, float b) { return __unorddf2(__extendsfdf2(a), __extendsfdf2(b)); }
+
 W float __truncdfsf2(double a) {
 	du ua = {a};
 	uint64_t u = ua.u;
