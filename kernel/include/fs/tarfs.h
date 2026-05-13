@@ -1,7 +1,7 @@
 #pragma once
 #include "kernel/types.h"
 
-#define TARFS_MAX_ENTRIES 64
+#define TARFS_MAX_ENTRIES 256
 #define TAR_BLOCK_SIZE 512
 
 // The tar header structure (512 bytes)
