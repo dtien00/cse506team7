@@ -1,4 +1,4 @@
-// cc -nostdlib -I/include -I/lib/tcc/include /lib/crt.o /test_fileio.c -o /tmp/t -lc
+// cc -nostdlib -I/include -I/lib/tcc/include /lib/crt.o /test/test_fileio.c -o /tmp/t -lc
 
 #include <stdio.h>
 #include <string.h>
@@ -58,13 +58,13 @@ static void run_cc_test(us_test_group_t *group,
 void run_test_cc_compile(us_test_group_t *group) {
     ut_group_begin(group, "cc_compile");
 
-    run_cc_test(group, "test_ctype",   "/test_ctype.c",   "/tmp/cc_test_ctype");
-    run_cc_test(group, "test_fileio",  "/test_fileio.c",  "/tmp/cc_test_fileio");
-    run_cc_test(group, "test_malloc",  "/test_malloc.c",  "/tmp/cc_test_malloc");
-    run_cc_test(group, "test_misc",    "/test_misc.c",    "/tmp/cc_test_misc");
-    run_cc_test(group, "test_signal",  "/test_signal.c",  "/tmp/cc_test_signal");
-    run_cc_test(group, "test_stdio",   "/test_stdio.c",   "/tmp/cc_test_stdio");
-    run_cc_test(group, "test_unistd",  "/test_unistd.c",  "/tmp/cc_test_unistd");
+    run_cc_test(group, "test_ctype",   "/test/test_ctype.c",   "/tmp/cc_test_ctype");
+    run_cc_test(group, "test_fileio",  "/test/test_fileio.c",  "/tmp/cc_test_fileio");
+    run_cc_test(group, "test_malloc",  "/test/test_malloc.c",  "/tmp/cc_test_malloc");
+    run_cc_test(group, "test_misc",    "/test/test_misc.c",    "/tmp/cc_test_misc");
+    run_cc_test(group, "test_signal",  "/test/test_signal.c",  "/tmp/cc_test_signal");
+    run_cc_test(group, "test_stdio",   "/test/test_stdio.c",   "/tmp/cc_test_stdio");
+    run_cc_test(group, "test_unistd",  "/test/test_unistd.c",  "/tmp/cc_test_unistd");
 
     ut_group_end(group);
 }

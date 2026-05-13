@@ -25,17 +25,17 @@
 /* ── 1. close recycles lowest slot ─────────────────────────────────────── */
 
 static void test_slot_recycle(us_test_group_t *group) {
-    int a = open("/hello.txt", O_RDONLY);
+    int a = open("test/hello.txt", O_RDONLY);
     TEST(group, "slot-recycle: open a", a >= 0);
     if (a < 0) return;
 
-    int b = open("/hello.txt", O_RDONLY);
+    int b = open("test/hello.txt", O_RDONLY);
     TEST(group, "slot-recycle: open b", b >= 0 && b > a);
     if (b < 0) { close(a); return; }
 
     close(a); /* a's slot is now the lowest free */
 
-    int c = open("/hello.txt", O_RDONLY);
+    int c = open("test/hello.txt", O_RDONLY);
     TEST(group, "slot-recycle: reopen gets lowest (a's slot)", c == a);
     if (c >= 0) close(c);
     close(b);
@@ -44,7 +44,7 @@ static void test_slot_recycle(us_test_group_t *group) {
 /* ── 2. double-close returns EBADF ──────────────────────────────────────── */
 
 static void test_double_close(us_test_group_t *group) {
-    int fd = open("/hello.txt", O_RDONLY);
+    int fd = open("test/hello.txt", O_RDONLY);
     TEST(group, "double-close: open", fd >= 0);
     if (fd < 0) return;
 
@@ -65,7 +65,7 @@ static void test_invalid_close(us_test_group_t *group) {
 /* ── 4. dup refcount ─────────────────────────────────────────────────────── */
 
 static void test_dup_refcount(us_test_group_t *group) {
-    int orig = open("/hello.txt", O_RDONLY);
+    int orig = open("test/hello.txt", O_RDONLY);
     TEST(group, "dup-refcount: open orig", orig >= 0);
     if (orig < 0) return;
 
@@ -81,7 +81,7 @@ static void test_dup_refcount(us_test_group_t *group) {
 
     /* after closing dup, slot must be free (reopen gets same or lower slot) */
     close(d);
-    int reopen = open("/hello.txt", O_RDONLY);
+    int reopen = open("test/hello.txt", O_RDONLY);
     TEST(group, "dup-refcount: slot freed after both closed", reopen >= 0 && reopen <= d);
     if (reopen >= 0) close(reopen);
 }
@@ -89,8 +89,8 @@ static void test_dup_refcount(us_test_group_t *group) {
 /* ── 5. dup2 onto occupied slot closes target without leak ───────────────── */
 
 static void test_dup2_closes_target(us_test_group_t *group) {
-    int f1 = open("/hello.txt", O_RDONLY);
-    int f2 = open("/hello.txt", O_RDONLY);
+    int f1 = open("test/hello.txt", O_RDONLY);
+    int f2 = open("test/hello.txt", O_RDONLY);
     TEST(group, "dup2-closes-target: two fds open", f1 >= 0 && f2 >= 0);
     if (f1 < 0 || f2 < 0) { if (f1 >= 0) close(f1); if (f2 >= 0) close(f2); return; }
 
@@ -108,7 +108,7 @@ static void test_dup2_closes_target(us_test_group_t *group) {
     close(f2);
 
     /* slot f2+1 should not have been consumed by a leaked fd */
-    int probe = open("/hello.txt", O_RDONLY);
+    int probe = open("test/hello.txt", O_RDONLY);
     TEST(group, "dup2-closes-target: no fd leak (probe <= f2+1)", probe >= 0 && probe <= f2 + 1);
     if (probe >= 0) close(probe);
 }
@@ -190,7 +190,7 @@ static void test_pipe_reclaim(us_test_group_t *group) {
     close(fds[1]);
 
     /* both slots freed — next open should get one of them back */
-    int reopen = open("/hello.txt", O_RDONLY);
+    int reopen = open("test/hello.txt", O_RDONLY);
     TEST(group, "pipe-reclaim: slot freed after both ends closed", reopen >= 0 && reopen <= lo);
     if (reopen >= 0) close(reopen);
 }
@@ -249,7 +249,7 @@ static void test_unlink_fd_reclaim(us_test_group_t *group) {
     TEST(group, "unlink-fd-reclaim: path gone after close",
          open(path, O_RDONLY) < 0);
 
-    int reopen = open("/hello.txt", O_RDONLY);
+    int reopen = open("test/hello.txt", O_RDONLY);
     TEST(group, "unlink-fd-reclaim: slot reusable after close", reopen >= 0 && reopen <= fd);
     if (reopen >= 0) close(reopen);
 }

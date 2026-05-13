@@ -83,8 +83,8 @@ static void test_sys_file_io(void) {
 
     test_setup_proc();
 
-    int fd = file_open("/hello.txt");
-    TEST("file_open /hello.txt returns valid fd", fd >= 0);
+    int fd = file_open("test/hello.txt");
+    TEST("file_open test/hello.txt returns valid fd", fd >= 0);
 
     if (fd >= 0) {
         /* Read some bytes */
@@ -117,7 +117,7 @@ static void test_sys_file_io(void) {
     TEST("file_open nonexistent returns error", bad < 0);
 
     /* Write to tarfs file returns error (read-only filesystem) */
-    int rf = file_open("/hello.txt");
+    int rf = file_open("test/hello.txt");
     if (rf >= 0) {
         int w = file_write(rf, "x", 1);
         TEST("file_write to tarfs returns error", w < 0);
@@ -182,7 +182,7 @@ static void test_sys_mmap(void) {
         TEST("sys_mmap file-backed: bad fd returns MAP_FAILED", fb_bad == (void *)-1LL);
 
         /* File-backed mmap: unaligned offset → MAP_FAILED */
-        int fd_any = file_open("/hello.txt");
+        int fd_any = file_open("test/hello.txt");
         if (fd_any >= 0) {
             void *fb_unalign = sys_mmap(NULL, 4096, PROT_READ, MAP_PRIVATE, fd_any, 1);
             TEST("sys_mmap file-backed: unaligned offset returns MAP_FAILED",
@@ -216,7 +216,7 @@ static void test_sys_mmap(void) {
             }
             if (fd_any >= 0) file_close(fd_any);
         } else {
-            printk("  [SKIP] /hello.txt not found — skipping file-backed mmap tests\n");
+            printk("  [SKIP] test/hello.txt not found — skipping file-backed mmap tests\n");
         }
     }
 

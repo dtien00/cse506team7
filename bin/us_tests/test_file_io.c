@@ -10,7 +10,7 @@ void run_test_file_io(us_test_group_t *group) {
 
     ut_group_begin(group, "fcntl+unistd");
 
-    fd = open("/hello.txt", O_RDONLY);
+    fd = open("test/hello.txt", O_RDONLY);
     TEST(group, "open existing tarfs file", fd >= 0);
 
     if (fd >= 0) {
