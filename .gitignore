@@ -17,7 +17,7 @@ dump/**
 /.gdbinit
 /thirdparty/python/
 /thirdparty/tcc/
-/thirdparty/make/
+/thirdparty/make
 flat_kernel.sh
 tests/
 compile_commands.json

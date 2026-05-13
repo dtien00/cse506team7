@@ -113,6 +113,7 @@ void run_test_realpath(us_test_group_t *group);
 void run_test_select(us_test_group_t *group);
 void run_test_tcgetsid(us_test_group_t *group);
 void run_test_getsid(us_test_group_t *group);
+void run_test_cc_compile(us_test_group_t *group);
 
 /* comprehensive libc conformance suites (each fills multiple groups) */
 void run_test_libc_string(us_test_group_t groups[], int *idx);
@@ -197,7 +198,7 @@ int main(int argc, char **argv, char **envp) {
     ut_suite_begin("SBUnix Userspace Test Suite");
     int idx = 0;
 
-    // run_test_blkcache_stress(&groups[idx++]);
+    // run_test_cc_compile(&groups[idx++]);
     /* ── Lightweight / no-fork tests (always run) ─────────────────────────── */
     if (RUN_ALL_TESTS) {
         run_test_printf(&groups[idx++]);
@@ -217,6 +218,7 @@ int main(int argc, char **argv, char **envp) {
         run_test_select(&groups[idx++]);
         run_test_tcgetsid(&groups[idx++]);
         run_test_getsid(&groups[idx++]);
+        run_test_cc_compile(&groups[idx++]);
         run_test_stack_growth(&groups[idx++]);
         run_test_yield(&groups[idx++]);
         run_test_procinfo(&groups[idx++]);
