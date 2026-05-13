@@ -1,5 +1,6 @@
 #pragma once
 #include <sys/types.h>
+#include <time.h>
 
 struct tms {
 	clock_t tms_utime;

@@ -8,7 +8,9 @@
 #define _SC_NPROCESSORS_ONLN 84
 
 int execv(const char *path, char *const argv[]);
+#ifndef HAVE_USLEEP
 int usleep(useconds_t usec);
+#endif
 int chown(const char *path, uid_t owner, gid_t group);
 int lchown(const char *path, uid_t owner, gid_t group);
 int link(const char *oldpath, const char *newpath);

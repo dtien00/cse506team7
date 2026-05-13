@@ -23,6 +23,7 @@ PROBE_DEFS := $(call probe_type,clock_t) \
               $(call probe_type,useconds_t) \
               $(call probe_type,suseconds_t) \
               $(call probe_func,settimeofday) \
+              $(call probe_func,usleep) \
               $(call probe_func,strsignal,SBU_HAS_STRSIGNAL)
 CFLAGS += $(PROBE_DEFS)
 DUMMY_OBJ    := $(abspath $(TOP)/build/thirdparty/dummy.o)
@@ -31,10 +32,21 @@ SETJMP_OBJ   := $(abspath $(TOP)/build/thirdparty/setjmp.o)
 SOFTFLOAT_OBJ := $(abspath $(TOP)/build/thirdparty/softfloat.o)
 BB_PRINTF_OBJ := $(abspath $(TOP)/build/thirdparty/bb_printf.o)
 LIBGCC       := $(shell $(CC) -print-libgcc-file-name)
+LIBC_THIRDPARTY := $(abspath $(TOP)/build/thirdparty/libc-thirdparty.o)
+
+# Pre-link compat + dummy + setjmp + libc.a into a single relocatable object,
+# resolving compat-vs-student stdio duplicates here (compat first → wins) so
+# downstream final links never see multiple definitions. This is robust to
+# build systems (e.g. busybox kbuild) that strip -Wl,* flags from LDFLAGS.
+$(LIBC_THIRDPARTY): $(COMPAT_OBJ) $(DUMMY_OBJ) $(SETJMP_OBJ) $(TOP)/build/libc.a
+	@mkdir -p $(@D)
+	$(CROSS)ld -r --allow-multiple-definition -o $@ \
+	    $(COMPAT_OBJ) $(DUMMY_OBJ) $(SETJMP_OBJ) \
+	    --whole-archive $(abspath $(TOP)/build/libc.a) --no-whole-archive
+
 LDFLAGS := -nostdlib $(abspath $(TOP)/build/libc/crt.S.o) \
-           $(DUMMY_OBJ) $(COMPAT_OBJ) $(SETJMP_OBJ) \
-           -Wl,--whole-archive $(abspath $(TOP)/build/libc.a) -Wl,--no-whole-archive \
-           -Wl,--allow-multiple-definition -Wl,--gc-sections
+           $(LIBC_THIRDPARTY) \
+           -Wl,--allow-multiple-definition -Wl,--gc-sections -Wl,--no-relax
 
 $(DUMMY_OBJ): dummy.c
 	@mkdir -p $(@D)
@@ -63,10 +75,10 @@ busybox busybox-install busybox-menuconfig: export EXTRA_CFLAGS=$(CFLAGS) -Wno-f
 busybox busybox-install busybox-menuconfig: export EXTRA_LDFLAGS=$(LDFLAGS) $(BB_PRINTF_OBJ)
 
 busybox-patch:
-	@cd busybox && git checkout -q -- include/platform.h libbb/Kbuild.src 2>/dev/null || true
+	@cd busybox && git checkout -q -- include/platform.h include/libbb.h libbb/Kbuild.src scripts/Makefile.lib 2>/dev/null || true
 	@cd busybox && git apply ../busybox-sbunix.patch
 
-busybox: busybox-patch $(DUMMY_OBJ) $(COMPAT_OBJ) $(SETJMP_OBJ) $(BB_PRINTF_OBJ)
+busybox: busybox-patch $(LIBC_THIRDPARTY) $(BB_PRINTF_OBJ)
 	@mkdir -p $(abspath ../build/busybox)
 	@test -f $(abspath ../build/busybox/.config) || cp busybox_defconfig $(abspath ../build/busybox/.config)
 	@yes '' | $(MAKE) -C busybox O=$(abspath ../build/busybox) oldconfig >/dev/null 2>&1 || true
@@ -89,15 +101,14 @@ PYTHON_CFLAGS := -ffreestanding -fno-builtin -nostdlib -nostdinc -mcmodel=medany
                  -D_DIRENT_HAVE_D_TYPE=1
 PYTHON_CFLAGS += $(PROBE_DEFS)
 PYTHON_LDFLAGS := -nostdlib $(abspath $(TOP)/build/libc/crt.S.o) \
-                  $(DUMMY_OBJ) $(COMPAT_OBJ) $(SETJMP_OBJ) \
-                  -Wl,--whole-archive $(abspath $(TOP)/build/libc.a) -Wl,--no-whole-archive \
-                  -Wl,--allow-multiple-definition -Wl,--no-warn-mismatch -lgcc
+                  $(LIBC_THIRDPARTY) \
+                  -Wl,--allow-multiple-definition -Wl,--no-warn-mismatch -Wl,--no-relax -lgcc
 
 python-patch:
 	@cd python && git checkout -q -- ports/unix/mpconfigport.h 2>/dev/null || true
 	@cd python && git apply ../python-sbunix.patch
 
-python: python-patch $(DUMMY_OBJ) $(COMPAT_OBJ) $(SETJMP_OBJ)
+python: python-patch $(LIBC_THIRDPARTY)
 	$(MAKE) -C $(PYTHON_DIR) VARIANT=minimal \
 		CROSS_COMPILE=$(CROSS) \
 		CFLAGS_EXTRA="$(PYTHON_CFLAGS)" \
@@ -107,6 +118,8 @@ python: python-patch $(DUMMY_OBJ) $(COMPAT_OBJ) $(SETJMP_OBJ)
 python-install: python
 	@mkdir -p $(abspath ../build/rootfs/bin)
 	cp $(PYTHON_DIR)/build-minimal/micropython $(abspath ../build/rootfs/bin/python)
+	@mkdir -p $(abspath ../build/rootfs/home)
+	cp python-examples/* $(abspath ../build/rootfs/home/)
 
 python-clean:
 	$(MAKE) -C $(PYTHON_DIR) VARIANT=minimal clean
@@ -146,7 +159,7 @@ $(TCC_BUILD)/lib/%.o: $(TCC_DIR)/lib/%.S
 $(TCC_BUILD)/libtcc1.a: $(TCC_LIB_OBJ)
 	$(CROSS)ar rcs $@ $^
 
-tcc: $(DUMMY_OBJ) $(COMPAT_OBJ) $(SETJMP_OBJ) $(SOFTFLOAT_OBJ) $(TCC_BUILD)/tccdefs_.h $(TCC_BUILD)/libtcc1.a
+tcc: $(LIBC_THIRDPARTY) $(SOFTFLOAT_OBJ) $(TCC_BUILD)/tccdefs_.h $(TCC_BUILD)/libtcc1.a
 	@mkdir -p $(TCC_BUILD)
 	$(CC) $(TCC_CFLAGS) -c $(TCC_DIR)/tcc.c -o $(TCC_BUILD)/tcc.o
 	$(CC) $(TCC_BUILD)/tcc.o $(TCC_LDFLAGS) -o $(TCC_BUILD)/cc
@@ -161,6 +174,8 @@ tcc-install: tcc
 	cp $(abspath $(TOP)/libc/include/sys)/*.h $(abspath ../build/rootfs/include/sys/)
 	cp $(abspath $(TOP)/build/libc/crt.S.o) $(abspath ../build/rootfs/lib/crt.o)
 	cp $(abspath $(TOP)/build/libc.a) $(abspath ../build/rootfs/lib/libc.a)
+	@mkdir -p $(abspath ../build/rootfs/home)
+	cp tcc-examples/* $(abspath ../build/rootfs/home/)
 
 # --- pdpmake ---
 
@@ -173,7 +188,7 @@ $(TOP)/build/thirdparty/make/%.o: $(MAKE_DIR)/%.c
 	@mkdir -p $(@D)
 	$(CC) $(MAKE_CFLAGS) -c $< -o $@
 
-pdpmake: $(DUMMY_OBJ) $(COMPAT_OBJ) $(MAKE_OBJ)
+pdpmake: $(LIBC_THIRDPARTY) $(MAKE_OBJ)
 	$(CC) $(MAKE_OBJ) $(LDFLAGS) -o $(TOP)/build/thirdparty/make/make
 
 pdpmake-install: pdpmake
@@ -200,42 +215,7 @@ testsuite:
 test:
 	python3 testsuite/run_tests.py
 
-# --- python libc header + symbol probe ---
-#
-# Compiles dump/python_libc_probe.c with the exact flags used by the python
-# build.  A clean compile confirms every header MicroPython needs is present
-# and every type/macro is defined.  Run before building python to catch missing
-# libc pieces early without waiting for the full micropython link.
-#
-#   make -C thirdparty python-probe        # compile-only (fast)
-#   make -C thirdparty python-probe-link   # also link against libc.a (catches missing fns)
-
-PROBE_SRC  := $(abspath dump/python_libc_probe.c)
-PROBE_OBJ  := $(abspath $(TOP)/build/thirdparty/python_libc_probe.o)
-PROBE_ELF  := $(abspath $(TOP)/build/thirdparty/python_libc_probe.elf)
-PROBE_CFLAGS := -ffreestanding -fno-builtin -nostdlib -nostdinc -mcmodel=medany \
-                -march=rv64imac_zicsr_zifencei -mabi=lp64 \
-                -isystem $(abspath .)/include -isystem $(abspath $(TOP)/libc/include) -isystem $(GCC_INC) \
-                -D__sbunix__ -Wno-unused-function -Wno-unused-variable
-
-python-probe: $(DUMMY_OBJ) $(COMPAT_OBJ) $(SETJMP_OBJ)
-	@mkdir -p $(@D $(PROBE_OBJ))
-	@mkdir -p $(dir $(PROBE_OBJ))
-	$(CC) $(PROBE_CFLAGS) -c $(PROBE_SRC) -o $(PROBE_OBJ)
-	@echo "python-probe: all headers OK"
-
-python-probe-link: python-probe
-	$(CC) $(PROBE_OBJ) \
-	      -nostdlib $(abspath $(TOP)/build/libc/crt.S.o) \
-	      $(DUMMY_OBJ) $(COMPAT_OBJ) $(SETJMP_OBJ) \
-	      -Wl,--whole-archive $(abspath $(TOP)/build/libc.a) -Wl,--no-whole-archive \
-	      -Wl,--allow-multiple-definition -Wl,--gc-sections \
-	      -Wl,--no-warn-mismatch -lgcc \
-	      -o $(PROBE_ELF)
-	@echo "python-probe-link: all symbols resolved"
-
 .PHONY: install testsuite test busybox busybox-patch busybox-install busybox-menuconfig
 .PHONY: python python-patch python-install python-clean
 .PHONY: tcc tcc-install
 .PHONY: pdpmake pdpmake-install
-.PHONY: python-probe python-probe-link

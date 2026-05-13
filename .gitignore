@@ -16,5 +16,9 @@ dump/**
 /dev-remote.sh
 /.gdbinit
 /thirdparty/python/
+/thirdparty/tcc/
+/thirdparty/make/
 flat_kernel.sh
 tests/
+compile_commands.json
+.nvim.lua
