@@ -227,6 +227,9 @@ vnode_t *tarfs_lookup(mount_t *mnt, const char *path) {
     vnode->fs_type = mnt->fs_type;
     vnode->type = (entry->header->typeflag == '5') ? VNODE_DIR : VNODE_REG;
     vnode->nlink = (vnode->type == VNODE_DIR) ? 2 : 1;
+    vnode->mtime = (time_t)octal_to_size(entry->header->mtime, sizeof(entry->header->mtime));
+    vnode->atime = vnode->mtime;
+    vnode->ctime = vnode->mtime;
 
     return vnode;
 }

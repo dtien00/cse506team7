@@ -20,3 +20,9 @@ dump/**
 /thirdparty/make
 flat_kernel.sh
 tests/
+compile_commands.json
+.nvim.lua
+.cache/
+.idea/
+todo.txt
+.clang-format
