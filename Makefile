@@ -119,6 +119,9 @@ qemu: build/kernel.elf $(DISK_IMG)
 		-netdev user,id=net0 \
 		-nographic
 
+audit:
+	@bash tools/symbol_audit.sh
+
 clean:
 	rm -rf build zig-out .zig-cache
 
