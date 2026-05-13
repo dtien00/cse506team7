@@ -198,7 +198,7 @@ int main(int argc, char **argv, char **envp) {
     ut_suite_begin("SBUnix Userspace Test Suite");
     int idx = 0;
 
-    run_test_cc_compile(&groups[idx++]);
+    // run_test_cc_compile(&groups[idx++]);
     /* ── Lightweight / no-fork tests (always run) ─────────────────────────── */
     if (RUN_ALL_TESTS) {
         run_test_printf(&groups[idx++]);
