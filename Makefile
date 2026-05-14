@@ -170,8 +170,8 @@ OS_TEST_CFLAGS := -Os -ffreestanding -fno-builtin -nostdlib -nostdinc \
 	-isystem $(shell $(CC) -print-file-name=include) \
 	-mcmodel=medany -march=rv64imac_zicsr_zifencei -mabi=lp64 \
 	-ffunction-sections -fdata-sections \
-	-I$(CURDIR)/thirdparty/include \
-	-I$(CURDIR)/libc/include
+	-I$(CURDIR)/libc/include \
+	-I$(CURDIR)/thirdparty/include
 
 # crt.S.o must precede the test .o at link time so _start is defined first.
 OS_TEST_LDFLAGS := $(CURDIR)/build/libc/crt.S.o $(CURDIR)/build/libc.a \

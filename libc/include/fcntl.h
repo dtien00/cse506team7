@@ -2,6 +2,7 @@
 #define _FCNTL_H
 
 #include "sys/types.h"
+#include "sys/stat.h"
 
 /* File access modes */
 #define O_RDONLY    0x0000
