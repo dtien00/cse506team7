@@ -129,5 +129,13 @@ void run_test_cc_compile(us_test_group_t *group) {
     run_one(group, "write_chunks",
             "/test/test_write_chunks.c",     "/tmp/test_write_chunks");
 
+    run_one(group, "test_ctype",   "/test/test_ctype.c",   "/tmp/cc_test_ctype");
+    run_one(group, "test_fileio",  "/test/test_fileio.c",  "/tmp/cc_test_fileio");
+    run_one(group, "test_malloc",  "/test/test_malloc.c",  "/tmp/cc_test_malloc");
+    run_one(group, "test_misc",    "/test/test_misc.c",    "/tmp/cc_test_misc");
+    run_one(group, "test_signal",  "/test/test_signal.c",  "/tmp/cc_test_signal");
+    run_one(group, "test_stdio",   "/test/test_stdio.c",   "/tmp/cc_test_stdio");
+    run_one(group, "test_unistd",  "/test/test_unistd.c",  "/tmp/cc_test_unistd");
+
     ut_group_end(group);
 }

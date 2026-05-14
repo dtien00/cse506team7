@@ -18,19 +18,22 @@ int main(void) {
      * tgmath.h's _Generic selects the double path for double arguments. */
     double dv = sqrt(4.0);
     if (dv < 1.99 || dv > 2.01) {
-        printf("FAIL: sqrt(4.0) = %f\n", dv);
+        int dv_i = (int)dv; int dv_f = (int)((dv - dv_i) * 1000000);
+        printf("FAIL: sqrt(4.0) = %d.%06d\n", dv_i, dv_f);
         return 1;
     }
 
     double dv2 = sqrt(9.0);
     if (dv2 < 2.99 || dv2 > 3.01) {
-        printf("FAIL: sqrt(9.0) = %f\n", dv2);
+        int dv2_i = (int)dv2; int dv2_f = (int)((dv2 - dv2_i) * 1000000);
+        printf("FAIL: sqrt(9.0) = %d.%06d\n", dv2_i, dv2_f);
         return 1;
     }
 
     double av = fabs(-7.5);
     if (av < 7.49 || av > 7.51) {
-        printf("FAIL: fabs(-7.5) = %f\n", av);
+        int av_i = (int)av; int av_f = (int)((av - av_i) * 1000000);
+        printf("FAIL: fabs(-7.5) = %d.%06d\n", av_i, av_f);
         return 1;
     }
 

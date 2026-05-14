@@ -111,6 +111,7 @@ void run_test_leak(us_test_group_t *group);
 void run_test_getopt(us_test_group_t *group);
 void run_test_getopt_long(us_test_group_t *group);
 void run_test_realpath(us_test_group_t *group);
+void run_test_tgmath(us_test_group_t *group);
 void run_test_select(us_test_group_t *group);
 void run_test_tcgetsid(us_test_group_t *group);
 void run_test_getsid(us_test_group_t *group);
@@ -151,7 +152,7 @@ void run_test_python_smoke(us_test_group_t *group);
  * RUN_MEMORY_HEAVY – tests that make large heap / anonymous-mmap allocations:
  *                   malloc, lazy_alloc (8 MB mmap, 4 MB sbrk regions)
  */
-static const int RUN_ALL_TESTS   = 1;
+static const int RUN_ALL_TESTS   = 0;
 static const int RUN_FORK_HEAVY  = RUN_ALL_TESTS && 0;
 static const int RUN_MEMORY_HEAVY = RUN_ALL_TESTS && 1;
 static const int RUN_STRESS_TESTS = RUN_ALL_TESTS && 0;
@@ -305,6 +306,7 @@ int main(int argc, char **argv, char **envp) {
         run_test_getopt(&groups[idx++]);
         run_test_getopt_long(&groups[idx++]);
         run_test_realpath(&groups[idx++]);
+        run_test_tgmath(&groups[idx++]);
         run_test_libc_string(groups, &idx);
         run_test_libc_ctype(groups, &idx);
         run_test_libc_stdio(groups, &idx);

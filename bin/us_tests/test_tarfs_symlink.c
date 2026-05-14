@@ -6,6 +6,9 @@
  * exercise lstat (S_IFLNK), readlink, and transparent open/stat through the
  * link so that the archive loader's symlink support can be validated end-to-end.
  */
+
+// scp -r 506:~/jchlee/build ./build
+
 #include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
