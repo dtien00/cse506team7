@@ -244,6 +244,23 @@ double      nan(const char *s)  { (void)s; return __builtin_nan(""); }
 float       nanf(const char *s) { (void)s; return __builtin_nanf(""); }
 long double nanl(const char *s) { (void)s; return __builtin_nanl(""); }
 
+/* ── modf: split into integer and fractional parts ──────────────────────── */
+double modf(double x, double *iptr) {
+    double t = trunc(x);
+    *iptr = t;
+    return x - t;
+}
+float modff(float x, float *iptr) {
+    float t = truncf(x);
+    *iptr = t;
+    return x - t;
+}
+long double modfl(long double x, long double *iptr) {
+    long double t = truncl(x);
+    *iptr = t;
+    return x - t;
+}
+
 /* ── Transcendental functions — delegate to GCC builtins ─────────────────── */
 /* GCC __builtin_* forms are resolved via libgcc soft-float at link time.     */
 
@@ -358,5 +375,18 @@ long double tgammal(long double x){ return __builtin_tgammal(x); }
 double      lgamma(double x)      { return __builtin_lgamma(x); }
 float       lgammaf(float x)      { return __builtin_lgammaf(x); }
 long double lgammal(long double x){ return __builtin_lgammal(x); }
+
+/* ── XSI: signgam — set by lgamma() to indicate sign of Γ(x) ────────────── */
+int signgam = 1;
+
+/* ── XSI: Bessel and Neumann functions (stubs — full implementation
+ *   requires libm; these satisfy the linker for code that includes math.h
+ *   but does not call these at runtime in this OS context).              ── */
+double j0(double x) { return __builtin_j0(x); }
+double j1(double x) { return __builtin_j1(x); }
+double jn(int n, double x) { return __builtin_jn(n, x); }
+double y0(double x) { return __builtin_y0(x); }
+double y1(double x) { return __builtin_y1(x); }
+double yn(int n, double x) { return __builtin_yn(n, x); }
 
 /* Complex functions are in complex.c */

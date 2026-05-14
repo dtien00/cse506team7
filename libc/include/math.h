@@ -33,26 +33,49 @@ typedef double double_t;
 #define FP_ILOGB0    (-2147483647)
 #define FP_ILOGBNAN   2147483647
 
-/* ── M_* constants (XSI extension, widely expected) ───────────────────────── */
-#define M_E         2.7182818284590452354
-#define M_LOG2E     1.4426950408889634074
-#define M_LOG10E    0.43429448190325182765
-#define M_LN2       0.69314718055994530942
-#define M_LN10      2.30258509299404568402
-#define M_PI        3.14159265358979323846
-#define M_PI_2      1.57079632679489661923
-#define M_PI_4      0.78539816339744830962
-#define M_1_PI      0.31830988618379067154
-#define M_2_PI      0.63661977236758134308
-#define M_2_SQRTPI  1.12837916709551257390
-#define M_SQRT2     1.41421356237309504880
-#define M_SQRT1_2   0.70710678118654752440
+/* ── M_* constants (XSI — double and long double variants) ─────────────────── */
+/* Values accurate to at least 20 significant decimal digits.                   */
+#define M_E            2.7182818284590452354   /* e                    */
+#define M_El           2.7182818284590452354L
+#define M_LOG2E        1.4426950408889634074   /* log2(e)              */
+#define M_LOG2El       1.4426950408889634074L
+#define M_LOG10E       0.43429448190325182765  /* log10(e)             */
+#define M_LOG10El      0.43429448190325182765L
+#define M_LN2          0.69314718055994530942  /* ln(2)                */
+#define M_LN2l         0.69314718055994530942L
+#define M_LN10         2.30258509299404568402  /* ln(10)               */
+#define M_LN10l        2.30258509299404568402L
+#define M_PI           3.14159265358979323846  /* π                    */
+#define M_PIl          3.14159265358979323846L
+#define M_PI_2         1.57079632679489661923  /* π/2                  */
+#define M_PI_2l        1.57079632679489661923L
+#define M_PI_4         0.78539816339744830962  /* π/4                  */
+#define M_PI_4l        0.78539816339744830962L
+#define M_1_PI         0.31830988618379067154  /* 1/π                  */
+#define M_1_PIl        0.31830988618379067154L
+#define M_2_PI         0.63661977236758134308  /* 2/π                  */
+#define M_2_PIl        0.63661977236758134308L
+#define M_1_SQRTPI     0.56418958354775628694  /* 1/√π  (POSIX.1-2024) */
+#define M_1_SQRTPIl    0.56418958354775628694L
+#define M_2_SQRTPI     1.12837916709551257390  /* 2/√π                 */
+#define M_2_SQRTPIl    1.12837916709551257390L
+#define M_SQRT2        1.41421356237309504880  /* √2                   */
+#define M_SQRT2l       1.41421356237309504880L
+#define M_SQRT1_2      0.70710678118654752440  /* 1/√2                 */
+#define M_SQRT1_2l     0.70710678118654752440L
+#define M_SQRT3        1.73205080756887729352  /* √3   (POSIX.1-2024)  */
+#define M_SQRT3l       1.73205080756887729352L
+#define M_SQRT1_3      0.57735026918962576450  /* 1/√3 (POSIX.1-2024)  */
+#define M_SQRT1_3l     0.57735026918962576450L
+#define M_EGAMMA       0.57721566490153286060  /* γ    (POSIX.1-2024)  */
+#define M_EGAMMAl      0.57721566490153286060L
+#define M_PHI          1.61803398874989484820  /* φ    (POSIX.1-2024)  */
+#define M_PHIl         1.61803398874989484820L
+
+/* ── XSI: signgam — sign of lgamma result ───────────────────────────────────── */
+extern int signgam;
 
 /* ── POSIX function declarations — double, float (f), long double (l) ──────── */
-/* All functions are declared but implementations come from the compiler's
-   soft-float support (libgcc) or thirdparty/softfloat.c.                      */
-
-#include "stddef.h"   /* size_t — needed by modf signatures */
 
 double      acos(double);
 float       acosf(float);
@@ -296,5 +319,13 @@ long double fmal(long double, long double, long double);
 #define islessequal(x,y)     __builtin_islessequal((x),(y))
 #define islessgreater(x,y)   __builtin_islessgreater((x),(y))
 #define isunordered(x,y)     __builtin_isunordered((x),(y))
+
+/* ── XSI: Bessel / Neumann functions ────────────────────────────────────────── */
+double j0(double);
+double j1(double);
+double jn(int, double);
+double y0(double);
+double y1(double);
+double yn(int, double);
 
 #endif /* _MATH_H */
