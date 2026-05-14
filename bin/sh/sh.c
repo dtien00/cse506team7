@@ -1,10 +1,11 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-#include <sys/wait.h>
-#include <fcntl.h>
-#include <signal.h>
+#include "stdio.h"
+#include "stdlib.h"
+#include "string.h"
+#include "unistd.h"
+#include "sys/wait.h"
+#include "fcntl.h"
+#include "signal.h"
+#include "errno.h"
 
 #define MAX_LINE 1024
 #define MAX_ARGS 64
@@ -550,7 +551,7 @@ int main(int argc, char **argv) {
     signal(SIGTSTP, SIG_IGN);
     signal(SIGTTIN, SIG_IGN);
     signal(SIGTTOU, SIG_IGN);
-    signal(SIGCHLD, SIG_IGN);
+    signal(SIGCHLD, SIG_DFL);
 
     if (argc >= 3 && strcmp(argv[1], "-c") == 0) {
         strncpy(line, argv[2], sizeof(line) - 1);
@@ -776,21 +777,38 @@ static int builtin_fg(char **argv) {
 
     // Wait for it in the foreground
     int status = 0;
-    int ret;
-    do {
-        ret = waitpid(-jobs[idx].pgid, &status, WUNTRACED);
-    } while (ret < 0 /* && errno == EINTR */);
+    int last_status = 0;
+    int stopped_once = 0;
+    for (;;) {
+        int ret = waitpid(-jobs[idx].pgid, &status, WUNTRACED);
+        if (ret < 0) {
+            if (errno == EINTR) continue;
+            /* ECHILD: no more children in the group — pipeline fully reaped */
+            break;
+        }
+        if (WIFSTOPPED(status)) {
+            /* POSIX: any pipeline member stopping puts the job in Stopped
+            state.  Stop waiting and let user resume / kill.            */
+            stopped_once = 1;
+            break;
+        }
+        /* WIFEXITED / WIFSIGNALED: keep status of last reaped; loop for
+        remaining pipeline members.                                     */
+        last_status = status;
+    }
 
-    // Take back the terminal
     tcsetpgrp(STDIN_FILENO, getpgrp());
 
-    if (WIFSTOPPED(status)) {
+    if (stopped_once) {
         jobs[idx].state = JOB_STOPPED;
         printf("\n[%d]+  Stopped  %s\n", jobs[idx].job_id, jobs[idx].command);
         job_update_current(idx);
     } else {
-        // Job finished — remove from table
+        /* Whole pipeline done */
         job_remove(idx);
+        /* last_status reflects the last member; sh exit-status policy can
+        refine if needed (bash uses last command of pipeline).          */
+        (void)last_status;
     }
 
     return 0;
@@ -798,6 +816,9 @@ static int builtin_fg(char **argv) {
 
 static int builtin_jobs(char **argv) {
     (void)argv;
+    /* Reap any pending exits/stops/continues first so a finished job prints
+     * its "Done" line before the snapshot, instead of racing in after. */
+    job_reap_done();
     for (int i = 0; i < MAX_JOBS; i++) {
         if (jobs[i].state == JOB_UNUSED) continue;
         char mark = ' ';

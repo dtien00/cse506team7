@@ -222,9 +222,6 @@ void proc_free(struct proc *p) {
 void proc_exit(int code) {
     if (!current) return;
 
-    if (code != 0)
-        printk("proc_exit: pid=%d code=%d\n", current->pid, code);
-
     proc_destroy(current); // to protect from memory leaks
 
     // Store exit code and mark as ZOMBIE
@@ -254,7 +251,8 @@ void proc_exit(int code) {
     current->first_child = NULL;
 
     if (current->parent) {
-        if (current->parent->sig_flags[SIGCHLD] & SA_NOCLDWAIT) {
+        if (current->parent->sig_flags[SIGCHLD] & SA_NOCLDWAIT ||
+            current->parent->handlers[SIGCHLD] == (void *)1 /* SIG_IGN */) {
             // SA_NOCLDWAIT: mark for auto-reap; do not deliver SIGCHLD.
             // Parent wakeup to unblock waitpid() was already done above.
             current->auto_reap = 1;
