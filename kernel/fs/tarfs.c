@@ -89,12 +89,43 @@ void tarfs_init(void) {
                 break;
             }
 
-            tarfs_entry_t *e = &entries[entry_count++];
+            // Synthesize full path from ustar prefix + "/" + name.  When
+            // prefix is empty (the common case for short paths) this is just
+            // a copy of name.  Entries whose joined path overflows
+            // TARFS_FULL_NAME_MAX are dropped rather than silently truncated.
+            size_t plen = 0;
+            while (plen < sizeof(hdr->prefix) && hdr->prefix[plen]) plen++;
+            size_t nlen = 0;
+            while (nlen < sizeof(hdr->name) && hdr->name[nlen]) nlen++;
+
+            tarfs_entry_t *e = &entries[entry_count];
             e->header = hdr;
             e->data = ptr + TAR_BLOCK_SIZE; // data immediately follows header
             e->size = file_size;
 
-            printk("tarfs: [%d] %s (%d bytes)\n", entry_count - 1, hdr->name, file_size);
+            if (plen > 0) {
+                if (plen + 1 + nlen + 1 > sizeof(e->full_name)) {
+                    printk("tarfs: path too long, dropping: %.155s/%.100s\n",
+                           hdr->prefix, hdr->name);
+                    ptr += TAR_BLOCK_SIZE + round_up_block(file_size);
+                    continue;
+                }
+                memcpy(e->full_name, hdr->prefix, plen);
+                e->full_name[plen] = '/';
+                memcpy(e->full_name + plen + 1, hdr->name, nlen);
+                e->full_name[plen + 1 + nlen] = '\0';
+            } else {
+                if (nlen + 1 > sizeof(e->full_name)) {
+                    printk("tarfs: name too long, dropping: %.100s\n", hdr->name);
+                    ptr += TAR_BLOCK_SIZE + round_up_block(file_size);
+                    continue;
+                }
+                memcpy(e->full_name, hdr->name, nlen);
+                e->full_name[nlen] = '\0';
+            }
+
+            entry_count++;
+            printk("tarfs: [%d] %s (%d bytes)\n", entry_count - 1, e->full_name, file_size);
         }
 
         // Advance past this header block + data blocks (rounded up to 512)
@@ -142,7 +173,7 @@ static int tarfs_name_matches(const char *entry_name, int is_dir, const char *pa
 
 static tarfs_entry_t *lookup_entry(const char *path) {
     for (int i = 0; i < entry_count; i++) {
-        const char *name = entries[i].header->name;
+        const char *name = entries[i].full_name;
         int is_dir = (entries[i].header->typeflag == '5');
 
         if (tarfs_name_matches(name, is_dir, path))
@@ -318,7 +349,7 @@ static int tarfs_readdir(mount_t *mnt, vnode_t *vnode,
     // dir_entry is NULL only for the root vnode
     char dir[256];
     int dlen = dir_entry
-        ? strip_trailing_slash(dir_entry->header->name, dir, sizeof(dir))
+        ? strip_trailing_slash(dir_entry->full_name, dir, sizeof(dir))
         : 0;   // dlen == 0 triggers the "root" branch in direct_child_name
 
     char *out     = (char *)buf;
@@ -327,7 +358,7 @@ static int tarfs_readdir(mount_t *mnt, vnode_t *vnode,
     uint32_t idx     = 0;
 
     for (int i = 0; i < entry_count; i++) {
-        const char *raw_name = entries[i].header->name;
+        const char *raw_name = entries[i].full_name;
         int is_dir = (entries[i].header->typeflag == '5');
 
         const char *child = direct_child_name(raw_name, dir, dlen);
@@ -392,7 +423,7 @@ void tarfs_populate_ext2(mount_t *ext2_mnt) {
     // Walk every indexed tarfs entry
     for (int i = 0; i < entry_count; i++) {
         tarfs_entry_t *e = &entries[i];
-        const char *raw = e->header->name;
+        const char *raw = e->full_name;
         int is_dir = (e->header->typeflag == '5');
 
         // Strip leading "./" if present
