@@ -48,4 +48,8 @@ typedef double double_t;
 #define islessgreater(x,y)   __builtin_islessgreater((x),(y))
 #define isunordered(x,y)     __builtin_isunordered((x),(y))
 
+/* ── Function declarations ──────────────────────────────────────────────────── */
+double sqrt(double x);
+double fabs(double x);
+
 #endif /* _MATH_H */

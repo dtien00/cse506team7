@@ -82,8 +82,9 @@ void tarfs_init(void) {
 
         size_t file_size = octal_to_size(hdr->size, sizeof(hdr->size));
 
-        // typeflag '0' or '\0' = regular file, '5' = directory — index files only
-        if (hdr->typeflag == '0' || hdr->typeflag == '\0' || hdr->typeflag == '5') {
+        // typeflag '0'/'\0' = regular, '5' = directory, '2' = symlink
+        if (hdr->typeflag == '0' || hdr->typeflag == '\0' ||
+            hdr->typeflag == '5' || hdr->typeflag == '2') {
             if (entry_count >= TARFS_MAX_ENTRIES) {
                 printk("tarfs: too many entries, increase TARFS_MAX_ENTRIES\n");
                 break;
@@ -91,8 +92,9 @@ void tarfs_init(void) {
 
             tarfs_entry_t *e = &entries[entry_count++];
             e->header = hdr;
-            e->data = ptr + TAR_BLOCK_SIZE; // data immediately follows header
+            e->data = ptr + TAR_BLOCK_SIZE;
             e->size = file_size;
+            e->symlink_target = (hdr->typeflag == '2') ? hdr->linkname : NULL;
 
             printk("tarfs: [%d] %s (%d bytes)\n", entry_count - 1, hdr->name, file_size);
         }
@@ -225,7 +227,12 @@ vnode_t *tarfs_lookup(mount_t *mnt, const char *path) {
     vnode->mount = mnt;
     vnode->fs_data = entry;
     vnode->fs_type = mnt->fs_type;
-    vnode->type = (entry->header->typeflag == '5') ? VNODE_DIR : VNODE_REG;
+    if (entry->header->typeflag == '5')
+        vnode->type = VNODE_DIR;
+    else if (entry->header->typeflag == '2')
+        vnode->type = VNODE_LNK;
+    else
+        vnode->type = VNODE_REG;
     vnode->nlink = (vnode->type == VNODE_DIR) ? 2 : 1;
     vnode->mtime = (time_t)octal_to_size(entry->header->mtime, sizeof(entry->header->mtime));
     vnode->atime = vnode->mtime;
@@ -240,6 +247,19 @@ static int tarfs_read(vnode_t *vnode, void *buf, size_t offset, size_t len) {
 
     tarfs_entry_t *entry = (tarfs_entry_t *) vnode->fs_data;
     return read_entry(entry, buf, offset, len);
+}
+
+static int tarfs_readlink(vnode_t *vnode, char *buf, size_t size) {
+    if (!vnode || !buf)
+        return -EINVAL;
+    tarfs_entry_t *entry = (tarfs_entry_t *)vnode->fs_data;
+    if (!entry || !entry->symlink_target)
+        return -EINVAL;
+    size_t len = strlen(entry->symlink_target);
+    if (len > size)
+        len = size;
+    memcpy(buf, entry->symlink_target, len);
+    return (int)len;
 }
 
 static int tarfs_write(vnode_t *vnode, const void *buf, size_t offset, size_t len) {
@@ -328,7 +348,8 @@ static int tarfs_readdir(mount_t *mnt, vnode_t *vnode,
 
     for (int i = 0; i < entry_count; i++) {
         const char *raw_name = entries[i].header->name;
-        int is_dir = (entries[i].header->typeflag == '5');
+        char tf = entries[i].header->typeflag;
+        int is_dir = (tf == '5');
 
         const char *child = direct_child_name(raw_name, dir, dlen);
         if (!child) continue;
@@ -349,7 +370,7 @@ static int tarfs_readdir(mount_t *mnt, vnode_t *vnode,
         memset(d, 0, reclen);
         d->d_ino    = (uint64_t)&entries[i];
         d->d_reclen = reclen;
-        d->d_type   = is_dir ? DT_DIR : DT_REG;
+        d->d_type   = is_dir ? DT_DIR : (tf == '2' ? DT_LNK : DT_REG);
         memcpy(d->d_name, display, nlen + 1);
 
         written += reclen;
@@ -421,6 +442,11 @@ void tarfs_populate_ext2(mount_t *ext2_mnt) {
                 printk("tarfs: mkdir %s failed\n", dst);
             else
                 printk("tarfs: mkdir %s\n", dst);
+        } else if (e->header->typeflag == '2') {
+            if (vfs_symlink(e->header->linkname, dst) < 0)
+                printk("tarfs: symlink %s -> %s failed\n", dst, e->header->linkname);
+            else
+                printk("tarfs: symlink %s -> %s\n", dst, e->header->linkname);
         } else {
             // Create the file
             if (vfs_create(dst, 0644) < 0) {
@@ -477,6 +503,7 @@ static fs_type_t tarfs_type = {.name = "tarfs",
                                                .unlink = NULL, // Read-only
                                                .mkdir = NULL, // Read-only
                                                .readdir = tarfs_readdir,
+                                               .readlink = tarfs_readlink,
                                        },
                                .next = NULL};
 

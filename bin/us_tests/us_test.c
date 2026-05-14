@@ -59,6 +59,7 @@ void run_test_pause(us_test_group_t *group);
 void run_test_procinfo(us_test_group_t *group);
 void run_test_procfs(us_test_group_t *group);
 void run_test_readlink_negative(us_test_group_t *group);
+void run_test_tarfs_symlink(us_test_group_t *group);
 void run_test_gettimeofday(us_test_group_t *group);
 void run_test_alarm(us_test_group_t *group);
 void run_test_sigaction(us_test_group_t *group);
@@ -198,7 +199,8 @@ int main(int argc, char **argv, char **envp) {
     ut_suite_begin("SBUnix Userspace Test Suite");
     int idx = 0;
 
-    // run_test_cc_compile(&groups[idx++]);
+    run_test_cc_compile(&groups[idx++]);
+    run_test_tarfs_symlink(&groups[idx++]);
     /* ── Lightweight / no-fork tests (always run) ─────────────────────────── */
     if (RUN_ALL_TESTS) {
         run_test_printf(&groups[idx++]);
@@ -224,6 +226,7 @@ int main(int argc, char **argv, char **envp) {
         run_test_procinfo(&groups[idx++]);
         run_test_procfs(&groups[idx++]);
         run_test_readlink_negative(&groups[idx++]);
+        run_test_tarfs_symlink(&groups[idx++]);
         run_test_gettimeofday(&groups[idx++]);
         run_test_pipe_sigpipe(&groups[idx++]);
         run_test_zombie_fd(&groups[idx++]);
