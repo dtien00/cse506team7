@@ -14,9 +14,11 @@ static void run_cc_test(us_test_group_t *group,
     pid_t pid = fork();
     TEST(group, label, pid >= 0);
     if (pid == 0) {
-        char *argv[] = { "cc", "-nostdlib", "-I/include", "-I/lib/tcc/include",
-                         "/lib/crt.o", "-lc",
-                         (char *)src, "-o", (char *)out, NULL };
+        char *argv[] = { "cc", "-nostdlib", "-nostdinc",
+                         "-I/include", "-I/lib/tcc/include",
+                         (char *)src, "/lib/crt.o",
+                         "/lib/libc.a", "/lib/tcc/libtcc1.a",
+                         "-o", (char *)out, NULL };
         execve("/bin/cc", argv, NULL);
         _exit(127);
     }
