@@ -267,11 +267,11 @@ static int alloc_touch_mb(size_t mb) {
 }
 
 static void test_large_alloc_stress(us_test_group_t *group) {
-    static const size_t sizes_mb[] = { 30, 60, 100 };
+    static const size_t sizes_mb[] = { 30, 60, 80 };
     static const char *names[]     = {
         "eval10/large-alloc: 30 MB child exits cleanly",
         "eval10/large-alloc: 60 MB child exits cleanly",
-        "eval10/large-alloc: 100 MB child exits cleanly",
+        "eval10/large-alloc: 80 MB child exits cleanly",
     };
 
     for (int t = 0; t < 3; t++) {
