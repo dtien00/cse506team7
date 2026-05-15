@@ -246,8 +246,11 @@ void term_handle_input(terminal_t *t, char c)
             return;
         }
 
-        // EOF on an empty line  (^D) — wake reader to return 0 bytes
-        if (c == (char)tm->c_cc[VEOF] && t->llen == 0) {
+        // VEOF (^D): always completes the current line and wakes the reader.
+        // The VEOF byte itself is never stored in lbuf — so on an empty line
+        // the reader sees t->llen == 0 and returns 0 (EOF), and on a partial
+        // line the reader returns the buffered bytes WITHOUT a trailing '\n'.
+        if (c == (char)tm->c_cc[VEOF]) {
             t->line_ready = 1;
             term_wake(t);
             return;

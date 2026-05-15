@@ -72,6 +72,7 @@
 .global sigreturn
 .global __syscall_fcntl
 .global select
+.global tty_inject
 
 mmap:
     li a7, 14
@@ -436,6 +437,11 @@ access:
 
 select:
     li a7, 104
+    ecall
+    j __syscall_ret
+
+tty_inject:
+    li a7, 105
     ecall
     j __syscall_ret
 
