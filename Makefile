@@ -196,18 +196,18 @@ $(OS_TEST_DIR):
 # Build os-test suites cross-compiled for RISC-V using the kernel's libc,
 # copy the resulting ELF binaries into rootfs/os-test/, then rebuild the kernel.
 # After "make qemu" you can run /os-test/<test-name> from the kernel shell.
-# .PHONY: os-test
-# os-test: build/libc/crt.S.o build/libc.a $(OS_TEST_DIR)
-# 	cd $(OS_TEST_DIR) && $(MAKE) $(OS_TEST_MAKE_FLAGS) SUITE_LIST="$(OS_TEST_SUITES)" clean-test
-# 	cd $(OS_TEST_DIR) && $(MAKE) $(OS_TEST_MAKE_FLAGS) SUITE_LIST="$(OS_TEST_SUITES)" all
-# 	mkdir -p build/rootfs/os-test
-# 	find $(OS_TEST_DIR) -type f -executable | xargs -I {} cp {} build/rootfs/os-test/
-# 	$(MAKE) all
-# 	cd $(OS_TEST_DIR) && $(MAKE) $(OS_TEST_MAKE_FLAGS) SUITE_LIST="$(OS_TEST_SUITES)" clean-test html
-
 .PHONY: os-test
 os-test: build/libc/crt.S.o build/libc.a $(OS_TEST_DIR)
+	cd $(OS_TEST_DIR) && $(MAKE) $(OS_TEST_MAKE_FLAGS) SUITE_LIST="$(OS_TEST_SUITES)" clean-test
+	cd $(OS_TEST_DIR) && $(MAKE) $(OS_TEST_MAKE_FLAGS) SUITE_LIST="$(OS_TEST_SUITES)" all
+	mkdir -p build/rootfs/os-test
+	find $(OS_TEST_DIR) -type f -executable | xargs -I {} cp {} build/rootfs/os-test/
+	$(MAKE) all
 	cd $(OS_TEST_DIR) && $(MAKE) $(OS_TEST_MAKE_FLAGS) SUITE_LIST="$(OS_TEST_SUITES)" clean-test html
+
+# .PHONY: os-test
+# os-test: build/libc/crt.S.o build/libc.a $(OS_TEST_DIR)
+# 	cd $(OS_TEST_DIR) && $(MAKE) $(OS_TEST_MAKE_FLAGS) SUITE_LIST="$(OS_TEST_SUITES)" clean all html
 
 # ********************** TEST (NOT IN ORIGINAL /shared)
 
