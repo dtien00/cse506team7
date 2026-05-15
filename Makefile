@@ -205,9 +205,9 @@ os-test: build/libc/crt.S.o build/libc.a $(OS_TEST_DIR)
 	$(MAKE) all
 	cd $(OS_TEST_DIR) && $(MAKE) $(OS_TEST_MAKE_FLAGS) SUITE_LIST="$(OS_TEST_SUITES)" clean-test html
 
-# .PHONY: os-test-html
-# os-test-html: build/libc/crt.S.o build/libc.a $(OS_TEST_DIR)
-# 	cd $(OS_TEST_DIR) && $(MAKE) $(OS_TEST_MAKE_FLAGS) SUITE_LIST="$(OS_TEST_SUITES)" clean-test html
+# .PHONY: os-test
+# os-test: build/libc/crt.S.o build/libc.a $(OS_TEST_DIR)
+# 	cd $(OS_TEST_DIR) && $(MAKE) $(OS_TEST_MAKE_FLAGS) SUITE_LIST="$(OS_TEST_SUITES)" clean all html
 
 # ********************** TEST (NOT IN ORIGINAL /shared)
 

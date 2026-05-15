@@ -80,6 +80,8 @@ static void test_strtol(us_test_group_t *g) {
     TEST(g, "lone 0", strtol("0", &end, 0) == 0 && *end == '\0');
     TEST(g, "LONG_MAX via base 10",
          strtol("9223372036854775807", &end, 10) == LONG_MAX && *end == '\0');
+    TEST(g, "LONG_MIN via base 10",
+         strtol("-9223372036854775808", &end, 10) == LONG_MIN && *end == '\0');
 
     ut_group_end(g);
 }
@@ -293,16 +295,39 @@ static void test_bsearch(us_test_group_t *g) {
     ut_group_end(g);
 }
 
+/* ---------- signed integer minimum constants ------------------------------ */
+static void test_signed_min(us_test_group_t *g) {
+    /*
+     * These assignments are the compile-time check: if a minimum macro expands
+     * to an unsigned constant (e.g. because the large decimal literal overflows
+     * the signed type before negation), the compiler emits
+     * "integer constant is so large that it is unsigned" with -Wall -Werror
+     * and the translation unit fails to build.  A successful build proves the
+     * macros are well-formed signed constant expressions of the right type.
+     */
+    int       imin  = INT_MIN;
+    long      lmin  = LONG_MIN;
+    long long llmin = LLONG_MIN;
+
+    TEST(g, "INT_MIN is -2147483648",            imin  == -2147483647   - 1);
+    TEST(g, "INT_MIN has signed type (no warn)",  imin  <  0);
+    TEST(g, "LONG_MIN is -9223372036854775808",   lmin  == -9223372036854775807L   - 1);
+    TEST(g, "LONG_MIN has signed type (no warn)", lmin  <  0);
+    TEST(g, "LLONG_MIN is -9223372036854775808",  llmin == -9223372036854775807LL  - 1);
+    TEST(g, "LLONG_MIN has signed type (no warn)",llmin <  0);
+}
+
 /* ================================================================ entry point */
 
 void run_test_libc_stdlib(us_test_group_t groups[], int *idx) {
-    test_ato     (&groups[(*idx)++]);
-    test_strtol  (&groups[(*idx)++]);
-    test_strtoul (&groups[(*idx)++]);
-    test_strtoll (&groups[(*idx)++]);
-    test_abs     (&groups[(*idx)++]);
-    test_div     (&groups[(*idx)++]);
-    test_rand    (&groups[(*idx)++]);
-    test_qsort   (&groups[(*idx)++]);
-    test_bsearch (&groups[(*idx)++]);
+    test_ato        (&groups[(*idx)++]);
+    test_strtol     (&groups[(*idx)++]);
+    test_strtoul    (&groups[(*idx)++]);
+    test_strtoll    (&groups[(*idx)++]);
+    test_abs        (&groups[(*idx)++]);
+    test_div        (&groups[(*idx)++]);
+    test_rand       (&groups[(*idx)++]);
+    test_qsort      (&groups[(*idx)++]);
+    test_bsearch    (&groups[(*idx)++]);
+    test_signed_min (&groups[(*idx)++]);
 }

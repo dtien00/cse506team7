@@ -289,6 +289,10 @@ FILE *fopen(const char *path, const char *mode) {
 	return NULL;
 }
 int fclose(FILE *f) { int r = close(f->fd); f->flags = 0; return r; }
+FILE *freopen(const char *path, const char *mode, FILE *stream) {
+	(void)path; (void)mode; (void)stream;
+	return NULL;   /* unused in SBUnix tcc path; pulled in by upstream tcc_run */
+}
 size_t fread(void *ptr, size_t size, size_t nmemb, FILE *f) {
 	size_t total = size * nmemb, got = 0;
 	char *p = ptr;

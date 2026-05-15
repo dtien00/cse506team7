@@ -2753,7 +2753,9 @@ long sys_pathconf(const char *upath, int name) {
     kpath[MAX_PATH - 1] = '\0';
 
     dentry_t *de = NULL;
-    if (vfs_lookup(kpath, &de) < 0 || !de) { kfree(kpath); return -ENOENT; }
+    dentry_t *start = (current && current->fs) ? current->fs->cwd : NULL;
+    int rc = vfs_lookup_from(start, kpath, &de);
+    if (rc < 0 || !de) { kfree(kpath); return rc < 0 ? rc : -ENOENT; }
     dentry_put(de);
     kfree(kpath);
 

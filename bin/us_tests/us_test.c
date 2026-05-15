@@ -104,6 +104,7 @@ void run_test_pathconf(us_test_group_t *group);
 void run_test_mm_health(us_test_group_t *group);
 void run_test_eval_mm(us_test_group_t *group);
 void run_test_access(us_test_group_t *group);
+void run_test_chdir_relative(us_test_group_t *group);
 void run_test_exec_shebang(us_test_group_t *group);
 void run_test_exec_errno(us_test_group_t *group);
 void run_test_posix_compliance(us_test_group_t *group);
@@ -211,6 +212,7 @@ int main(int argc, char **argv, char **envp) {
         run_test_stdlib(&groups[idx++]);
         run_test_sbrk_brk(&groups[idx++]);
         run_test_file_io(&groups[idx++]);
+        run_test_chdir_relative(&groups[idx++]);
         run_test_mv_cp(&groups[idx++]);
         run_test_rename_rmdir(&groups[idx++]);
         run_test_write(&groups[idx++]);
