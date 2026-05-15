@@ -35,11 +35,8 @@ typedef struct tarfs_entry {
     tar_header_t *header;
     void *data; // pointer into kernel memory
     size_t size;
-<<<<<<< HEAD
     const char *symlink_target; // non-NULL for typeflag '2'; points into header->linkname
-=======
     char full_name[TARFS_FULL_NAME_MAX];
->>>>>>> origin/main
 } tarfs_entry_t;
 
 // Forward declaration
