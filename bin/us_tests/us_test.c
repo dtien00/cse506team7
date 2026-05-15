@@ -109,6 +109,7 @@ void run_test_chdir_relative(us_test_group_t *group);
 void run_test_strsignal(us_test_group_t *group);
 void run_test_getdelim(us_test_group_t *group);
 void run_test_mb(us_test_group_t *group);
+void run_test_mkstemp(us_test_group_t *group);
 void run_test_exec_shebang(us_test_group_t *group);
 void run_test_exec_errno(us_test_group_t *group);
 void run_test_posix_compliance(us_test_group_t *group);
@@ -220,6 +221,7 @@ int main(int argc, char **argv, char **envp) {
         run_test_strsignal(&groups[idx++]);
         run_test_getdelim(&groups[idx++]);
         run_test_mb(&groups[idx++]);
+        run_test_mkstemp(&groups[idx++]);
         run_test_mv_cp(&groups[idx++]);
         run_test_rename_rmdir(&groups[idx++]);
         run_test_write(&groups[idx++]);
