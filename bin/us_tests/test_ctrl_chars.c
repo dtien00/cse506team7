@@ -50,11 +50,20 @@ void run_test_ctrl_chars(us_test_group_t *group) {
     }
 
     /* Force canonical mode + ISIG, with ECHO off so the test output
-     * isn't polluted by "^C\n"/"^Z\n" echoes. */
+     * isn't polluted by "^C\n"/"^Z\n" echoes.
+     *
+     * TCSAFLUSH (not TCSANOW): drops any bytes already buffered in the
+     * line discipline before the test starts.  Hosts like PowerShell on
+     * Windows pump CR / terminal-capability replies into QEMU's stdin
+     * even before this point, and any leftover byte in lbuf turns the
+     * later ^D-on-empty-line test into a ^D-on-partial-line test
+     * (read() returns 1 byte instead of 0 → child exits 101 instead of
+     * 100).  TCSAFLUSH ends up in kernel term_tcsetattr →
+     * term_flush_input(), which zeros ihead/itail/llen/line_ready. */
     struct termios cooked = saved_tio;
     cooked.c_lflag |= (ICANON | ISIG);
     cooked.c_lflag &= ~ECHO;
-    tcsetattr(STDIN_FILENO, TCSANOW, &cooked);
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &cooked);
 
     pid_t saved_fg = tcgetpgrp(STDIN_FILENO);
 

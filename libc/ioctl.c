@@ -78,7 +78,27 @@ int cfsetospeed(struct termios *t, speed_t s) { t->c_ospeed = s; return 0; }
 
 int tcdrain(int fd)               { (void)fd; return 0; }
 int tcflow(int fd, int act)       { (void)fd; (void)act; return 0; }
-int tcflush(int fd, int q)        { (void)fd; (void)q;   return 0; }
+
+/*
+ * tcflush — drop pending input/output queue bytes.
+ *
+ * SBUnix has no output queue (writes flush synchronously), so TCOFLUSH is
+ * a no-op.  For TCIFLUSH/TCIOFLUSH we round-trip the current termios
+ * through tcsetattr with TCSAFLUSH; kernel term_tcsetattr() honors that
+ * action by calling term_flush_input() (kernel/tty/term.c:420), which
+ * zeros ihead/itail/llen/line_ready.  No new syscall needed.
+ */
+int tcflush(int fd, int q) {
+    if (q != TCIFLUSH && q != TCOFLUSH && q != TCIOFLUSH) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (q == TCOFLUSH) return 0;   /* no output queue to flush */
+    struct termios t;
+    if (tcgetattr(fd, &t) < 0) return -1;
+    return tcsetattr(fd, TCSAFLUSH, &t);
+}
+
 int tcsendbreak(int fd, int dur)  { (void)fd; (void)dur; return 0; }
 
 int tcgetwinsize(int fd, struct winsize *ws) {
