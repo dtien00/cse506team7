@@ -107,6 +107,9 @@ void run_test_eval_mm(us_test_group_t *group);
 void run_test_access(us_test_group_t *group);
 void run_test_chdir_relative(us_test_group_t *group);
 void run_test_strsignal(us_test_group_t *group);
+void run_test_getdelim(us_test_group_t *group);
+void run_test_mb(us_test_group_t *group);
+void run_test_mkstemp(us_test_group_t *group);
 void run_test_exec_shebang(us_test_group_t *group);
 void run_test_exec_errno(us_test_group_t *group);
 void run_test_posix_compliance(us_test_group_t *group);
@@ -155,8 +158,8 @@ void run_test_python_smoke(us_test_group_t *group);
  * RUN_MEMORY_HEAVY – tests that make large heap / anonymous-mmap allocations:
  *                   malloc, lazy_alloc (8 MB mmap, 4 MB sbrk regions)
  */
-static const int RUN_ALL_TESTS   = 0;
-static const int RUN_FORK_HEAVY  = RUN_ALL_TESTS && 0;
+static const int RUN_ALL_TESTS   = 1;
+static const int RUN_FORK_HEAVY  = RUN_ALL_TESTS && 1;
 static const int RUN_MEMORY_HEAVY = RUN_ALL_TESTS && 1;
 static const int RUN_STRESS_TESTS = RUN_ALL_TESTS && 0;
 static const int RUN_PYTHON_TESTS = RUN_ALL_TESTS && 0;
@@ -216,6 +219,9 @@ int main(int argc, char **argv, char **envp) {
         run_test_file_io(&groups[idx++]);
         run_test_chdir_relative(&groups[idx++]);
         run_test_strsignal(&groups[idx++]);
+        run_test_getdelim(&groups[idx++]);
+        run_test_mb(&groups[idx++]);
+        run_test_mkstemp(&groups[idx++]);
         run_test_mv_cp(&groups[idx++]);
         run_test_rename_rmdir(&groups[idx++]);
         run_test_write(&groups[idx++]);
