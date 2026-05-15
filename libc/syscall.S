@@ -72,6 +72,7 @@
 .global sigreturn
 .global __syscall_fcntl
 .global select
+.global uname
 
 mmap:
     li a7, 14
@@ -441,6 +442,11 @@ select:
 
 sigreturn:
     li a7, 103
+    ecall
+    j __syscall_ret
+
+uname:
+    li a7, 160
     ecall
     j __syscall_ret
 

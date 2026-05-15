@@ -579,6 +579,10 @@ void syscall_handler(trap_frame *frame) {
             ret = sys_fpathconf((int)arg0, (int)arg1);
             break;
 
+        case SYS_uname:
+            ret = sys_uname((void *)arg0);
+            break;
+
         default:
             // Unknown syscall number from user space will be recognized as delivering SIGSYS (Bad system call)
             // Set a0 = -ENOSYS so masked SIGSYS callers see a defined return value.
@@ -2800,4 +2804,20 @@ long sys_fpathconf(int fd, int name) {
     if (fd < 0 || fd >= MAX_FDS) return -EBADF;
     if (!current || !current->fds.files[fd]) return -EBADF;
     return pathconf_query(name);
+}
+
+int sys_uname(void *buf) {
+    if (!buf) return -EFAULT;
+
+    // struct utsname: five char[65] fields — sysname, nodename, release, version, machine
+    char ku[5][65];
+    __builtin_memset(ku, 0, sizeof(ku));
+    strncpy(ku[0], "SBUnix",  64);
+    strncpy(ku[1], "sbunix",  64);
+    strncpy(ku[2], "0.1.0",   64);
+    strncpy(ku[3], "#1",      64);
+    strncpy(ku[4], "riscv64", 64);
+
+    if (copy_to_user(buf, ku, sizeof(ku)) < 0) return -EFAULT;
+    return 0;
 }
