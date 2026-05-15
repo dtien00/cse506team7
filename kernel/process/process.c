@@ -113,6 +113,10 @@ struct proc* proc_create(const char *name) {
     p->rlimits[RLIMIT_CORE].rlim_cur   = 0;
     p->rlimits[RLIMIT_CORE].rlim_max   = 0;
 
+    /* POSIX default umask is 022 ("group-write and other-write off").
+     * sys_fork() overwrites this with the parent's value. */
+    p->umask = 022;
+
     p->pid = next_pid++;
     /* Each new process starts as its own group and session leader.
      * sys_fork() overwrites these with the parent's pgid/sid. */

@@ -547,7 +547,9 @@ W pid_t vfork(void) { return fork(); }
 /* stat stubs */
 W int fstat(int fd, struct stat *st) { (void)fd; (void)st; return -1; }
 W int chmod(const char *path, mode_t mode) { (void)path; (void)mode; return -1; }
-W mode_t umask(mode_t mask) { (void)mask; return 022; }
+/* umask() is now provided by libc via SYS_umask; the misleading
+ * always-returns-022 stub previously here ignored its argument and would
+ * shadow the real wrapper if compat.o were linked first. Removed. */
 
 /* fnmatch */
 static int fnm(const char *p, const char *s, int flags) {

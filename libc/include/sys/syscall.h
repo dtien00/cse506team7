@@ -71,5 +71,6 @@
 #define SYS_rename           56
 #define SYS_getuid           174
 #define SYS_tty_inject       105
+#define SYS_umask            166
 
 #endif

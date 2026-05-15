@@ -73,6 +73,7 @@
 .global __syscall_fcntl
 .global select
 .global tty_inject
+.global umask
 
 mmap:
     li a7, 14
@@ -442,6 +443,15 @@ select:
 
 tty_inject:
     li a7, 105
+    ecall
+    j __syscall_ret
+
+/* umask() cannot fail per POSIX.  current->umask is always 0..0777 (nine
+ * bits), so the return value is non-negative and __syscall_ret's errno
+ * branch never trips — direct ret is equally correct, but going through
+ * __syscall_ret keeps every wrapper uniform. */
+umask:
+    li a7, 166
     ecall
     j __syscall_ret
 

@@ -583,6 +583,10 @@ void syscall_handler(trap_frame *frame) {
             ret = sys_tty_inject((int)arg0);
             break;
 
+        case SYS_umask:
+            ret = (long)sys_umask((mode_t)arg0);
+            break;
+
         default:
             // Unknown syscall number from user space will be recognized as delivering SIGSYS (Bad system call)
             // Set a0 = -ENOSYS so masked SIGSYS callers see a defined return value.
@@ -678,6 +682,9 @@ pid_t sys_fork(void) {
         proc_free(child);
         return -ENOMEM;
     }
+
+    /* POSIX: child inherits parent's file-mode creation mask across fork. */
+    child->umask = current->umask;
 
     // Copy parent's trap frame and register state to the child
     if (current->trapframe) {
@@ -788,6 +795,11 @@ int sys_open(const char *path, int flags, mode_t mode) {
     if (!kpath) return -ENOMEM;
     if (strncpy_from_user(kpath, path, MAX_PATH - 1) < 0) { kfree(kpath); return -EFAULT; }
     kpath[MAX_PATH - 1] = '\0';
+    /* POSIX: when O_CREAT actually creates the file, the stored mode is
+     * `mode & ~umask & 0777`.  When O_CREAT is absent (plain open of an
+     * existing file) `mode` is ignored entirely, so masking is harmless. */
+    if (flags & O_CREAT)
+        mode = mode & ~current->umask & 0777;
     int ret = file_open_with_flags(kpath, flags, mode);
     kfree(kpath);
     return ret;
@@ -1737,8 +1749,25 @@ ssize_t sys_readlink(const char *upath, char *ubuf, size_t bufsiz) {
     return (rc < 0) ? -EFAULT : r;
 }
 
+/*
+ * sys_umask — POSIX file-mode creation mask.
+ *
+ * Atomically replaces current->umask with `mask & 0777` and returns the
+ * previous value.  Per POSIX this call cannot fail (and has no errno
+ * conditions); pass-through 022 if there is somehow no current process.
+ */
+mode_t sys_umask(mode_t mask) {
+    if (!current) return 022;
+    mode_t old = current->umask;
+    current->umask = mask & 0777;
+    return old;
+}
+
 int sys_mkdir(const char *path, mode_t mode) {
     if (!current) return -1;
+
+    /* POSIX: mkdir always creates, so the stored mode is `mode & ~umask & 0777`. */
+    mode = mode & ~current->umask & 0777;
 
     char *_pathbufs = kmalloc(2 * MAX_PATH);
     if (!_pathbufs) return -ENOMEM;

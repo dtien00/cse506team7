@@ -179,6 +179,11 @@ struct proc {
 
     fs_struct_t *fs;
 
+    /* POSIX file-mode creation mask.  Default 022; inherited on fork,
+     * preserved across exec.  Applied at every create-with-mode site
+     * (open(O_CREAT), mkdir) as `mode & ~umask & 0777`. */
+    mode_t umask;
+
     // Working directory (absolute path, always starts with '/')
     // char cwd[MAX_PATH];
 

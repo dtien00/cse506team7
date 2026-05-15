@@ -88,6 +88,7 @@
 #define SYS_sigreturn   103  /* int sigreturn(trap_frame *frame) */
 #define SYS_select      104  /* int select(int, fd_set*, fd_set*, fd_set*, timeval*) */
 #define SYS_tty_inject  105  /* int tty_inject(int c) — test-only: feed char into console line discipline */
+#define SYS_umask       166  /* Linux RISC-V ABI; mode_t umask(mode_t mask) */
 
 /* Kernel-side fd_set — ABI-identical to libc/include/sys/select.h fd_set */
 #define KSELECT_SETSIZE  1024
@@ -187,3 +188,4 @@ int sys_sigreturn(trap_frame *frame);
 int sys_select(int nfds, k_fd_set *urfds, k_fd_set *uwfds, k_fd_set *uefds,
                struct timeval_k *utv);
 int sys_tty_inject(int c);
+mode_t sys_umask(mode_t mask);
