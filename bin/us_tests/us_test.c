@@ -70,6 +70,7 @@ void run_test_time(us_test_group_t *group);
 void run_test_termios_tty(us_test_group_t *group);
 void run_test_pgrp(us_test_group_t *group);
 void run_test_jobctl(us_test_group_t *group);
+void run_test_ctrl_chars(us_test_group_t *group);
 void run_test_links(us_test_group_t groups[], int *idx);
 void run_test_pipe_sigpipe(us_test_group_t *group);
 void run_test_zombie_fd(us_test_group_t *group);
@@ -257,6 +258,7 @@ int main(int argc, char **argv, char **envp) {
         run_test_fork_sigdisp(&groups[idx++]);
         run_test_pgrp(&groups[idx++]);
         run_test_jobctl(&groups[idx++]);
+        run_test_ctrl_chars(&groups[idx++]);
         run_test_links(groups, &idx);
         run_test_large_io(&groups[idx++]);
         run_test_mmap_file(&groups[idx++]);

@@ -579,6 +579,10 @@ void syscall_handler(trap_frame *frame) {
             ret = sys_fpathconf((int)arg0, (int)arg1);
             break;
 
+        case SYS_tty_inject:
+            ret = sys_tty_inject((int)arg0);
+            break;
+
         default:
             // Unknown syscall number from user space will be recognized as delivering SIGSYS (Bad system call)
             // Set a0 = -ENOSYS so masked SIGSYS callers see a defined return value.
@@ -1992,6 +1996,19 @@ int sys_pause(void) {
     if (check) return -1;
     proc_sleep(&current->pending_signals);
     return -1;
+}
+
+/*
+ * sys_tty_inject — feed a single byte into the console line discipline as if
+ * it had arrived from the UART. Test-only helper that lets userspace exercise
+ * VINTR / VQUIT / VSUSP / VEOF code paths in term_handle_input() without a
+ * real keypress. Disables interrupts to serialize against the UART RX ISR.
+ */
+int sys_tty_inject(int c) {
+    interrupts_off();
+    term_handle_input(&console_term, (char)c);
+    interrupts_on();
+    return 0;
 }
 
 /*
