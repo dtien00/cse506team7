@@ -4,6 +4,7 @@
 
 struct group {
     char   *gr_name;
+    char   *gr_passwd;   /* matches thirdparty/include/grp.h layout */
     gid_t   gr_gid;
     char  **gr_mem;
 };
