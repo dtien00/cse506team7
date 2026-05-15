@@ -44,6 +44,9 @@ typedef struct {
 extern FILE *stdin;
 extern FILE *stdout;
 extern FILE *stderr;
+#define stdin  stdin
+#define stdout stdout
+#define stderr stderr
 
 /* ── Base POSIX functions ─────────────────────────────────────────────────── */
 
@@ -94,6 +97,8 @@ int     vsscanf(const char *restrict, const char *restrict, va_list);
 
 /* ── [CX] POSIX extensions ────────────────────────────────────────────────── */
 
+int     asprintf(char **, const char *restrict, ...);
+int     vasprintf(char **, const char *restrict, va_list);
 char   *ctermid(char *);
 int     dprintf(int, const char *restrict, ...);
 FILE   *fdopen(int, const char *);

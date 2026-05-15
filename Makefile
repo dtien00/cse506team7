@@ -133,7 +133,7 @@ submit:
 	rsync -a \
 		--exclude='.git' --exclude='build/' --exclude='zig-out/' \
 		--exclude='.zig-cache/' --exclude='.claude/' --exclude='thirdparty/' \
-		--max-size=100K \
+		--max-size=150K \
 		. "$$STMP/"; \
 	cd "$$STMP"; \
 	git init -q; \
@@ -173,8 +173,8 @@ OS_TEST_CFLAGS := -Os -ffreestanding -fno-builtin -nostdlib -nostdinc \
 	-isystem $(shell $(CC) -print-file-name=include) \
 	-mcmodel=medany -march=rv64imac_zicsr_zifencei -mabi=lp64 \
 	-ffunction-sections -fdata-sections \
-	-I$(CURDIR)/thirdparty/include \
-	-I$(CURDIR)/libc/include
+	-I$(CURDIR)/libc/include \
+	-I$(CURDIR)/thirdparty/include
 
 # crt.S.o must precede the test .o at link time so _start is defined first.
 OS_TEST_LDFLAGS := $(CURDIR)/build/libc/crt.S.o $(CURDIR)/build/libc.a \
@@ -208,9 +208,9 @@ os-test: build/libc/crt.S.o build/libc.a $(OS_TEST_DIR)
 	$(MAKE) all
 	cd $(OS_TEST_DIR) && $(MAKE) $(OS_TEST_MAKE_FLAGS) SUITE_LIST="$(OS_TEST_SUITES)" clean-test html
 
-# .PHONY: os-test-html
-# os-test-html: build/libc/crt.S.o build/libc.a $(OS_TEST_DIR)
-# 	cd $(OS_TEST_DIR) && $(MAKE) $(OS_TEST_MAKE_FLAGS) SUITE_LIST="$(OS_TEST_SUITES)" clean-test html
+# .PHONY: os-test
+# os-test: build/libc/crt.S.o build/libc.a $(OS_TEST_DIR)
+# 	cd $(OS_TEST_DIR) && $(MAKE) $(OS_TEST_MAKE_FLAGS) SUITE_LIST="$(OS_TEST_SUITES)" clean all html
 
 # ********************** TEST (NOT IN ORIGINAL /shared)
 

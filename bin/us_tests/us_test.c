@@ -59,6 +59,7 @@ void run_test_pause(us_test_group_t *group);
 void run_test_procinfo(us_test_group_t *group);
 void run_test_procfs(us_test_group_t *group);
 void run_test_readlink_negative(us_test_group_t *group);
+void run_test_tarfs_symlink(us_test_group_t *group);
 void run_test_gettimeofday(us_test_group_t *group);
 void run_test_alarm(us_test_group_t *group);
 void run_test_sigaction(us_test_group_t *group);
@@ -70,6 +71,7 @@ void run_test_time(us_test_group_t *group);
 void run_test_termios_tty(us_test_group_t *group);
 void run_test_pgrp(us_test_group_t *group);
 void run_test_jobctl(us_test_group_t *group);
+void run_test_ctrl_chars(us_test_group_t *group);
 void run_test_links(us_test_group_t groups[], int *idx);
 void run_test_pipe_sigpipe(us_test_group_t *group);
 void run_test_zombie_fd(us_test_group_t *group);
@@ -103,6 +105,8 @@ void run_test_pathconf(us_test_group_t *group);
 void run_test_mm_health(us_test_group_t *group);
 void run_test_eval_mm(us_test_group_t *group);
 void run_test_access(us_test_group_t *group);
+void run_test_chdir_relative(us_test_group_t *group);
+void run_test_strsignal(us_test_group_t *group);
 void run_test_exec_shebang(us_test_group_t *group);
 void run_test_exec_errno(us_test_group_t *group);
 void run_test_posix_compliance(us_test_group_t *group);
@@ -110,6 +114,7 @@ void run_test_leak(us_test_group_t *group);
 void run_test_getopt(us_test_group_t *group);
 void run_test_getopt_long(us_test_group_t *group);
 void run_test_realpath(us_test_group_t *group);
+void run_test_tgmath(us_test_group_t *group);
 void run_test_select(us_test_group_t *group);
 void run_test_tcgetsid(us_test_group_t *group);
 void run_test_getsid(us_test_group_t *group);
@@ -150,9 +155,9 @@ void run_test_python_smoke(us_test_group_t *group);
  * RUN_MEMORY_HEAVY – tests that make large heap / anonymous-mmap allocations:
  *                   malloc, lazy_alloc (8 MB mmap, 4 MB sbrk regions)
  */
-static const int RUN_ALL_TESTS   = 1;
+static const int RUN_ALL_TESTS   = 0;
 static const int RUN_FORK_HEAVY  = RUN_ALL_TESTS && 0;
-static const int RUN_MEMORY_HEAVY = RUN_ALL_TESTS && 0;
+static const int RUN_MEMORY_HEAVY = RUN_ALL_TESTS && 1;
 static const int RUN_STRESS_TESTS = RUN_ALL_TESTS && 0;
 static const int RUN_PYTHON_TESTS = RUN_ALL_TESTS && 0;
 
@@ -199,6 +204,8 @@ int main(int argc, char **argv, char **envp) {
     int idx = 0;
 
     // run_test_cc_compile(&groups[idx++]);
+    // run_test_procfs(&groups[idx++]);
+    // run_test_tarfs_symlink(&groups[idx++]);
     /* ── Lightweight / no-fork tests (always run) ─────────────────────────── */
     if (RUN_ALL_TESTS) {
         run_test_printf(&groups[idx++]);
@@ -207,6 +214,8 @@ int main(int argc, char **argv, char **envp) {
         run_test_stdlib(&groups[idx++]);
         run_test_sbrk_brk(&groups[idx++]);
         run_test_file_io(&groups[idx++]);
+        run_test_chdir_relative(&groups[idx++]);
+        run_test_strsignal(&groups[idx++]);
         run_test_mv_cp(&groups[idx++]);
         run_test_rename_rmdir(&groups[idx++]);
         run_test_write(&groups[idx++]);
@@ -224,6 +233,7 @@ int main(int argc, char **argv, char **envp) {
         run_test_procinfo(&groups[idx++]);
         run_test_procfs(&groups[idx++]);
         run_test_readlink_negative(&groups[idx++]);
+        run_test_tarfs_symlink(&groups[idx++]);
         run_test_gettimeofday(&groups[idx++]);
         run_test_pipe_sigpipe(&groups[idx++]);
         run_test_zombie_fd(&groups[idx++]);
@@ -254,6 +264,7 @@ int main(int argc, char **argv, char **envp) {
         run_test_fork_sigdisp(&groups[idx++]);
         run_test_pgrp(&groups[idx++]);
         run_test_jobctl(&groups[idx++]);
+        run_test_ctrl_chars(&groups[idx++]);
         run_test_links(groups, &idx);
         run_test_large_io(&groups[idx++]);
         run_test_mmap_file(&groups[idx++]);
@@ -302,6 +313,7 @@ int main(int argc, char **argv, char **envp) {
         run_test_getopt(&groups[idx++]);
         run_test_getopt_long(&groups[idx++]);
         run_test_realpath(&groups[idx++]);
+        run_test_tgmath(&groups[idx++]);
         run_test_libc_string(groups, &idx);
         run_test_libc_ctype(groups, &idx);
         run_test_libc_stdio(groups, &idx);

@@ -519,6 +519,27 @@ int sprintf(char *buf, const char *fmt, ...) {
     return n;
 }
 
+int vasprintf(char **ptr, const char *fmt, va_list ap) {
+    va_list ap2;
+    va_copy(ap2, ap);
+    int n = vsnprintf(NULL, 0, fmt, ap2);
+    va_end(ap2);
+    if (n < 0) return -1;
+    char *s = malloc((size_t) n + 1);
+    if (!s) return -1;
+    vsnprintf(s, (size_t) n + 1, fmt, ap);
+    *ptr = s;
+    return n;
+}
+
+int asprintf(char **ptr, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vasprintf(ptr, fmt, ap);
+    va_end(ap);
+    return n;
+}
+
 int putchar(int c) {
     char ch = (char) c;
     fd_write_all(STDOUT_FILENO, &ch, 1);

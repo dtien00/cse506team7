@@ -25,11 +25,18 @@ typedef struct tar_header {
     char pad[12]; // pad to 512 bytes
 } tar_header_t;
 
-// A parsed/indexed file entry
+// A parsed/indexed file entry.
+//
+// `full_name` is synthesized at index time from the ustar `prefix` + "/" +
+// `name` fields so paths >100 chars index correctly.  Lookups, readdir, and
+// ext2 population all compare against `full_name`, not `header->name`.
+#define TARFS_FULL_NAME_MAX 256
 typedef struct tarfs_entry {
     tar_header_t *header;
     void *data; // pointer into kernel memory
     size_t size;
+    const char *symlink_target; // non-NULL for typeflag '2'; points into header->linkname
+    char full_name[TARFS_FULL_NAME_MAX];
 } tarfs_entry_t;
 
 // Forward declaration

@@ -579,6 +579,10 @@ void syscall_handler(trap_frame *frame) {
             ret = sys_fpathconf((int)arg0, (int)arg1);
             break;
 
+        case SYS_tty_inject:
+            ret = sys_tty_inject((int)arg0);
+            break;
+
         default:
             // Unknown syscall number from user space will be recognized as delivering SIGSYS (Bad system call)
             // Set a0 = -ENOSYS so masked SIGSYS callers see a defined return value.
@@ -1995,6 +1999,19 @@ int sys_pause(void) {
 }
 
 /*
+ * sys_tty_inject — feed a single byte into the console line discipline as if
+ * it had arrived from the UART. Test-only helper that lets userspace exercise
+ * VINTR / VQUIT / VSUSP / VEOF code paths in term_handle_input() without a
+ * real keypress. Disables interrupts to serialize against the UART RX ISR.
+ */
+int sys_tty_inject(int c) {
+    interrupts_off();
+    term_handle_input(&console_term, (char)c);
+    interrupts_on();
+    return 0;
+}
+
+/*
  * A POSIX-conforming ps should show at minimum: PID, PPID, state, priority (if implemented), and name
  * NOTE: As of now, PIDs are strictly incremented only. If we look to implement PID recycling, this would risk PID races,
  * and after a certain PID value limit reached, would look for the lowest available PID value.
@@ -2753,7 +2770,9 @@ long sys_pathconf(const char *upath, int name) {
     kpath[MAX_PATH - 1] = '\0';
 
     dentry_t *de = NULL;
-    if (vfs_lookup(kpath, &de) < 0 || !de) { kfree(kpath); return -ENOENT; }
+    dentry_t *start = (current && current->fs) ? current->fs->cwd : NULL;
+    int rc = vfs_lookup_from(start, kpath, &de);
+    if (rc < 0 || !de) { kfree(kpath); return rc < 0 ? rc : -ENOENT; }
     dentry_put(de);
     kfree(kpath);
 

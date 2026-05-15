@@ -60,6 +60,11 @@ int fclose(FILE *stream) {
     return r;
 }
 
+FILE *freopen(const char *path, const char *mode, FILE *stream) {
+	(void)path; (void)mode; (void)stream;
+	return NULL;
+}
+
 /* Drain write buffer */
 int fflush(FILE *stream) {
     if (!stream || !stream->writable)

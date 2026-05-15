@@ -120,6 +120,8 @@ int nostat_filter(const struct dirent *e) {
 
 int alphasort(const struct dirent **a, const struct dirent **b) { return strcmp((*a)->d_name, (*b)->d_name); }
 
+ssize_t posix_getdents(int fd, void *buf, size_t nbyte, int flags) { return fs_getdents(fd, buf, nbyte, flags); }
+
 int scandir(const char *dirpath, struct dirent ***namelist, int (*filter)(const struct dirent *),
             int (*compar)(const struct dirent **, const struct dirent **)) {
     if (!dirpath || !namelist)

@@ -6,7 +6,7 @@
 int main(void) {
 	char buf[64];
 	int n = snprintf(buf, sizeof(buf), "hello %s %d", "world", 42);
-	if (n != 11) {
+	if (n != 14) {
 		printf("FAIL snprintf: got %d\n", n);
 		return 1;
 	}
