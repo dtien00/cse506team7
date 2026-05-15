@@ -28,7 +28,6 @@ int vfprintf(FILE *, const char *, va_list);
 int vsnprintf(char *, size_t, const char *, va_list);
 int sscanf(const char *, const char *, ...);
 FILE *fopen(const char *, const char *);
-FILE *freopen(const char *, const char *, FILE *);
 FILE *fdopen(int, const char *);
 int fclose(FILE *);
 int fileno(FILE *);

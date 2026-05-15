@@ -578,8 +578,8 @@ static int vnode_fill_stat(vnode_t *vn, struct stat *kst) {
     uint32_t nlink = vn->nlink;
     if (vn->mount && vn->mount->fs_type && vn->mount->fs_type->ops.get_nlink)
         nlink = vn->mount->fs_type->ops.get_nlink(vn);
-    printk("vnode_fill_stat: ino=%u vnode->nlink=%u fresh_nlink=%u\n",
-           (unsigned)vn->ino, (unsigned)vn->nlink, nlink);
+    // printk("vnode_fill_stat: ino=%u vnode->nlink=%u fresh_nlink=%u\n",
+    //        (unsigned)vn->ino, (unsigned)vn->nlink, nlink);
     kst->st_nlink = (nlink_t) nlink;
     kst->st_uid = 0; // no user model
     kst->st_gid = 0; // no group model

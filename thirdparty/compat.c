@@ -289,10 +289,6 @@ FILE *fopen(const char *path, const char *mode) {
 	return NULL;
 }
 int fclose(FILE *f) { int r = close(f->fd); f->flags = 0; return r; }
-FILE *freopen(const char *path, const char *mode, FILE *stream) {
-	(void)path; (void)mode; (void)stream;
-	return NULL;   /* unused in SBUnix tcc path; pulled in by upstream tcc_run */
-}
 size_t fread(void *ptr, size_t size, size_t nmemb, FILE *f) {
 	size_t total = size * nmemb, got = 0;
 	char *p = ptr;
@@ -457,9 +453,9 @@ W sighandler_t signal(int sig, sighandler_t handler) {
 	if (sigaction(sig, &act, &oldact) < 0) return SIG_ERR;
 	return oldact.sa_handler;
 }
-W int sigemptyset(sigset_t *set) { *set = 0; return 0; }
-W int sigfillset(sigset_t *set) { *set = ~(sigset_t)0; return 0; }
-W int sigaddset(sigset_t *set, int sig) { *set |= 1UL << sig; return 0; }
+/* sigemptyset/sigfillset/sigaddset weak fallbacks live in sigset_fallback.c
+ * (separate TU, no <signal.h>) so they don't conflict with libcs that define
+ * these as `static inline` in their signal.h header. */
 W int raise(int sig) { return kill(getpid(), sig); }
 
 /* time */

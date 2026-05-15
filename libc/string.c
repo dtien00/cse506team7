@@ -173,3 +173,69 @@ char* strerror(int errnum) {
     (void)errnum;
     return "error";
 }
+
+static const char *const _sig_strings[] = {
+    /* [0]  unused      */ NULL,
+    /* [1]  SIGHUP      */ "Hangup",
+    /* [2]  SIGINT      */ "Interrupt",
+    /* [3]  SIGQUIT     */ "Quit",
+    /* [4]  SIGILL      */ "Illegal instruction",
+    /* [5]  SIGTRAP     */ "Trace/breakpoint trap",
+    /* [6]  SIGABRT     */ "Aborted",
+    /* [7]  SIGBUS      */ "Bus error",
+    /* [8]  SIGFPE      */ "Floating point exception",
+    /* [9]  SIGKILL     */ "Killed",
+    /* [10] SIGUSR1     */ "User defined signal 1",
+    /* [11] SIGSEGV     */ "Segmentation fault",
+    /* [12] SIGUSR2     */ "User defined signal 2",
+    /* [13] SIGPIPE     */ "Broken pipe",
+    /* [14] SIGALRM     */ "Alarm clock",
+    /* [15] SIGTERM     */ "Terminated",
+    /* [16] SIGSTKFLT   */ "Stack fault",
+    /* [17] SIGCHLD     */ "Child exited",
+    /* [18] SIGCONT     */ "Continued",
+    /* [19] SIGSTOP     */ "Stopped (signal)",
+    /* [20] SIGTSTP     */ "Stopped",
+    /* [21] SIGTTIN     */ "Stopped (tty input)",
+    /* [22] SIGTTOU     */ "Stopped (tty output)",
+    /* [23] SIGURG      */ "Urgent I/O condition",
+    /* [24] SIGXCPU     */ "CPU time limit exceeded",
+    /* [25] SIGXFSZ     */ "File size limit exceeded",
+    /* [26] SIGVTALRM   */ "Virtual timer expired",
+    /* [27] SIGPROF     */ "Profiling timer expired",
+    /* [28] SIGWINCH    */ "Window changed",
+    /* [29] SIGIO       */ "I/O possible",
+    /* [30] SIGPWR      */ "Power failure",
+    /* [31] SIGSYS      */ "Bad system call",
+};
+
+#define _NSIG_STRINGS ((int)(sizeof(_sig_strings) / sizeof(_sig_strings[0])))
+
+char *strsignal(int signum) {
+    if (signum > 0 && signum < _NSIG_STRINGS)
+        return (char *)_sig_strings[signum];
+
+    // Build "Unknown signal <N>" into a static buffer for out-of-range values.
+    static char _unknown_buf[32];
+    const char *prefix = "Unknown signal ";
+    char *p = _unknown_buf;
+    for (const char *s = prefix; *s; s++)
+        *p++ = *s;
+
+    // Write decimal digits of |signum|.
+    unsigned int u = (signum < 0) ? (unsigned int)(-signum) : (unsigned int)signum;
+    char digits[12];
+    int nd = 0;
+    if (u == 0) {
+        digits[nd++] = '0';
+    } else {
+        while (u > 0) {
+            digits[nd++] = '0' + (u % 10);
+            u /= 10;
+        }
+    }
+    for (int i = nd - 1; i >= 0; i--)
+        *p++ = digits[i];
+    *p = '\0';
+    return _unknown_buf;
+}
