@@ -395,13 +395,23 @@ void run_test_procfs(us_test_group_t *group) {
     char child_path[64];
     snprintf(child_path, sizeof(child_path), "/proc/%d/status", child);
 
-    int child_n = read_to_buffer(child_path, status_buf, sizeof(status_buf));
+    // Poll until child has actually scheduled in and blocked on the pipe read.
+    // Without this, parent can race ahead of fork()→exec path and observe the
+    // child still in R before it reaches sys_read().
+    char child_pid_str[32], child_ppid_str[32], child_state_str[64];
+    int child_n = 0, cpid_ok = 0, cppid_ok = 0, cst_ok = 0;
+    for (int i = 0; i < 50; i++) {
+        child_n = read_to_buffer(child_path, status_buf, sizeof(status_buf));
+        if (child_n > 0) {
+            cpid_ok  = parse_status_field(status_buf, "Pid",   child_pid_str,   sizeof(child_pid_str))   == 0;
+            cppid_ok = parse_status_field(status_buf, "PPid",  child_ppid_str,  sizeof(child_ppid_str))  == 0;
+            cst_ok   = parse_status_field(status_buf, "State", child_state_str, sizeof(child_state_str)) == 0;
+            if (cst_ok && child_state_str[0] == 'S') break;
+        }
+        usleep(10000);
+    }
     TEST(group, "open/read /proc/<child>/status while child alive", child_n > 0);
     if (child_n > 0) {
-        char child_pid_str[32], child_ppid_str[32], child_state_str[64];
-        int cpid_ok  = parse_status_field(status_buf, "Pid",   child_pid_str,   sizeof(child_pid_str))   == 0;
-        int cppid_ok = parse_status_field(status_buf, "PPid",  child_ppid_str,  sizeof(child_ppid_str))  == 0;
-        int cst_ok   = parse_status_field(status_buf, "State", child_state_str, sizeof(child_state_str)) == 0;
         TEST(group, "child status Pid matches child pid",
              cpid_ok && atoi(child_pid_str) == child);
         TEST(group, "child PPid matches our pid",
