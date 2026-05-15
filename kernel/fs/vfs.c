@@ -1178,21 +1178,24 @@ int vfs_chdir(const char *kpath) {
 
     dentry_t *d = NULL;
     int lookup_rc = vfs_lookup(resolved, &d);
-    if (lookup_rc < 0) {
-        kfree(resolved);
-        return lookup_rc;
+    kfree(resolved);
+    if (lookup_rc < 0) return lookup_rc;
+
+    if (d->d_vnode->type != VNODE_DIR) {
+        dentry_put(d);
+        return -ENOTDIR;
     }
     int perm_rc = vfs_may_access(d->d_vnode, VFS_PERM_EXEC);
-    dentry_put(d);
     if (perm_rc < 0) {
-        kfree(resolved);
+        dentry_put(d);
         return perm_rc;
     }
 
-    // 3. Hand off to fs_struct — it looks up, validates, and swaps the cwd dentry
-    int rc = fs_struct_set_cwd(current->fs, resolved);
-    kfree(resolved);
-    return rc;
+    // Hand ownership of the vfs_lookup ref directly into fs->cwd —
+    // no second walk through vfs_lookup needed.
+    dentry_put(current->fs->cwd);
+    current->fs->cwd = d;
+    return 0;
 }
 
 // -----------------------------------------------------------------------------

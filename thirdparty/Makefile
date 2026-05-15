@@ -189,6 +189,11 @@ $(TOP)/build/thirdparty/make/%.o: $(MAKE_DIR)/%.c
 	$(CC) $(MAKE_CFLAGS) -c $< -o $@
 
 pdpmake: $(LIBC_THIRDPARTY) $(MAKE_OBJ)
+	@if [ -z "$(strip $(MAKE_OBJ))" ]; then \
+	    echo "pdpmake: no sources in $(MAKE_DIR)/ — run \`git clone https://github.com/rmyorston/pdpmake $(MAKE_DIR)\` first" >&2; \
+	    exit 1; \
+	fi
+	@mkdir -p $(TOP)/build/thirdparty/make
 	$(CC) $(MAKE_OBJ) $(LDFLAGS) -o $(TOP)/build/thirdparty/make/make
 
 pdpmake-install: pdpmake
