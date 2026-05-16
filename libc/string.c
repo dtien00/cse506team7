@@ -285,9 +285,12 @@ static const char *errstr(int e) {
 }
 
 char* strerror(int errnum) {
+    // (void)errnum;
+    // return "error";
     const char *s = errstr(errnum);
     return (char *)(s ? s : "Unknown error");
 }
+
 
 int strerror_r(int errnum, char *buf, size_t buflen) {
     if (buflen == 0) return ERANGE;

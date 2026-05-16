@@ -29,6 +29,7 @@ CFLAGS += $(PROBE_DEFS)
 DUMMY_OBJ    := $(abspath $(TOP)/build/thirdparty/dummy.o)
 COMPAT_OBJ   := $(abspath $(TOP)/build/thirdparty/compat.o)
 SETJMP_OBJ   := $(abspath $(TOP)/build/thirdparty/setjmp.o)
+SIGSET_FALLBACK_OBJ := $(abspath $(TOP)/build/thirdparty/sigset_fallback.o)
 SOFTFLOAT_OBJ := $(abspath $(TOP)/build/thirdparty/softfloat.o)
 BB_PRINTF_OBJ := $(abspath $(TOP)/build/thirdparty/bb_printf.o)
 LIBGCC       := $(shell $(CC) -print-libgcc-file-name)
@@ -38,10 +39,10 @@ LIBC_THIRDPARTY := $(abspath $(TOP)/build/thirdparty/libc-thirdparty.o)
 # resolving compat-vs-student stdio duplicates here (compat first → wins) so
 # downstream final links never see multiple definitions. This is robust to
 # build systems (e.g. busybox kbuild) that strip -Wl,* flags from LDFLAGS.
-$(LIBC_THIRDPARTY): $(COMPAT_OBJ) $(DUMMY_OBJ) $(SETJMP_OBJ) $(TOP)/build/libc.a
+$(LIBC_THIRDPARTY): $(COMPAT_OBJ) $(DUMMY_OBJ) $(SETJMP_OBJ) $(SIGSET_FALLBACK_OBJ) $(TOP)/build/libc.a
 	@mkdir -p $(@D)
 	$(CROSS)ld -r --allow-multiple-definition -o $@ \
-	    $(COMPAT_OBJ) $(DUMMY_OBJ) $(SETJMP_OBJ) \
+	    $(COMPAT_OBJ) $(DUMMY_OBJ) $(SETJMP_OBJ) $(SIGSET_FALLBACK_OBJ) \
 	    --whole-archive $(abspath $(TOP)/build/libc.a) --no-whole-archive
 
 LDFLAGS := -nostdlib $(abspath $(TOP)/build/libc/crt.S.o) \
@@ -60,6 +61,10 @@ $(SETJMP_OBJ): setjmp.S
 	@mkdir -p $(@D)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(SIGSET_FALLBACK_OBJ): sigset_fallback.c
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS) -ffunction-sections -fdata-sections -c $< -o $@
+
 $(SOFTFLOAT_OBJ): softfloat.c
 	@mkdir -p $(@D)
 	$(CC) $(CFLAGS) -ffunction-sections -fdata-sections -c $< -o $@
@@ -75,7 +80,7 @@ busybox busybox-install busybox-menuconfig: export EXTRA_CFLAGS=$(CFLAGS) -Wno-f
 busybox busybox-install busybox-menuconfig: export EXTRA_LDFLAGS=$(LDFLAGS) $(BB_PRINTF_OBJ)
 
 busybox-patch:
-	@cd busybox && git checkout -q -- include/platform.h include/libbb.h libbb/Kbuild.src scripts/Makefile.lib 2>/dev/null || true
+	@cd busybox && git checkout -q -- include/platform.h include/libbb.h libbb/Kbuild.src libbb/xfuncs.c scripts/Makefile.lib 2>/dev/null || true
 	@cd busybox && git apply ../busybox-sbunix.patch
 
 busybox: busybox-patch $(LIBC_THIRDPARTY) $(BB_PRINTF_OBJ)
@@ -189,11 +194,6 @@ $(TOP)/build/thirdparty/make/%.o: $(MAKE_DIR)/%.c
 	$(CC) $(MAKE_CFLAGS) -c $< -o $@
 
 pdpmake: $(LIBC_THIRDPARTY) $(MAKE_OBJ)
-	@if [ -z "$(strip $(MAKE_OBJ))" ]; then \
-	    echo "pdpmake: no sources in $(MAKE_DIR)/ — run \`git clone https://github.com/rmyorston/pdpmake $(MAKE_DIR)\` first" >&2; \
-	    exit 1; \
-	fi
-	@mkdir -p $(TOP)/build/thirdparty/make
 	$(CC) $(MAKE_OBJ) $(LDFLAGS) -o $(TOP)/build/thirdparty/make/make
 
 pdpmake-install: pdpmake

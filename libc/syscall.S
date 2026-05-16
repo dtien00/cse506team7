@@ -21,7 +21,7 @@
 .global dup
 .global dup2
 .global chdir
-.global getcwd
+.global __getcwd_raw
 .global stat
 .global lstat
 .global fstat
@@ -72,6 +72,7 @@
 .global sigreturn
 .global __syscall_fcntl
 .global select
+.global uname
 .global tty_inject
 
 mmap:
@@ -189,7 +190,7 @@ chdir:
     ecall
     j __syscall_ret
 
-getcwd:
+__getcwd_raw:
     li a7, 27
     ecall
     j __syscall_ret
@@ -447,6 +448,11 @@ tty_inject:
 
 sigreturn:
     li a7, 103
+    ecall
+    j __syscall_ret
+
+uname:
+    li a7, 160
     ecall
     j __syscall_ret
 

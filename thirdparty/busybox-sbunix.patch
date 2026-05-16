@@ -175,3 +175,17 @@ diff --git a/scripts/Makefile.lib b/scripts/Makefile.lib
  #define GETOPT_RESET() (optind = 0)
  #else /* BSD style */
  #define GETOPT_RESET() (optind = 1)
+--- a/libbb/xfuncs.c
++++ b/libbb/xfuncs.c
+@@ -223,6 +223,11 @@
+  * height, in which case that value will not be set.  */
+ int FAST_FUNC get_terminal_width_height(int fd, unsigned *width, unsigned *height)
+ {
++	/* SBUnix: locally declare struct winsize so this file compiles regardless
++	 * of whether the libc puts it in <sys/ioctl.h> (traditional) or
++	 * <termios.h> (POSIX-2024). ioctl() is varargs so only the byte layout
++	 * matters; struct tag scope is local. */
++	struct winsize { unsigned short ws_row, ws_col, ws_xpixel, ws_ypixel; };
+ 	struct winsize win;
+ 	int err;
+ 	int close_me = -1;

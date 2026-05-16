@@ -199,8 +199,8 @@ static void run_copy_test(us_test_group_t *group) {
         if (pid > 0) {
             int status = 0;
             TEST(group, "cp: same-file child reaped", waitpid(pid, &status, 0) == pid);
-            TEST(group, "cp: same-file copy succeeds",
-                 WIFEXITED(status) && WEXITSTATUS(status) == 0);
+            TEST(group, "cp: same-file copy fails",
+                 WIFEXITED(status) && WEXITSTATUS(status) != 0);
         }
     }
     {

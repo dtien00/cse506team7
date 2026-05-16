@@ -37,11 +37,12 @@ long sys_fpathconf(int fd, int name);
 #define MAP_ANONYMOUS 0x20
 #define MAP_FIXED     0x10
 
-#define F_DUPFD  0
-#define F_GETFD  1
-#define F_SETFD  2
-#define F_GETFL  3
-#define F_SETFL  4
+#define F_DUPFD          0
+#define F_GETFD          1
+#define F_SETFD          2
+#define F_GETFL          3
+#define F_SETFL          4
+#define F_DUPFD_CLOEXEC  1030
 
 #define USER_HEAP_START 0x11000000UL
 #define USER_HEAP_END   MAXVA  /* Sv39 user VA ceiling; device VMAs block kernel/MMIO ranges */
@@ -579,6 +580,8 @@ void syscall_handler(trap_frame *frame) {
             ret = sys_fpathconf((int)arg0, (int)arg1);
             break;
 
+        case SYS_uname:
+            ret = sys_uname((void *)arg0);
         case SYS_tty_inject:
             ret = sys_tty_inject((int)arg0);
             break;
@@ -902,7 +905,8 @@ int sys_fcntl(int fd, int cmd, long arg) {
         return -EBADF;
 
     switch (cmd) {
-        case F_DUPFD: {
+        case F_DUPFD:
+        case F_DUPFD_CLOEXEC: {
             if (arg < 0 || arg >= MAX_FDS)
                 return -EINVAL;
             file_ref(f);
@@ -911,7 +915,7 @@ int sys_fcntl(int fd, int cmd, long arg) {
                 f_put(f);
                 return newfd;
             }
-            current->fds.fd_flags[newfd] = 0;
+            current->fds.fd_flags[newfd] = (cmd == F_DUPFD_CLOEXEC) ? FD_CLOEXEC : 0;
             return newfd;
         }
 
@@ -2489,8 +2493,15 @@ int sys_tcsetpgrp(pid_t pgid) {
 
 /*
  * sys_tcgetpgrp — return the foreground process group of the terminal.
+ *
+ * When no process has yet claimed the console (foreground_pgid == 0), return
+ * the caller's own pgid.  This lets the first interactive shell bootstrap job
+ * control: its tcgetpgrp(fd) == getpgrp() check passes, and it then calls
+ * tcsetpgrp() to properly register itself as the foreground group.
  */
 pid_t sys_tcgetpgrp(void) {
+    if (console_term.foreground_pgid == 0 && current)
+        return current->pgid;
     return console_term.foreground_pgid;
 }
 
@@ -2817,4 +2828,20 @@ long sys_fpathconf(int fd, int name) {
     if (fd < 0 || fd >= MAX_FDS) return -EBADF;
     if (!current || !current->fds.files[fd]) return -EBADF;
     return pathconf_query(name);
+}
+
+int sys_uname(void *buf) {
+    if (!buf) return -EFAULT;
+
+    // struct utsname: five char[65] fields — sysname, nodename, release, version, machine
+    char ku[5][65];
+    __builtin_memset(ku, 0, sizeof(ku));
+    strncpy(ku[0], "SBUnix",  64);
+    strncpy(ku[1], "sbunix",  64);
+    strncpy(ku[2], "0.1.0",   64);
+    strncpy(ku[3], "#1",      64);
+    strncpy(ku[4], "riscv64", 64);
+
+    if (copy_to_user(buf, ku, sizeof(ku)) < 0) return -EFAULT;
+    return 0;
 }

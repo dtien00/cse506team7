@@ -1,4 +1,5 @@
 #include "signal.h"
+#include "string.h"
 #include "unistd.h"
 
 /* kill(), getpid(), and sigprocmask() are provided by the assembly wrappers in syscall.S */
@@ -81,3 +82,13 @@ int sigismember(const sigset_t *set, int signum) {
 /* sigpending() itself is provided by the ecall stub in syscall.S (SYS_sigpending = 37). */
 
 /* sigsuspend() itself is provided by the ecall stub in syscall.S (SYS_sigsuspend = 38). */
+
+void psignal(int sig, const char *s) {
+    const char *msg = strsignal(sig);
+    if (s && *s) {
+        write(2, s, strlen(s));
+        write(2, ": ", 2);
+    }
+    write(2, msg, strlen(msg));
+    write(2, "\n", 1);
+}
