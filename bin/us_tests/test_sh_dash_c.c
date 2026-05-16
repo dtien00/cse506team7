@@ -92,6 +92,65 @@ static void test_sh_c_single_command(us_test_group_t *tg) {
          WEXITSTATUS(s) == 3);
 }
 
+/* ── 5. Append redirection (>>) ──────────────────────────────────────────── */
+
+static void test_sh_c_append(us_test_group_t *tg) {
+    const char *path = "/mnt/sh_append_test.txt";
+    unlink(path);
+
+    /* First command: write "line1\n" with truncating redirect. */
+    int s = sh_c("echo line1 > /mnt/sh_append_test.txt");
+    TEST(tg, "sh >> setup: truncate redirect exits 0",
+         WIFEXITED(s) && WEXITSTATUS(s) == 0);
+
+    /* Second command: append "line2\n" with append redirect. */
+    s = sh_c("echo line2 >> /mnt/sh_append_test.txt");
+    TEST(tg, "sh >> append: exits 0",
+         WIFEXITED(s) && WEXITSTATUS(s) == 0);
+
+    /* Read back the file and verify both lines are present in order. */
+    int fd = open(path, O_RDONLY);
+    TEST(tg, "sh >> result: file exists", fd >= 0);
+    if (fd >= 0) {
+        char buf[64];
+        int n = (int)read(fd, buf, sizeof(buf) - 1);
+        close(fd);
+        if (n > 0) buf[n] = '\0';
+        TEST(tg, "sh >> result: contains first line",
+             n > 0 && strstr(buf, "line1") != NULL);
+        TEST(tg, "sh >> result: contains second line",
+             n > 0 && strstr(buf, "line2") != NULL);
+        /* "line1" must appear before "line2" — append didn't overwrite. */
+        TEST(tg, "sh >> result: first line precedes second",
+             n > 0 && strstr(buf, "line1") < strstr(buf, "line2"));
+    }
+    unlink(path);
+
+    /* A second >> on a non-existent file must create it (O_CREAT). */
+    unlink(path);
+    s = sh_c("echo only >> /mnt/sh_append_test.txt");
+    TEST(tg, "sh >> on new file: exits 0",
+         WIFEXITED(s) && WEXITSTATUS(s) == 0);
+    fd = open(path, O_RDONLY);
+    TEST(tg, "sh >> on new file: file created", fd >= 0);
+    if (fd >= 0) {
+        char buf[32];
+        int n = (int)read(fd, buf, sizeof(buf) - 1);
+        close(fd);
+        if (n > 0) buf[n] = '\0';
+        TEST(tg, "sh >> on new file: contains written text",
+             n > 0 && strstr(buf, "only") != NULL);
+    }
+    unlink(path);
+
+    /* Verify >> is a single operator: "echo x >>file" must NOT misparse
+       the second '>' as a separate redirect that rejects 'file' as a path. */
+    s = sh_c("echo token >> /mnt/sh_append_test.txt");
+    TEST(tg, "sh >>: operator tokenised as single token (no syntax error)",
+         WIFEXITED(s) && WEXITSTATUS(s) == 0);
+    unlink(path);
+}
+
 /* ── public entry point ──────────────────────────────────────────────────── */
 
 void run_test_sh_dash_c(us_test_group_t *group) {
@@ -100,5 +159,6 @@ void run_test_sh_dash_c(us_test_group_t *group) {
     test_sh_c_runs_command(group);
     test_sh_c_status(group);
     test_sh_c_single_command(group);
+    test_sh_c_append(group);
     ut_group_end(group);
 }

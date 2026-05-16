@@ -16,6 +16,7 @@ typedef struct shell_command {
     char *argv[MAX_ARGS];
     char *input_path;
     char *output_path;
+    int   append_output;   /* 1 if opened with >>, 0 if opened with > */
 } shell_command_t;
 
 typedef enum {
@@ -62,8 +63,8 @@ static int is_special(char ch) {
 }
 
 static char *next_token(char **cursor) {
-    static char special_token[2];
-    static char pending_special[2];
+    static char special_token[3];
+    static char pending_special[3];
     static int has_pending_special = 0;
     char *p;
     char *start;
@@ -89,9 +90,18 @@ static char *next_token(char **cursor) {
     }
 
     if (is_special(*p)) {
-        special_token[0] = *p++;
-        special_token[1] = '\0';
-        *cursor = p;
+        /* Recognize >> as one token so the path after it is not misread. */
+        if (*p == '>' && *(p + 1) == '>') {
+            special_token[0] = '>';
+            special_token[1] = '>';
+            special_token[2] = '\0';
+            *cursor = p + 2;
+        } else {
+            special_token[0] = *p++;
+            special_token[1] = '\0';
+            special_token[2] = '\0';
+            *cursor = p;
+        }
         return special_token;
     }
 
@@ -102,10 +112,20 @@ static char *next_token(char **cursor) {
     if (is_space(*p)) {
         *p++ = '\0';
     } else if (is_special(*p)) {
-        pending_special[0] = *p;
-        pending_special[1] = '\0';
+        /* Word ends immediately before a redirect operator — stash it. */
         has_pending_special = 1;
-        *p++ = '\0';
+        if (*p == '>' && *(p + 1) == '>') {
+            pending_special[0] = '>';
+            pending_special[1] = '>';
+            pending_special[2] = '\0';
+            *p = '\0';   /* terminate word at the first '>' */
+            p += 2;      /* skip past both '>' before storing cursor */
+        } else {
+            pending_special[0] = *p;
+            pending_special[1] = '\0';
+            pending_special[2] = '\0';
+            *p++ = '\0';
+        }
     }
     *cursor = p;
     return start;
@@ -152,10 +172,14 @@ static int parse_line(char *line, shell_command_t *cmdv) {
             continue;
         }
 
-        if (is_token(token, '<') || is_token(token, '>')) {
-            char redirect_op = token[0];
+        if (is_token(token, '<') || is_token(token, '>') ||
+            (token[0] == '>' && token[1] == '>' && token[2] == '\0')) {
+            int is_append = (token[0] == '>' && token[1] == '>');
             char *path = next_token(&cursor);
-            if (path == NULL || is_token(path, '|') || is_token(path, '<') || is_token(path, '>')) {
+            /* Reject missing path or a path that is itself an operator. */
+            if (path == NULL || is_token(path, '|') || is_token(path, '<') ||
+                is_token(path, '>') ||
+                (path[0] == '>' && path[1] == '>' && path[2] == '\0')) {
                 free_cmdv(cmdv, cmdc + 1);
                 return -1;
             }
@@ -170,7 +194,7 @@ static int parse_line(char *line, shell_command_t *cmdv) {
                 return -1;
             }
 
-            if (redirect_op == '<') {
+            if (token[0] == '<') {
                 if (cmdv[cmdc].input_path != NULL) {
                     free_cmdv(cmdv, cmdc + 1);
                     return -1;
@@ -181,7 +205,8 @@ static int parse_line(char *line, shell_command_t *cmdv) {
                     free_cmdv(cmdv, cmdc + 1);
                     return -1;
                 }
-                cmdv[cmdc].output_path = strdup(path);
+                cmdv[cmdc].output_path  = strdup(path);
+                cmdv[cmdc].append_output = is_append;
             }
             continue;
         }
@@ -241,7 +266,9 @@ static int apply_redirections(const shell_command_t *cmd) {
     }
 
     if (cmd->output_path) {
-        fd = open(cmd->output_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        int oflags = O_WRONLY | O_CREAT |
+                     (cmd->append_output ? O_APPEND : O_TRUNC);
+        fd = open(cmd->output_path, oflags, 0644);
         if (fd < 0) {
             dprintf(STDERR_FILENO, "sh: cannot open '%s'\n", cmd->output_path);
             return -1;

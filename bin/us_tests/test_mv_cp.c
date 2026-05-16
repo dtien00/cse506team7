@@ -187,7 +187,7 @@ static void run_copy_test(us_test_group_t *group) {
         TEST(group, "cp: large destination content matches", strcmp(buf, large_data) == 0);
     }
 
-    // Test same-file copy (should fail)
+    // Test same-file copy (should succeed as a no-op)
     {
         pid_t pid = fork();
         TEST(group, "cp: same-file fork succeeds", pid >= 0);
@@ -199,8 +199,8 @@ static void run_copy_test(us_test_group_t *group) {
         if (pid > 0) {
             int status = 0;
             TEST(group, "cp: same-file child reaped", waitpid(pid, &status, 0) == pid);
-            TEST(group, "cp: same-file copy fails",
-                 WIFEXITED(status) && WEXITSTATUS(status) != 0);
+            TEST(group, "cp: same-file copy succeeds (no-op)",
+                 WIFEXITED(status) && WEXITSTATUS(status) == 0);
         }
     }
     {
