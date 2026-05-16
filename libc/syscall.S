@@ -21,7 +21,7 @@
 .global dup
 .global dup2
 .global chdir
-.global getcwd
+.global __getcwd_raw
 .global stat
 .global lstat
 .global fstat
@@ -189,7 +189,7 @@ chdir:
     ecall
     j __syscall_ret
 
-getcwd:
+__getcwd_raw:
     li a7, 27
     ecall
     j __syscall_ret

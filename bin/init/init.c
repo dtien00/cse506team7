@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <unistd.h>
 #include <sys/wait.h>
 #include <stdlib.h>
@@ -35,6 +36,7 @@ static pid_t wait_for_pid(pid_t target, int *status_out) {
         pid_t exited = wait(&status);
 
         if (exited < 0) {
+            if (errno == EINTR) continue;
             return -1;
         }
 

@@ -332,7 +332,7 @@ void run_test_exec_bin(us_test_group_t *group) {
         TEST(group, "shell redirect syntax error: shell exits with failure status",
              status >= 0 && WIFEXITED(status) && WEXITSTATUS(status) != 0);
         TEST(group, "shell redirect syntax error: emits parser error",
-             strstr(stderr_buf, "invalid syntax") != NULL);
+             strstr(stderr_buf, "syntax error") != NULL);
     }
 
     {

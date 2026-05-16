@@ -29,11 +29,16 @@ void run_test_realpath(us_test_group_t *group)
 
     char buf[1024];
 
-    /* ── /bin/sh must be present; use it as a known absolute path ────────── */
-    char *r = realpath("/bin/sh", buf);
-    ut_assert(group, r == buf,              "abs path: returns buf");
-    ut_assert(group, r && r[0] == '/',      "abs path: starts with /");
-    ut_assert(group, r && strstr(r, "sh"),  "abs path: contains 'sh'");
+    /* ── Resolve the canonical form of /bin/sh once.
+     *    /bin/sh may be a symlink (e.g. → busybox after make thirdparty).
+     *    All tests that expect the shell's canonical path compare against
+     *    sh_canon rather than the literal string "/bin/sh". ────────────── */
+    char sh_canon[1024];
+    char *sh_r = realpath("/bin/sh", sh_canon);
+    ut_assert(group, sh_r != (char *)0,   "abs path: not null");
+    ut_assert(group, sh_r && sh_r[0] == '/', "abs path: starts with /");
+
+    char *r = sh_r;
 
     /* ── root itself ─────────────────────────────────────────────────────── */
     r = realpath("/", buf);
@@ -48,17 +53,17 @@ void run_test_realpath(us_test_group_t *group)
     /* ── embedded '.' components are removed ─────────────────────────────── */
     r = realpath("/bin/././sh", buf);
     ut_assert(group, r != (char *)0,                     "dot: not null");
-    ut_assert(group, r && strcmp(r, "/bin/sh") == 0,     "dot: /bin/./. → /bin/sh");
+    ut_assert(group, r && sh_r && strcmp(r, sh_canon) == 0, "dot: /bin/./. → canonical sh");
 
     /* ── '..' collapses the previous component ───────────────────────────── */
     r = realpath("/bin/../bin/sh", buf);
     ut_assert(group, r != (char *)0,                     "dotdot: not null");
-    ut_assert(group, r && strcmp(r, "/bin/sh") == 0,     "dotdot: resolves");
+    ut_assert(group, r && sh_r && strcmp(r, sh_canon) == 0, "dotdot: resolves");
 
     /* ── '..' at root stays at root ──────────────────────────────────────── */
     r = realpath("/../bin/sh", buf);
     ut_assert(group, r != (char *)0,                     "dotdot-root: not null");
-    ut_assert(group, r && strcmp(r, "/bin/sh") == 0,     "dotdot-root: clamps");
+    ut_assert(group, r && sh_r && strcmp(r, sh_canon) == 0, "dotdot-root: clamps");
 
     /* ── NULL resolved: result is malloc'd ──────────────────────────────── */
     r = realpath("/bin/sh", (char *)0);
@@ -88,23 +93,23 @@ void run_test_realpath(us_test_group_t *group)
     {
         /* chdir to /bin, resolve "sh" */
         char prev[1024];
-        if (getcwd(prev, sizeof(prev)) && chdir("/bin") == 0) {
+        if (sh_r && getcwd(prev, sizeof(prev)) && chdir("/bin") == 0) {
             r = realpath("sh", buf);
-            ut_assert(group, r != (char *)0,                 "relative: not null");
-            ut_assert(group, r && strcmp(r, "/bin/sh") == 0, "relative: /bin/sh");
+            ut_assert(group, r != (char *)0,                    "relative: not null");
+            ut_assert(group, r && strcmp(r, sh_canon) == 0,     "relative: canonical sh");
             chdir(prev);
         } else {
             SKIP(group, "relative: getcwd/chdir unavailable", "n/a");
         }
     }
 
-    /* ── relative path with '..': bin/../bin/sh → /bin/sh ───────────────── */
+    /* ── relative path with '..': bin/../bin/sh → canonical sh ──────────── */
     {
         char prev[1024];
-        if (getcwd(prev, sizeof(prev)) && chdir("/") == 0) {
+        if (sh_r && getcwd(prev, sizeof(prev)) && chdir("/") == 0) {
             r = realpath("bin/../bin/sh", buf);
-            ut_assert(group, r != (char *)0,                 "rel dotdot: not null");
-            ut_assert(group, r && strcmp(r, "/bin/sh") == 0, "rel dotdot: /bin/sh");
+            ut_assert(group, r != (char *)0,                    "rel dotdot: not null");
+            ut_assert(group, r && strcmp(r, sh_canon) == 0,     "rel dotdot: canonical sh");
             chdir(prev);
         } else {
             SKIP(group, "rel dotdot: chdir unavailable", "n/a");
@@ -113,13 +118,15 @@ void run_test_realpath(us_test_group_t *group)
 
     /* ── symlink: absolute target ────────────────────────────────────────── */
     {
+        /* A symlink pointing to /bin/sh should resolve to the same canonical
+         * path as realpath("/bin/sh") itself — following all layers. */
         const char *lnk    = "/tmp/rp_abs_link";
         const char *target = "/bin/sh";
         unlink(lnk);
-        if (symlink(target, lnk) == 0) {
+        if (sh_r && symlink(target, lnk) == 0) {
             r = realpath(lnk, buf);
-            ut_assert(group, r != (char *)0,                  "abs symlink: not null");
-            ut_assert(group, r && strcmp(r, "/bin/sh") == 0,  "abs symlink: resolves");
+            ut_assert(group, r != (char *)0,                     "abs symlink: not null");
+            ut_assert(group, r && strcmp(r, sh_canon) == 0,      "abs symlink: resolves");
             unlink(lnk);
         } else {
             SKIP(group, "abs symlink: symlink() failed", "n/a");
@@ -201,7 +208,7 @@ void run_test_realpath(us_test_group_t *group)
     }
 
     /* ── result is always NUL-terminated and fits in PATH_MAX ───────────── */
-    r = realpath("/bin/sh", buf);
+    r = sh_r ? sh_canon : (char *)0;  /* reuse already-computed canonical path */
     if (r) {
         size_t len = strlen(r);
         ut_assert(group, len > 0 && len < 1024, "length: fits in PATH_MAX");

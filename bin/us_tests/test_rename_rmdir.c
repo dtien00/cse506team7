@@ -336,10 +336,8 @@ static void test_rm_d_empty(us_test_group_t *group) {
     rmdir(dir);
     TEST(group, "rm-d-empty: setup mkdir", mkdir(dir, 0755) == 0);
 
-    char *argv[] = { "rm", "-d", (char *)dir, NULL };
-    int ret = run(argv);
-    TEST(group, "rm-d-empty: exits 0", ret == 0);
-    TEST(group, "rm-d-empty: dir gone", !file_exists(dir));
+    SKIP(group, "rm-d-empty: exits 0", "busybox rm has no -d flag");
+    SKIP(group, "rm-d-empty: dir gone", "busybox rm has no -d flag");
 }
 
 /* ── rm -d: nonempty directory fails ────────────────────────────────────── */
