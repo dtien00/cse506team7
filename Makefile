@@ -119,6 +119,9 @@ qemu: build/kernel.elf $(DISK_IMG)
 		-netdev user,id=net0 \
 		-nographic
 
+audit:
+	@bash tools/symbol_audit.sh
+
 clean:
 	rm -rf build zig-out .zig-cache
 
@@ -130,7 +133,7 @@ submit:
 	rsync -a \
 		--exclude='.git' --exclude='build/' --exclude='zig-out/' \
 		--exclude='.zig-cache/' --exclude='.claude/' --exclude='thirdparty/' \
-		--max-size=100K \
+		--max-size=150K \
 		. "$$STMP/"; \
 	cd "$$STMP"; \
 	git init -q; \

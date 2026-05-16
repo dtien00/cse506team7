@@ -1,11 +1,14 @@
 #include "us_test_common.h"
+#include <string.h>
+#include <stdlib.h>
 
 static int g_total_passed = 0;
 static int g_total_failed = 0;
 static int g_total_skipped = 0;
 
 #define MAX_FAIL_LOG 256
-typedef struct { const char *group; const char *test; const char *file; int line; } fail_entry_t;
+#define FAIL_NAME_MAX 128
+typedef struct { const char *group; char test[FAIL_NAME_MAX]; const char *file; int line; } fail_entry_t;
 static fail_entry_t g_fail_log[MAX_FAIL_LOG];
 static int g_fail_count = 0;
 
@@ -42,7 +45,8 @@ void ut_check(us_test_group_t *group, int cond, const char *name, const char *fi
         printf("  [FAIL] %s: %s (%s:%d)\n", group->name ? group->name : "(unnamed)", name, file, line);
         if (g_fail_count < MAX_FAIL_LOG) {
             g_fail_log[g_fail_count].group = group->name ? group->name : "(unnamed)";
-            g_fail_log[g_fail_count].test  = name;
+            strncpy(g_fail_log[g_fail_count].test, name ? name : "", FAIL_NAME_MAX - 1);
+            g_fail_log[g_fail_count].test[FAIL_NAME_MAX - 1] = '\0';
             g_fail_log[g_fail_count].file  = file;
             g_fail_log[g_fail_count].line  = line;
             g_fail_count++;

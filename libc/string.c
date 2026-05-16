@@ -1,6 +1,7 @@
 #include "string.h"
 #include "stddef.h"
 #include "stdlib.h"
+#include "errno.h"
 
 void* memcpy(void *dest, const void *src, size_t n) {
     uint8_t *d = dest;
@@ -74,6 +75,37 @@ char* strncat(char *dest, const char *src, size_t n) {
     while (n-- && (*d++ = *src++));
     if (n == (size_t)-1) *d = '\0';
     return dest;
+}
+
+size_t strlcpy(char *dest, const char *src, size_t size) {
+    const char *s = src;
+    if (size) {
+        char *d = dest;
+        size_t n = size - 1;
+        while (n && *s) { *d++ = *s++; n--; }
+        *d = '\0';
+    }
+    while (*s) s++;
+    return (size_t)(s - src);
+}
+
+size_t strlcat(char *dest, const char *src, size_t size) {
+    char *d = dest;
+    const char *s = src;
+    size_t n = size;
+    while (n-- && *d) d++;
+    size_t dlen = (size_t)(d - dest);
+    n = size - dlen;
+    if (n == 0) {
+        while (*s) s++;
+        return dlen + (size_t)(s - src);
+    }
+    while (*s) {
+        if (n > 1) { *d++ = *s; n--; }
+        s++;
+    }
+    *d = '\0';
+    return dlen + (size_t)(s - src);
 }
 
 int strcmp(const char *s1, const char *s2) {
@@ -169,73 +201,111 @@ char* strtok(char *str, const char *delim) {
     return start;
 }
 
-char* strerror(int errnum) {
-    (void)errnum;
-    return "error";
+static const char *errstr(int e) {
+    switch (e) {
+    case EPERM:           return "Operation not permitted";
+    case ENOENT:          return "No such file or directory";
+    case ESRCH:           return "No such process";
+    case EINTR:           return "Interrupted system call";
+    case EIO:             return "Input/output error";
+    case ENXIO:           return "No such device or address";
+    case E2BIG:           return "Argument list too long";
+    case ENOEXEC:         return "Exec format error";
+    case EBADF:           return "Bad file descriptor";
+    case ECHILD:          return "No child processes";
+    case EAGAIN:          return "Resource temporarily unavailable";
+    case ENOMEM:          return "Out of memory";
+    case EACCES:          return "Permission denied";
+    case EFAULT:          return "Bad address";
+    case ENOTBLK:         return "Block device required";
+    case EBUSY:           return "Device or resource busy";
+    case EEXIST:          return "File exists";
+    case EXDEV:           return "Invalid cross-device link";
+    case ENODEV:          return "No such device";
+    case ENOTDIR:         return "Not a directory";
+    case EISDIR:          return "Is a directory";
+    case EINVAL:          return "Invalid argument";
+    case ENFILE:          return "Too many open files in system";
+    case EMFILE:          return "Too many open files";
+    case ENOTTY:          return "Inappropriate ioctl for device";
+    case ETXTBSY:         return "Text file busy";
+    case EFBIG:           return "File too large";
+    case ENOSPC:          return "No space left on device";
+    case ESPIPE:          return "Illegal seek";
+    case EROFS:           return "Read-only file system";
+    case EMLINK:          return "Too many links";
+    case EPIPE:           return "Broken pipe";
+    case EDOM:            return "Numerical argument out of domain";
+    case ERANGE:          return "Numerical result out of range";
+    case EDEADLK:         return "Resource deadlock avoided";
+    case ENAMETOOLONG:    return "File name too long";
+    case ENOLCK:          return "No locks available";
+    case ENOSYS:          return "Function not implemented";
+    case ENOTEMPTY:       return "Directory not empty";
+    case ELOOP:           return "Too many levels of symbolic links";
+    case ENOMSG:          return "No message of desired type";
+    case EIDRM:           return "Identifier removed";
+    case ENOLINK:         return "Link has been severed";
+    case EPROTO:          return "Protocol error";
+    case EMULTIHOP:       return "Multihop attempted";
+    case EBADMSG:         return "Bad message";
+    case EOVERFLOW:       return "Value too large for defined data type";
+    case EILSEQ:          return "Invalid or incomplete multibyte character";
+    case ENOTSOCK:        return "Socket operation on non-socket";
+    case EDESTADDRREQ:    return "Destination address required";
+    case EMSGSIZE:        return "Message too long";
+    case EPROTOTYPE:      return "Protocol wrong type for socket";
+    case ENOPROTOOPT:     return "Protocol not available";
+    case EPROTONOSUPPORT: return "Protocol not supported";
+    case ESOCKTNOSUPPORT: return "Socket type not supported";
+    case EOPNOTSUPP:      return "Operation not supported";
+    case EAFNOSUPPORT:    return "Address family not supported by protocol";
+    case EADDRINUSE:      return "Address already in use";
+    case EADDRNOTAVAIL:   return "Cannot assign requested address";
+    case ENETDOWN:        return "Network is down";
+    case ENETUNREACH:     return "Network is unreachable";
+    case ENETRESET:       return "Network dropped connection on reset";
+    case ECONNABORTED:    return "Software caused connection abort";
+    case ECONNRESET:      return "Connection reset by peer";
+    case ENOBUFS:         return "No buffer space available";
+    case EISCONN:         return "Transport endpoint is already connected";
+    case ENOTCONN:        return "Transport endpoint is not connected";
+    case ETIMEDOUT:       return "Connection timed out";
+    case ECONNREFUSED:    return "Connection refused";
+    case EHOSTUNREACH:    return "No route to host";
+    case EALREADY:        return "Operation already in progress";
+    case EINPROGRESS:     return "Operation now in progress";
+    case ESTALE:          return "Stale file handle";
+    case EDQUOT:          return "Disk quota exceeded";
+    case ECANCELED:       return "Operation canceled";
+    case EOWNERDEAD:      return "Owner died";
+    case ENOTRECOVERABLE: return "State not recoverable";
+    default:              return NULL;
+    }
 }
 
-static const char *const _sig_strings[] = {
-    /* [0]  unused      */ NULL,
-    /* [1]  SIGHUP      */ "Hangup",
-    /* [2]  SIGINT      */ "Interrupt",
-    /* [3]  SIGQUIT     */ "Quit",
-    /* [4]  SIGILL      */ "Illegal instruction",
-    /* [5]  SIGTRAP     */ "Trace/breakpoint trap",
-    /* [6]  SIGABRT     */ "Aborted",
-    /* [7]  SIGBUS      */ "Bus error",
-    /* [8]  SIGFPE      */ "Floating point exception",
-    /* [9]  SIGKILL     */ "Killed",
-    /* [10] SIGUSR1     */ "User defined signal 1",
-    /* [11] SIGSEGV     */ "Segmentation fault",
-    /* [12] SIGUSR2     */ "User defined signal 2",
-    /* [13] SIGPIPE     */ "Broken pipe",
-    /* [14] SIGALRM     */ "Alarm clock",
-    /* [15] SIGTERM     */ "Terminated",
-    /* [16] SIGSTKFLT   */ "Stack fault",
-    /* [17] SIGCHLD     */ "Child exited",
-    /* [18] SIGCONT     */ "Continued",
-    /* [19] SIGSTOP     */ "Stopped (signal)",
-    /* [20] SIGTSTP     */ "Stopped",
-    /* [21] SIGTTIN     */ "Stopped (tty input)",
-    /* [22] SIGTTOU     */ "Stopped (tty output)",
-    /* [23] SIGURG      */ "Urgent I/O condition",
-    /* [24] SIGXCPU     */ "CPU time limit exceeded",
-    /* [25] SIGXFSZ     */ "File size limit exceeded",
-    /* [26] SIGVTALRM   */ "Virtual timer expired",
-    /* [27] SIGPROF     */ "Profiling timer expired",
-    /* [28] SIGWINCH    */ "Window changed",
-    /* [29] SIGIO       */ "I/O possible",
-    /* [30] SIGPWR      */ "Power failure",
-    /* [31] SIGSYS      */ "Bad system call",
-};
+char* strerror(int errnum) {
+    // (void)errnum;
+    // return "error";
+    const char *s = errstr(errnum);
+    return (char *)(s ? s : "Unknown error");
+}
 
-#define _NSIG_STRINGS ((int)(sizeof(_sig_strings) / sizeof(_sig_strings[0])))
 
-char *strsignal(int signum) {
-    if (signum > 0 && signum < _NSIG_STRINGS)
-        return (char *)_sig_strings[signum];
-
-    // Build "Unknown signal <N>" into a static buffer for out-of-range values.
-    static char _unknown_buf[32];
-    const char *prefix = "Unknown signal ";
-    char *p = _unknown_buf;
-    for (const char *s = prefix; *s; s++)
-        *p++ = *s;
-
-    // Write decimal digits of |signum|.
-    unsigned int u = (signum < 0) ? (unsigned int)(-signum) : (unsigned int)signum;
-    char digits[12];
-    int nd = 0;
-    if (u == 0) {
-        digits[nd++] = '0';
-    } else {
-        while (u > 0) {
-            digits[nd++] = '0' + (u % 10);
-            u /= 10;
-        }
+int strerror_r(int errnum, char *buf, size_t buflen) {
+    if (buflen == 0) return ERANGE;
+    const char *msg = errstr(errnum);
+    int rc = 0;
+    if (!msg) {
+        msg = "Unknown error";
+        rc = EINVAL;
     }
-    for (int i = nd - 1; i >= 0; i--)
-        *p++ = digits[i];
-    *p = '\0';
-    return _unknown_buf;
+    size_t len = strlen(msg);
+    if (len >= buflen) {
+        strncpy(buf, msg, buflen - 1);
+        buf[buflen - 1] = '\0';
+        return ERANGE;
+    }
+    memcpy(buf, msg, len + 1);
+    return rc;
 }

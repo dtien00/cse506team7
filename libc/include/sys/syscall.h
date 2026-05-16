@@ -70,5 +70,7 @@
 #define SYS_lstat            107
 #define SYS_rename           56
 #define SYS_getuid           174
+#define SYS_select           104
+#define SYS_tty_inject       105
 
 #endif
